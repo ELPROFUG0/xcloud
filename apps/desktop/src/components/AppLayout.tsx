@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
+import { Titlebar } from "./Titlebar";
 import { HomeScreen } from "./home/HomeScreen";
 import { ChatPanel } from "./chat/ChatPanel";
 import { AgentCanvas } from "./canvas/AgentCanvas";
@@ -10,59 +11,49 @@ interface AppLayoutProps {
   engine: BrowserEngine;
 }
 
-type View = { type: "home" } | { type: "chat"; agentId: string } | { type: "settings" };
+type View = { type: "home" } | { type: "chat"; agentId: string };
 
 export function AppLayout({ engine }: AppLayoutProps) {
   const { agents } = useAgents(engine);
   const [view, setView] = useState<View>({ type: "home" });
+  const [showSettings, setShowSettings] = useState(false);
 
-  // Settings overlay
-  if (view.type === "settings") {
-    return <SettingsPanel engine={engine} onBack={() => setView({ type: "home" })} />;
-  }
+  const rightPanel = showSettings ? (
+    <SettingsPanel engine={engine} />
+  ) : (
+    <AgentCanvas
+      engine={engine}
+      agentId={view.type === "chat" ? view.agentId : (agents.find((a) => a.isDefault)?.id ?? "main")}
+    />
+  );
 
-  // Chat view (fullscreen left + canvas right)
-  if (view.type === "chat") {
-    const agent = agents.find((a) => a.id === view.agentId);
-    return (
-      <div className="flex h-full">
-        {/* Chat (fixed width, like a messaging app) */}
-        <div className="h-full w-[360px] shrink-0">
-          <ChatPanel
-            engine={engine}
-            agentId={view.agentId}
-            agentName={agent?.name ?? view.agentId}
-            onBack={() => setView({ type: "home" })}
-          />
-        </div>
+  const leftPanel = view.type === "chat" ? (
+    <ChatPanel
+      engine={engine}
+      agentId={view.agentId}
+      agentName={agents.find((a) => a.id === view.agentId)?.name ?? view.agentId}
+      onBack={() => setView({ type: "home" })}
+    />
+  ) : (
+    <HomeScreen
+      agents={agents}
+      onSelectAgent={(id) => setView({ type: "chat", agentId: id })}
+    />
+  );
 
-        {/* Canvas (takes remaining space) */}
-        <div className="h-full flex-1 min-w-0 border-l border-border">
-          <AgentCanvas engine={engine} agentId={view.agentId} />
-        </div>
-      </div>
-    );
-  }
-
-  // Home view
   return (
-    <div className="flex h-full">
-      {/* Home (same width as chat) */}
-      <div className="h-full w-[360px] shrink-0">
-        <HomeScreen
-          engine={engine}
-          agents={agents}
-          onSelectAgent={(id) => setView({ type: "chat", agentId: id })}
-          onOpenSettings={() => setView({ type: "settings" })}
-        />
-      </div>
-
-      {/* Canvas preview (takes remaining space) */}
-      <div className="h-full flex-1 min-w-0 border-l border-border">
-        <AgentCanvas
-          engine={engine}
-          agentId={agents.find((a) => a.isDefault)?.id ?? "main"}
-        />
+    <div className="flex h-full flex-col">
+      <Titlebar
+        onToggleSettings={() => setShowSettings(!showSettings)}
+        settingsOpen={showSettings}
+      />
+      <div className="flex flex-1 min-h-0">
+        <div className="h-full w-[360px] shrink-0">
+          {leftPanel}
+        </div>
+        <div className="h-full flex-1 min-w-0 border-l border-border">
+          {rightPanel}
+        </div>
       </div>
     </div>
   );

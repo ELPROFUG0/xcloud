@@ -1,46 +1,21 @@
-import type { BrowserEngine } from "@/lib/engine";
 import type { AgentInfo } from "@/hooks/use-agents";
-import { ModelSelector } from "@/components/ModelSelector";
-import { Bot, MessageSquare, Settings, Wifi } from "lucide-react";
+import { Bot, MessageSquare } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 interface HomeScreenProps {
-  engine: BrowserEngine;
   agents: AgentInfo[];
   onSelectAgent: (id: string) => void;
-  onOpenSettings: () => void;
 }
 
-export function HomeScreen({ engine, agents, onSelectAgent, onOpenSettings }: HomeScreenProps) {
+export function HomeScreen({ agents, onSelectAgent }: HomeScreenProps) {
   const mainAgent = agents.find((a) => a.isDefault) ?? agents[0];
   const otherAgents = agents.filter((a) => a.id !== mainAgent?.id);
 
   return (
     <div className="flex h-full flex-col">
-      {/* Header */}
-      <header className="flex items-center justify-between border-b border-border bg-surface px-4 py-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-sm font-bold">Agent Studio</h1>
-          <div className="flex items-center gap-1.5 text-[10px]">
-            <Wifi className="h-3 w-3 text-emerald-400" />
-            <span className="text-text-muted">Connected</span>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <ModelSelector engine={engine} />
-          <button
-            onClick={onOpenSettings}
-            className="flex h-7 w-7 items-center justify-center rounded-lg border border-border text-text-muted transition-colors hover:border-accent hover:text-text"
-            title="API Keys"
-          >
-            <Settings className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      </header>
-
       {/* Agent rows */}
       <div className="flex-1 overflow-y-auto">
-        {/* Main agent row */}
+        {/* Main agent */}
         {mainAgent && (
           <button
             onClick={() => onSelectAgent(mainAgent.id)}
@@ -76,7 +51,7 @@ export function HomeScreen({ engine, agents, onSelectAgent, onOpenSettings }: Ho
           </div>
         )}
 
-        {/* Other agent rows */}
+        {/* Other agents */}
         {otherAgents.map((agent) => (
           <button
             key={agent.id}
@@ -107,9 +82,6 @@ export function HomeScreen({ engine, agents, onSelectAgent, onOpenSettings }: Ho
           <div className="px-4 py-8 text-center">
             <p className="text-xs text-text-muted">
               Ask the main agent to create new agents.
-            </p>
-            <p className="mt-1 text-[10px] text-text-muted">
-              "Build me an agent that checks the weather every morning"
             </p>
           </div>
         )}

@@ -28,26 +28,17 @@ export function ChatPanel({ engine, agentId = "main", agentName, onBack }: ChatP
   return (
     <div className="flex h-full flex-col">
       {/* Header with back button */}
-      <header className="flex items-center gap-3 border-b border-border bg-surface px-4 py-3">
+      <header className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-bg px-3">
         {onBack && (
           <button
             onClick={onBack}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-surface-hover hover:text-text"
+            className="text-text-muted transition-colors hover:text-text"
           >
-            <ArrowLeft className="h-4 w-4" />
+            <ArrowLeft className="h-3.5 w-3.5" />
           </button>
         )}
-        <div className="flex items-center gap-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent">
-            <Bot className="h-4 w-4" />
-          </div>
-          <div>
-            <h1 className="text-sm font-semibold">{displayName}</h1>
-            <p className="text-[10px] text-text-muted">
-              {isStreaming ? "typing..." : "online"}
-            </p>
-          </div>
-        </div>
+        <span className="text-[12px] font-medium">{displayName}</span>
+        {isStreaming && <span className="text-[10px] text-text-muted">typing...</span>}
       </header>
 
       {/* Messages */}

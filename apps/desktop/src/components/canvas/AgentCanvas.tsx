@@ -123,7 +123,7 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
   return (
     <div className="flex h-full flex-col">
       {/* Tab toggle */}
-      <div className="flex items-center border-b border-border px-3 py-2">
+      <div className="flex h-9 shrink-0 items-center border-b border-border bg-bg px-3">
         <div className="flex rounded-lg border border-border text-[10px]">
           <button
             onClick={() => setTab("canvas")}
