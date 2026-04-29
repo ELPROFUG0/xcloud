@@ -1,8 +1,22 @@
 import { useState, useCallback, useRef, useEffect, useMemo, type KeyboardEvent } from "react";
 import { cn } from "@/lib/cn";
-import type { BrowserEngine } from "@/lib/engine";
+import type { BrowserEngine, SlashCommand } from "@/lib/engine";
 import { useModels } from "@/hooks/use-models";
-import { ArrowUp, Mic, Paperclip, ChevronDown, Check, ChevronLeft, Search, X } from "lucide-react";
+import {
+  ArrowUp, Mic, Paperclip, ChevronDown, Check, ChevronLeft, Search, X,
+  Slash, Info, Wrench, Settings, MessageSquare, LayoutGrid, Volume2, Eye,
+  type LucideIcon,
+} from "lucide-react";
+
+const COMMAND_ICONS: Record<string, LucideIcon> = {
+  status: Info,
+  tools: Wrench,
+  management: Settings,
+  session: MessageSquare,
+  options: LayoutGrid,
+  media: Volume2,
+  undefined: Eye,
+};
 
 interface ChatInputProps {
   onSend: (message: string) => void;
@@ -70,6 +84,30 @@ export function ChatInput({
   const hasText = value.trim().length > 0;
 
   const toggleBtnRef = useRef<HTMLButtonElement>(null);
+  const [commands, setCommands] = useState<SlashCommand[]>([]);
+  const [showSlash, setShowSlash] = useState(false);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const slashRef = useRef<HTMLDivElement>(null);
+
+  // Load commands once
+  useEffect(() => {
+    engine.listCommands().then(setCommands).catch(() => {});
+  }, [engine]);
+
+  // Show/hide slash menu based on input
+  const slashQuery = value.startsWith("/") ? value.slice(1).toLowerCase() : null;
+  const filteredCommands = useMemo(() => {
+    if (slashQuery === null) return [];
+    return commands.filter(c =>
+      c.name.toLowerCase().includes(slashQuery) ||
+      c.description.toLowerCase().includes(slashQuery)
+    );
+  }, [commands, slashQuery]);
+
+  useEffect(() => {
+    setShowSlash(slashQuery !== null && filteredCommands.length > 0);
+    setSlashIndex(0);
+  }, [slashQuery, filteredCommands.length]);
 
   // Close modal on click outside (but not on the toggle button itself)
   useEffect(() => {
@@ -98,12 +136,38 @@ export function ChatInput({
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (showSlash && filteredCommands.length > 0) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSlashIndex(i => Math.min(i + 1, filteredCommands.length - 1));
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setSlashIndex(i => Math.max(i - 1, 0));
+          return;
+        }
+        if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+          e.preventDefault();
+          const cmd = filteredCommands[slashIndex];
+          if (cmd) {
+            setValue("/" + cmd.name + (cmd.acceptsArgs ? " " : ""));
+            setShowSlash(false);
+            if (!cmd.acceptsArgs) handleSend();
+          }
+          return;
+        }
+        if (e.key === "Escape") {
+          setShowSlash(false);
+          return;
+        }
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSend();
       }
     },
-    [handleSend],
+    [handleSend, showSlash, filteredCommands, slashIndex],
   );
 
   const handleInput = useCallback(() => {
@@ -139,6 +203,43 @@ export function ChatInput({
 
   return (
     <div className="relative px-4 pb-4 pt-2">
+      {/* Slash commands menu */}
+      {showSlash && (
+        <div
+          ref={slashRef}
+          className="absolute bottom-full left-6 right-6 mb-2 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl animate-[slideUp_120ms_ease-out]"
+        >
+          <div className="max-h-[40vh] overflow-y-auto overflow-x-hidden p-1">
+            {filteredCommands.map((cmd, i) => {
+              const Icon = COMMAND_ICONS[cmd.category] ?? Slash;
+              return (
+                <button
+                  key={cmd.name}
+                  onClick={() => {
+                    setValue("/" + cmd.name + (cmd.acceptsArgs ? " " : ""));
+                    setShowSlash(false);
+                    textareaRef.current?.focus();
+                    if (!cmd.acceptsArgs) handleSend();
+                  }}
+                  className={cn(
+                    "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors",
+                    i === slashIndex ? "bg-surface-hover" : "hover:bg-surface-hover/50",
+                  )}
+                >
+                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-container">
+                    <Icon className="h-3 w-3 text-text-muted" />
+                  </div>
+                  <div className="min-w-0 flex-1 overflow-hidden">
+                    <div className="text-[12px] font-medium text-text">/{cmd.name}</div>
+                    <div className="truncate text-[10px] text-text-muted">{cmd.description}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Model selector modal */}
       {showModels && (
         <div

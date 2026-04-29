@@ -5,6 +5,13 @@
  * Loads device identity from a hardcoded config (in dev) or from Tauri fs (later).
  */
 
+export interface SlashCommand {
+  name: string;
+  description: string;
+  category: string;
+  acceptsArgs?: boolean;
+}
+
 export interface ModelInfo {
   id: string;
   name: string;
@@ -225,6 +232,11 @@ export class BrowserEngine {
       idempotencyKey: crypto.randomUUID(),
     });
     return result as { runId: string; status: string };
+  }
+
+  async listCommands(): Promise<SlashCommand[]> {
+    const result = await this.rpc("commands.list", {});
+    return (result as { commands: SlashCommand[] }).commands ?? [];
   }
 
   async listModels(): Promise<ModelInfo[]> {
