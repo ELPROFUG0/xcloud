@@ -1,24 +1,15 @@
 {
-  "name": "unicore",
-  "version": "1.0.0",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs"
-  },
+  "name": "agent-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "IDE de agentes de IA — Agent Studio",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
-  "dependencies": {
-    "@noble/ed25519": "^3.1.0"
+    "poc": "tsx scripts/poc-websocket.ts",
+    "test": "pnpm -r test",
+    "build": "pnpm -r build"
   },
   "devDependencies": {
-    "@types/ws": "^8.18.1",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.3",
-    "ws": "^8.20.0"
+    "typescript": "^6.0.3"
   }
 }
