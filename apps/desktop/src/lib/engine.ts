@@ -5,6 +5,15 @@
  * Loads device identity from a hardcoded config (in dev) or from Tauri fs (later).
  */
 
+export interface ModelInfo {
+  id: string;
+  name: string;
+  provider: string;
+  contextWindow?: number;
+  reasoning?: boolean;
+  input?: string[];
+}
+
 export interface EngineConfig {
   url: string;
   token: string;
@@ -216,5 +225,19 @@ export class BrowserEngine {
       idempotencyKey: crypto.randomUUID(),
     });
     return result as { runId: string; status: string };
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    const result = await this.rpc("models.list", {});
+    return (result as { models: ModelInfo[] }).models ?? [];
+  }
+
+  async getConfig(): Promise<Record<string, unknown>> {
+    const result = await this.rpc("config.get", {});
+    return (result as { config: Record<string, unknown> }).config ?? result;
+  }
+
+  async patchConfig(raw: string, baseHash: string): Promise<void> {
+    await this.rpc("config.patch", { raw, baseHash });
   }
 }
