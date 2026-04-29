@@ -1,27 +1,96 @@
-import { useState, useCallback, useRef, type KeyboardEvent } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo, type KeyboardEvent } from "react";
 import { cn } from "@/lib/cn";
-import { SendHorizonal } from "lucide-react";
+import type { BrowserEngine } from "@/lib/engine";
+import { useModels } from "@/hooks/use-models";
+import { ArrowUp, Mic, Paperclip, ChevronDown, Check, ChevronLeft, Search, X } from "lucide-react";
 
 interface ChatInputProps {
   onSend: (message: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  engine: BrowserEngine;
 }
+
+/** Convert raw model ID to a clean display name */
+function formatModelName(raw: string): string {
+  // "claude-haiku-4-5-20251001" → "Haiku 4.5"
+  // "claude-opus-4-6" → "Opus 4.6"
+  // "claude-sonnet-4-6" → "Sonnet 4.6"
+  // "gpt-4o-mini" → "GPT-4o Mini"
+  const id = raw.split("/").pop() ?? raw;
+
+  // Anthropic models
+  const claudeMatch = id.match(/claude-(\w+)-([\d]+)-([\d]+)/);
+  if (claudeMatch) {
+    const family = claudeMatch[1]!;
+    const major = claudeMatch[2]!;
+    const minor = claudeMatch[3]!;
+    const name = family.charAt(0).toUpperCase() + family.slice(1);
+    return `${name} ${major}.${minor}`;
+  }
+
+  // GPT models
+  if (id.startsWith("gpt-")) {
+    return id.replace("gpt-", "GPT-").split("-").map(w =>
+      w === "mini" ? "Mini" : w === "turbo" ? "Turbo" : w
+    ).join(" ").replace("GPT ", "GPT-");
+  }
+
+  // Gemini
+  if (id.startsWith("gemini-")) {
+    return id.replace("gemini-", "Gemini ").replace(/-/g, " ");
+  }
+
+  // Fallback: capitalize first letter of each segment
+  return id.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
+const PROVIDER_NAMES: Record<string, string> = {
+  anthropic: "Anthropic", openai: "OpenAI", google: "Google", "amazon-bedrock": "AWS Bedrock",
+  "azure-openai-responses": "Azure OpenAI", mistral: "Mistral", groq: "Groq", deepseek: "DeepSeek",
+  fireworks: "Fireworks", openrouter: "OpenRouter", "github-copilot": "GitHub Copilot", xai: "xAI",
+  cerebras: "Cerebras", huggingface: "Hugging Face", ollama: "Ollama",
+};
+const fmtProvider = (id: string) =>
+  PROVIDER_NAMES[id] ?? id.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 
 export function ChatInput({
   onSend,
   disabled = false,
-  placeholder = "Message your agent...",
+  placeholder = "Message...",
+  engine,
 }: ChatInputProps) {
   const [value, setValue] = useState("");
+  const [showModels, setShowModels] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const { providers, currentModel, setModel } = useModels(engine);
+  const hasText = value.trim().length > 0;
+
+  const toggleBtnRef = useRef<HTMLButtonElement>(null);
+
+  // Close modal on click outside (but not on the toggle button itself)
+  useEffect(() => {
+    if (!showModels) return;
+    function handleClick(e: MouseEvent) {
+      if (toggleBtnRef.current?.contains(e.target as Node)) return;
+      if (modalRef.current && !modalRef.current.contains(e.target as Node)) {
+        setShowModels(false);
+        setSelectedProvider(null);
+        setSearch("");
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showModels]);
 
   const handleSend = useCallback(() => {
     const trimmed = value.trim();
     if (!trimmed || disabled) return;
     onSend(trimmed);
     setValue("");
-    // Reset textarea height
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
@@ -41,12 +110,134 @@ export function ChatInput({
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+    // 4 lines max (~80px), then scroll
+    const lineHeight = 20;
+    const maxHeight = lineHeight * 4;
+    el.style.height = Math.min(el.scrollHeight, maxHeight) + "px";
+    el.style.overflowY = el.scrollHeight > maxHeight ? "auto" : "hidden";
   }, []);
 
+  const filteredProviders = useMemo(() => {
+    if (!search.trim()) return providers;
+    const q = search.toLowerCase();
+    return providers.filter(g =>
+      fmtProvider(g.provider).toLowerCase().includes(q) ||
+      g.models.some(m => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q))
+    );
+  }, [providers, search]);
+
+  const filteredModels = useMemo(() => {
+    if (!selectedProvider) return [];
+    const group = providers.find(g => g.provider === selectedProvider);
+    if (!group) return [];
+    if (!search.trim()) return group.models;
+    const q = search.toLowerCase();
+    return group.models.filter(m => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q));
+  }, [providers, selectedProvider, search]);
+
+  const modelDisplay = currentModel ? formatModelName(currentModel) : "Model";
+
   return (
-    <div className="border-t border-border bg-surface px-4 py-3">
-      <div className="mx-auto flex max-w-3xl items-end gap-2">
+    <div className="relative px-4 pb-4 pt-2">
+      {/* Model selector modal */}
+      {showModels && (
+        <div
+          ref={modalRef}
+          className="absolute bottom-full left-6 right-6 mb-2 rounded-xl border border-border bg-surface shadow-2xl max-h-[45vh] flex flex-col overflow-hidden animate-[slideUp_150ms_ease-out]"
+        >
+          {/* Header */}
+          <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border">
+            {selectedProvider ? (
+              <>
+                <button
+                  onClick={() => { setSelectedProvider(null); setSearch(""); }}
+                  className="text-text-muted hover:text-text"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </button>
+                <span className="text-xs font-medium">{fmtProvider(selectedProvider)}</span>
+                <span className="text-[10px] text-text-muted">{filteredModels.length}</span>
+              </>
+            ) : (
+              <span className="text-xs font-medium">Select Model</span>
+            )}
+          </div>
+
+          {/* Search */}
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
+            <Search className="h-3 w-3 text-text-muted" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={selectedProvider ? "Search models..." : "Search providers..."}
+              className="flex-1 bg-transparent text-[11px] text-text placeholder:text-text-muted focus:outline-none"
+              autoFocus
+            />
+            {search && (
+              <button onClick={() => setSearch("")} className="text-text-muted hover:text-text">
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+
+          {/* List */}
+          <div className="overflow-y-auto">
+            {!selectedProvider && filteredProviders.map((group) => {
+              const hasActive = group.models.some(
+                m => currentModel === `${m.provider}/${m.id}` || currentModel === m.id
+              );
+              return (
+                <button
+                  key={group.provider}
+                  onClick={() => { setSelectedProvider(group.provider); setSearch(""); }}
+                  className="flex w-full items-center justify-between px-3 py-2.5 text-left text-[11px] transition-colors hover:bg-surface-hover"
+                >
+                  <div className="flex items-center gap-2">
+                    {hasActive ? <Check className="h-3 w-3 text-accent" /> : <div className="h-3 w-3" />}
+                    <span className={hasActive ? "text-accent font-medium" : "text-text"}>{fmtProvider(group.provider)}</span>
+                  </div>
+                  <span className="text-text-muted">{group.models.length}</span>
+                </button>
+              );
+            })}
+
+            {selectedProvider && filteredModels.map((model) => {
+              const fullId = `${model.provider}/${model.id}`;
+              const isActive = currentModel === fullId || currentModel === model.id;
+              return (
+                <button
+                  key={model.id}
+                  onClick={async () => {
+                    await setModel(fullId);
+                    setShowModels(false);
+                    setSelectedProvider(null);
+                    setSearch("");
+                  }}
+                  className={cn(
+                    "flex w-full items-center gap-2 px-3 py-2.5 text-left text-[11px] transition-colors hover:bg-surface-hover",
+                    isActive && "bg-accent/5",
+                  )}
+                >
+                  {isActive ? <Check className="h-3 w-3 shrink-0 text-accent" /> : <div className="h-3 w-3 shrink-0" />}
+                  <span className={cn("flex-1 truncate", isActive ? "text-accent font-medium" : "text-text")}>
+                    {formatModelName(model.name || model.id)}
+                  </span>
+                  {model.contextWindow && (
+                    <span className="text-[9px] text-text-muted">
+                      {model.contextWindow >= 1_000_000
+                        ? `${(model.contextWindow / 1_000_000).toFixed(0)}M`
+                        : `${Math.round(model.contextWindow / 1000)}k`}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Input container */}
+      <div className="rounded-2xl bg-container border border-[#444] px-2.5 py-2">
         <textarea
           ref={textareaRef}
           value={value}
@@ -57,24 +248,56 @@ export function ChatInput({
           disabled={disabled}
           rows={1}
           className={cn(
-            "flex-1 resize-none rounded-xl border border-border bg-bg px-4 py-3",
-            "text-sm text-text placeholder:text-text-muted",
-            "focus:border-accent focus:outline-none",
+            "w-full resize-none bg-transparent px-1 py-0.5",
+            "text-[13px] text-text placeholder:text-text-muted leading-5",
+            "focus:outline-none",
             "disabled:cursor-not-allowed disabled:opacity-50",
           )}
+          style={{ overflowY: "hidden" }}
         />
-        <button
-          onClick={handleSend}
-          disabled={disabled || !value.trim()}
-          className={cn(
-            "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl",
-            "bg-accent text-white transition-colors",
-            "hover:bg-accent-hover",
-            "disabled:cursor-not-allowed disabled:opacity-30",
-          )}
-        >
-          <SendHorizonal className="h-4 w-4" />
-        </button>
+
+        {/* Bottom bar */}
+        <div className="flex items-center justify-between mt-1.5">
+          <button
+            ref={toggleBtnRef}
+            onClick={() => { setShowModels(!showModels); setSelectedProvider(null); setSearch(""); }}
+            className={cn(
+              "flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] transition-all",
+              "bg-[#333] text-[#999] hover:text-[#bbb]",
+            )}
+          >
+            <span className="max-w-[120px] truncate">{modelDisplay}</span>
+            <ChevronDown className={cn("h-2.5 w-2.5 transition-transform", showModels && "rotate-180")} />
+          </button>
+
+          <div className="flex items-center gap-1">
+            <button
+              disabled={disabled}
+              className="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:text-text disabled:opacity-30"
+              title="Attach"
+            >
+              <Paperclip className="h-3.5 w-3.5" />
+            </button>
+
+            {hasText ? (
+              <button
+                onClick={handleSend}
+                disabled={disabled}
+                className="flex h-6 w-6 items-center justify-center rounded-full bg-accent text-white transition-all hover:bg-accent-hover disabled:opacity-30"
+              >
+                <ArrowUp className="h-3 w-3" />
+              </button>
+            ) : (
+              <button
+                disabled={disabled}
+                className="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:text-text disabled:opacity-30"
+                title="Voice"
+              >
+                <Mic className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

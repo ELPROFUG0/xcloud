@@ -4,7 +4,7 @@ import { useChat } from "@/hooks/use-chat";
 import { MessageBubble } from "./MessageBubble";
 import { ToolCallBadge } from "./ToolCallBadge";
 import { ChatInput } from "./ChatInput";
-import { ArrowLeft, Bot, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2 } from "lucide-react";
 
 interface ChatPanelProps {
   engine: BrowserEngine;
@@ -72,7 +72,11 @@ export function ChatPanel({ engine, agentId = "main", agentName, onBack }: ChatP
         </div>
       </div>
 
-      <ChatInput onSend={send} disabled={!engine.connected} />
+      <ChatInput
+        onSend={send}
+        disabled={!engine.connected}
+        engine={engine}
+      />
     </div>
   );
 }
