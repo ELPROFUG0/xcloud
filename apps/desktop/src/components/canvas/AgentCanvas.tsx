@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ReactFlow,
   Background,
-  Controls,
   type Node,
   type Edge,
   type NodeTypes,
@@ -155,10 +154,6 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
             }}
           >
             <Background color="#1c1c1f" gap={20} size={1} />
-            <Controls
-              showInteractive={false}
-              style={{ background: "#141416", border: "1px solid #27272a", borderRadius: "8px" }}
-            />
           </ReactFlow>
         </div>
       ) : (
