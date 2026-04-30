@@ -40,11 +40,21 @@ const SECTIONS: { id: Section; label: string; icon: typeof Cpu }[] = [
   { id: "general", label: "General", icon: Settings2 },
 ];
 
+interface ChannelField {
+  key: string;
+  label: string;
+  placeholder: string;
+  type?: "text" | "password" | "select" | "number" | "toggle";
+  options?: string[];
+  description?: string;
+}
+
 interface ChannelConfig {
   id: string;
   name: string;
   icon: string;
-  fields: Array<{ key: string; label: string; placeholder: string; type?: "text" | "password" | "select"; options?: string[] }>;
+  fields: ChannelField[];
+  advancedFields?: ChannelField[];
   description: string;
 }
 
@@ -61,7 +71,21 @@ const CHANNELS: ChannelConfig[] = [
     id: "whatsapp", name: "WhatsApp", icon: "💬",
     description: "Connect WhatsApp to chat with your agent via phone.",
     fields: [
-      { key: "dmPolicy", label: "DM Policy", placeholder: "pairing", type: "select", options: ["pairing", "allowlist", "open", "disabled"] },
+      { key: "dmPolicy", label: "DM Policy", placeholder: "pairing", type: "select", options: ["pairing", "allowlist", "open", "disabled"], description: 'Controls who can DM the agent. "pairing" requires a code.' },
+      { key: "selfPhoneMode", label: "Self-Phone Mode", placeholder: "", type: "toggle", description: "Use your personal WhatsApp number as the bot." },
+    ],
+    advancedFields: [
+      { key: "groupPolicy", label: "Group Policy", placeholder: "open", type: "select", options: ["open", "disabled", "allowlist"], description: "How to handle group messages." },
+      { key: "replyToMode", label: "Reply Mode", placeholder: "off", type: "select", options: ["off", "first", "all", "batched"], description: "How the bot quotes messages in replies." },
+      { key: "reactionLevel", label: "Reactions", placeholder: "ack", type: "select", options: ["off", "ack", "minimal", "extensive"], description: "Level of emoji reactions." },
+      { key: "sendReadReceipts", label: "Read Receipts", placeholder: "", type: "toggle", description: "Send read receipts for incoming messages." },
+      { key: "markdown", label: "Markdown", placeholder: "", type: "toggle", description: "Render markdown formatting in messages." },
+      { key: "mediaMaxMb", label: "Max Media Size (MB)", placeholder: "50", type: "number", description: "Maximum media file size to accept." },
+      { key: "messageDebounce", label: "Message Debounce (ms)", placeholder: "0", type: "number", description: "Batch rapid consecutive messages from same sender." },
+      { key: "contextVisibility", label: "Context Visibility", placeholder: "all", type: "select", options: ["all", "allowlist", "allowlist_quote"], description: "Who can see message context." },
+      { key: "chunkMode", label: "Chunk Mode", placeholder: "length", type: "select", options: ["length", "newline"], description: "How to split long messages." },
+      { key: "blockStreaming", label: "Block Streaming", placeholder: "", type: "toggle", description: "Wait for full response before sending." },
+      { key: "healthMonitor", label: "Health Monitor", placeholder: "", type: "toggle", description: "Monitor connection health automatically." },
     ],
   },
   {
@@ -121,6 +145,66 @@ const CHANNELS: ChannelConfig[] = [
   },
 ];
 
+function renderChannelFields(
+  fields: ChannelField[],
+  channelId: string,
+  values: Record<string, string>,
+  _enabled: boolean,
+  updateField: (channelId: string, field: string, value: string) => void,
+  _setEnabled: (fn: (prev: Record<string, boolean>) => Record<string, boolean>) => void,
+) {
+  return fields.map((field) => (
+    <div key={field.key} className="rounded-lg bg-container p-4">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[12px] font-medium">{field.label}</span>
+      </div>
+      {field.description && (
+        <p className="text-[10px] text-text-muted mb-2">{field.description}</p>
+      )}
+      {field.type === "select" ? (
+        <select
+          value={values[field.key] ?? field.placeholder}
+          onChange={(e) => updateField(channelId, field.key, e.target.value)}
+          className="w-full rounded-md bg-bg border-0 px-3 py-2 text-xs text-text focus:ring-1 focus:ring-accent/50 focus:outline-none"
+        >
+          {field.options?.map((opt) => (
+            <option key={opt} value={opt}>{opt}</option>
+          ))}
+        </select>
+      ) : field.type === "toggle" ? (
+        <button
+          onClick={() => updateField(channelId, field.key, values[field.key] === "true" ? "false" : "true")}
+          className={cn(
+            "relative h-5 w-9 rounded-full transition-colors",
+            values[field.key] === "true" ? "bg-accent" : "bg-text-muted/30",
+          )}
+        >
+          <div className={cn(
+            "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform",
+            values[field.key] === "true" ? "translate-x-4" : "translate-x-0.5",
+          )} />
+        </button>
+      ) : field.type === "number" ? (
+        <input
+          type="number"
+          value={values[field.key] ?? field.placeholder}
+          onChange={(e) => updateField(channelId, field.key, e.target.value)}
+          placeholder={field.placeholder}
+          className="w-full rounded-md bg-bg border-0 px-3 py-2 text-xs text-text font-mono placeholder:text-text-muted focus:ring-1 focus:ring-accent/50 focus:outline-none"
+        />
+      ) : (
+        <input
+          type={field.type ?? "text"}
+          value={values[field.key] ?? ""}
+          onChange={(e) => updateField(channelId, field.key, e.target.value)}
+          placeholder={field.placeholder}
+          className="w-full rounded-md bg-bg border-0 px-3 py-2 text-xs text-text font-mono placeholder:text-text-muted focus:ring-1 focus:ring-accent/50 focus:outline-none"
+        />
+      )}
+    </div>
+  ));
+}
+
 export function SettingsPanel({ engine }: SettingsPanelProps) {
   const [section, setSection] = useState<Section>("models");
   const { providers, currentModel, loading, setModel } = useModels(engine);
@@ -133,6 +217,7 @@ export function SettingsPanel({ engine }: SettingsPanelProps) {
   const [channelError, setChannelError] = useState<Record<string, string | null>>({});
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [channelEnabled, setChannelEnabled] = useState<Record<string, boolean>>({});
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const filteredProviders = providers.filter((g) => {
     if (!search.trim()) return true;
@@ -470,32 +555,21 @@ export function SettingsPanel({ engine }: SettingsPanelProps) {
                 </div>
 
                 {/* Fields */}
-                {ch.fields.map((field) => (
-                  <div key={field.key} className="rounded-lg bg-container p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[12px] font-medium">{field.label}</span>
-                    </div>
-                    {field.type === "select" ? (
-                      <select
-                        value={values[field.key] ?? field.placeholder}
-                        onChange={(e) => updateChannelField(ch.id, field.key, e.target.value)}
-                        className="w-full rounded-md bg-bg border-0 px-3 py-2 text-xs text-text focus:ring-1 focus:ring-accent/50 focus:outline-none"
-                      >
-                        {field.options?.map((opt) => (
-                          <option key={opt} value={opt}>{opt}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input
-                        type={field.type ?? "text"}
-                        value={values[field.key] ?? ""}
-                        onChange={(e) => updateChannelField(ch.id, field.key, e.target.value)}
-                        placeholder={field.placeholder}
-                        className="w-full rounded-md bg-bg border-0 px-3 py-2 text-xs text-text font-mono placeholder:text-text-muted focus:ring-1 focus:ring-accent/50 focus:outline-none"
-                      />
-                    )}
-                  </div>
-                ))}
+                {renderChannelFields(ch.fields, ch.id, values, enabled, updateChannelField, setChannelEnabled)}
+
+                {/* Advanced */}
+                {ch.advancedFields && ch.advancedFields.length > 0 && (
+                  <>
+                    <button
+                      onClick={() => setShowAdvanced(!showAdvanced)}
+                      className="flex w-full items-center justify-between rounded-lg bg-container px-4 py-2.5 text-xs text-text-muted hover:text-text transition-colors"
+                    >
+                      <span>Advanced Settings</span>
+                      <ChevronLeft className={cn("h-3.5 w-3.5 transition-transform", showAdvanced ? "-rotate-90" : "rotate-0")} />
+                    </button>
+                    {showAdvanced && renderChannelFields(ch.advancedFields, ch.id, values, enabled, updateChannelField, setChannelEnabled)}
+                  </>
+                )}
 
                 {/* Save */}
                 <button
