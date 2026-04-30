@@ -7,6 +7,15 @@ import {
   Key, Save, Loader2, CheckCircle, AlertCircle,
   Cpu, ChevronLeft, Check, Search, X, Settings2, Radio,
 } from "lucide-react";
+import telegramLogo from "@/assets/channels/telegram.svg";
+import whatsappLogo from "@/assets/channels/whatsapp.svg";
+import discordLogo from "@/assets/channels/discord.svg";
+import slackLogo from "@/assets/channels/slack.svg";
+import signalLogo from "@/assets/channels/signal.svg";
+import imessageLogo from "@/assets/channels/imessage.svg";
+import matrixLogo from "@/assets/channels/matrix.svg";
+import teamsLogo from "@/assets/channels/teams.svg";
+import googleChatLogo from "@/assets/channels/google-chat.svg";
 
 interface SettingsPanelProps {
   engine: BrowserEngine;
@@ -52,7 +61,7 @@ interface ChannelField {
 interface ChannelConfig {
   id: string;
   name: string;
-  icon: string;
+  logo: string;
   fields: ChannelField[];
   advancedFields?: ChannelField[];
   description: string;
@@ -60,7 +69,7 @@ interface ChannelConfig {
 
 const CHANNELS: ChannelConfig[] = [
   {
-    id: "telegram", name: "Telegram", icon: "✈️",
+    id: "telegram", name: "Telegram", logo: telegramLogo,
     description: "Connect your Telegram bot to receive and respond to messages.",
     fields: [
       { key: "botToken", label: "Bot Token", placeholder: "123456:ABC-DEF...", type: "password" },
@@ -68,7 +77,7 @@ const CHANNELS: ChannelConfig[] = [
     ],
   },
   {
-    id: "whatsapp", name: "WhatsApp", icon: "💬",
+    id: "whatsapp", name: "WhatsApp", logo: whatsappLogo,
     description: "Connect WhatsApp to chat with your agent via phone.",
     fields: [
       { key: "dmPolicy", label: "DM Policy", placeholder: "pairing", type: "select", options: ["pairing", "allowlist", "open", "disabled"], description: 'Controls who can DM the agent. "pairing" requires a code.' },
@@ -89,7 +98,7 @@ const CHANNELS: ChannelConfig[] = [
     ],
   },
   {
-    id: "discord", name: "Discord", icon: "🎮",
+    id: "discord", name: "Discord", logo: discordLogo,
     description: "Add your agent as a Discord bot in your server.",
     fields: [
       { key: "botToken", label: "Bot Token", placeholder: "MTIz...", type: "password" },
@@ -97,7 +106,7 @@ const CHANNELS: ChannelConfig[] = [
     ],
   },
   {
-    id: "slack", name: "Slack", icon: "📱",
+    id: "slack", name: "Slack", logo: slackLogo,
     description: "Integrate your agent into Slack workspaces.",
     fields: [
       { key: "botToken", label: "Bot Token", placeholder: "xoxb-...", type: "password" },
@@ -106,21 +115,21 @@ const CHANNELS: ChannelConfig[] = [
     ],
   },
   {
-    id: "signal", name: "Signal", icon: "🔒",
+    id: "signal", name: "Signal", logo: signalLogo,
     description: "Secure messaging via Signal protocol.",
     fields: [
       { key: "dmPolicy", label: "DM Policy", placeholder: "pairing", type: "select", options: ["pairing", "allowlist", "open", "disabled"] },
     ],
   },
   {
-    id: "imessage", name: "iMessage", icon: "🍎",
+    id: "imessage", name: "iMessage", logo: imessageLogo,
     description: "Connect to iMessage (requires macOS with Messages app).",
     fields: [
       { key: "dmPolicy", label: "DM Policy", placeholder: "pairing", type: "select", options: ["pairing", "allowlist", "open", "disabled"] },
     ],
   },
   {
-    id: "matrix", name: "Matrix", icon: "🔷",
+    id: "matrix", name: "Matrix", logo: matrixLogo,
     description: "Decentralized messaging via Matrix protocol.",
     fields: [
       { key: "homeserver", label: "Homeserver", placeholder: "https://matrix.org", type: "text" },
@@ -129,7 +138,7 @@ const CHANNELS: ChannelConfig[] = [
     ],
   },
   {
-    id: "teams", name: "Microsoft Teams", icon: "🟦",
+    id: "teams", name: "Microsoft Teams", logo: teamsLogo,
     description: "Add your agent to Microsoft Teams.",
     fields: [
       { key: "appId", label: "App ID", placeholder: "xxxxxxxx-xxxx-...", type: "text" },
@@ -137,7 +146,7 @@ const CHANNELS: ChannelConfig[] = [
     ],
   },
   {
-    id: "google-chat", name: "Google Chat", icon: "💚",
+    id: "google-chat", name: "Google Chat", logo: googleChatLogo,
     description: "Integrate with Google Chat workspaces.",
     fields: [
       { key: "credentials", label: "Service Account JSON", placeholder: '{"type":"service_account",...}', type: "password" },
@@ -298,7 +307,7 @@ export function SettingsPanel({ engine }: SettingsPanelProps) {
   return (
     <div className="flex h-full bg-surface">
       {/* Sidebar */}
-      <div className="flex h-full w-44 shrink-0 flex-col bg-surface pt-6">
+      <div className="flex h-full w-52 shrink-0 flex-col bg-surface pt-6">
         <div className="px-5 mb-6">
           <h2 className="text-[11px] font-semibold uppercase tracking-widest text-text-muted">Settings</h2>
         </div>
@@ -490,23 +499,17 @@ export function SettingsPanel({ engine }: SettingsPanelProps) {
           {/* Channels */}
           {section === "channels" && !selectedChannel && (
             <div className="space-y-1">
-              <p className="text-[11px] text-text-muted mb-3">
-                Connect messaging platforms so your agents can communicate externally.
-              </p>
               {CHANNELS.map((ch) => {
                 const enabled = channelEnabled[ch.id] ?? false;
                 return (
                   <button
                     key={ch.id}
                     onClick={() => setSelectedChannel(ch.id)}
-                    className="flex w-full items-center justify-between rounded-lg bg-container px-4 py-3 text-left transition-colors hover:bg-surface-hover"
+                    className="flex w-full items-center justify-between rounded-lg bg-container px-4 py-3.5 text-left transition-colors hover:bg-surface-hover"
                   >
                     <div className="flex items-center gap-3">
-                      <span className="text-lg">{ch.icon}</span>
-                      <div>
-                        <span className="text-[13px] text-text">{ch.name}</span>
-                        <p className="text-[10px] text-text-muted mt-0.5 line-clamp-1">{ch.description}</p>
-                      </div>
+                      <img src={ch.logo} alt={ch.name} className="h-5 w-5" />
+                      <span className="text-[13px] font-medium text-text">{ch.name}</span>
                     </div>
                     <div className={cn(
                       "h-2 w-2 rounded-full shrink-0",
@@ -530,9 +533,9 @@ export function SettingsPanel({ engine }: SettingsPanelProps) {
             return (
               <div className="space-y-4">
                 <div className="flex items-center gap-3 mb-2">
-                  <span className="text-2xl">{ch.icon}</span>
+                  <img src={ch.logo} alt={ch.name} className="h-7 w-7" />
                   <div>
-                    <h4 className="text-[13px] font-medium">{ch.name}</h4>
+                    <h4 className="text-[14px] font-medium">{ch.name}</h4>
                     <p className="text-[10px] text-text-muted">{ch.description}</p>
                   </div>
                 </div>
