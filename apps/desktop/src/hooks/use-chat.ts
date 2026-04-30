@@ -20,12 +20,44 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
   const [isStreaming, setIsStreaming] = useState(false);
   const subscribedRef = useRef(false);
 
-  // Subscribe and listen for events
+  // Load history and subscribe
   useEffect(() => {
     let cancelled = false;
 
     async function setup() {
       if (subscribedRef.current) return;
+
+      // Load existing chat history from gateway
+      try {
+        const result = await engine.rpc("chat.history", { sessionKey });
+        if (!cancelled) {
+          const history = (result as { messages?: Array<{ role: string; content: unknown; timestamp?: number }> }).messages ?? [];
+          const loaded: ChatMessage[] = history
+            .filter(m => m.role === "user" || m.role === "assistant")
+            .map((m, i) => {
+              let content = "";
+              if (typeof m.content === "string") {
+                content = m.content;
+              } else if (Array.isArray(m.content)) {
+                content = (m.content as Array<{ type: string; text?: string }>)
+                  .filter(b => b.type === "text" && b.text)
+                  .map(b => b.text)
+                  .join("");
+              }
+              return {
+                id: `history-${i}`,
+                role: m.role as "user" | "assistant",
+                content,
+                timestamp: m.timestamp ?? Date.now(),
+              };
+            })
+            .filter(m => m.content.length > 0);
+          setMessages(loaded);
+        }
+      } catch {
+        // History may not be available — that's OK
+      }
+
       try {
         await engine.subscribe(sessionKey);
         subscribedRef.current = true;
