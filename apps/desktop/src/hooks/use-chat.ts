@@ -20,6 +20,14 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
   const [isStreaming, setIsStreaming] = useState(false);
   const subscribedRef = useRef(false);
 
+  // Reset when session changes
+  useEffect(() => {
+    setMessages([]);
+    setTools([]);
+    setIsStreaming(false);
+    subscribedRef.current = false;
+  }, [sessionKey]);
+
   // Load history and subscribe
   useEffect(() => {
     let cancelled = false;
@@ -180,12 +188,12 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
       setIsStreaming(true);
 
       try {
-        await engine.sendMessage("main", content.trim());
+        await engine.sendMessage(sessionKey, content.trim());
       } catch {
         setIsStreaming(false);
       }
     },
-    [engine],
+    [engine, sessionKey],
   );
 
   return { messages, tools, isStreaming, send };
