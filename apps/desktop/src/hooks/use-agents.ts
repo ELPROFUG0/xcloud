@@ -60,17 +60,17 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
 
       setAgents(list);
 
-      // Try to read IDENTITY.md in the background (non-blocking)
+      // Try to read IDENTITY.md for the default agent only
       readTextFile(`.openclaw/workspace/IDENTITY.md`, { baseDir: BaseDirectory.Home })
         .then((content) => {
           const identity = parseIdentity(content);
           if (identity.name || identity.emoji) {
             setAgents((prev) =>
-              prev.map((a) => ({
-                ...a,
-                name: identity.name ?? a.name,
-                emoji: identity.emoji ?? a.emoji,
-              })),
+              prev.map((a) =>
+                a.isDefault
+                  ? { ...a, name: identity.name ?? a.name, emoji: identity.emoji ?? a.emoji }
+                  : a,
+              ),
             );
           }
         })
@@ -97,13 +97,16 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
       const event = frame.event as string;
       const payload = frame.payload as Record<string, unknown>;
 
-      // Refresh after agent lifecycle ends
+      // Refresh after agent lifecycle ends or sessions change
       if (event === "agent") {
         const stream = payload.stream as string;
         const data = payload.data as Record<string, unknown> | undefined;
         if (stream === "lifecycle" && data?.phase === "end") {
           refresh();
         }
+      }
+      if (event === "sessions.changed") {
+        refresh();
       }
     });
     return unsub;

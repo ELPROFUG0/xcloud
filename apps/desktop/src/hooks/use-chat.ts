@@ -191,6 +191,13 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
       const event = frame.event as string;
       const payload = frame.payload as Record<string, unknown>;
 
+      // Only process events for this session
+      const eventSessionKey = payload.sessionKey as string | undefined;
+      if (eventSessionKey) {
+        const myKey = sessionKey === "main" ? "agent:main:main" : sessionKey;
+        if (eventSessionKey !== myKey && eventSessionKey !== sessionKey) return;
+      }
+
       // Agent streaming deltas
       if (event === "agent") {
         const stream = payload.stream as string;

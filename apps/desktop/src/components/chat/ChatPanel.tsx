@@ -44,7 +44,14 @@ interface SessionEntry {
 }
 
 export function ChatPanel({ engine, agentId = "main", agentName, agents = [], onSwitchAgent, onBack }: ChatPanelProps) {
-  const [activeSession, setActiveSession] = useState(agentId === "main" ? "main" : `agent:${agentId}:main`);
+  const defaultSessionKey = agentId === "main" ? "main" : `agent:${agentId}:main`;
+  const [activeSession, setActiveSession] = useState(defaultSessionKey);
+
+  // Reset session when agent changes
+  useEffect(() => {
+    setActiveSession(defaultSessionKey);
+  }, [defaultSessionKey]);
+
   const { messages, isStreaming, send } = useChat({ engine, sessionKey: activeSession });
   const [showHistory, setShowHistory] = useState(false);
   const [showAgentPicker, setShowAgentPicker] = useState(false);
@@ -57,8 +64,29 @@ export function ChatPanel({ engine, agentId = "main", agentName, agents = [], on
   const loadSessions = useCallback(async () => {
     try {
       const result = await engine.rpc("sessions.list", {});
-      const list = ((result as { sessions?: SessionEntry[] }).sessions ?? [])
-        .filter(s => s.key.includes(agentId))
+      const raw = result as Record<string, unknown>;
+      // sessions.list may return sessions in different formats
+      const all: SessionEntry[] = [];
+      const sessions = raw.sessions as Array<Record<string, unknown>> | Record<string, Record<string, unknown>> | undefined;
+
+      if (Array.isArray(sessions)) {
+        for (const s of sessions) {
+          all.push({ key: s.key as string, updatedAt: s.updatedAt as number, kind: (s.kind as string) ?? "" });
+        }
+      } else if (sessions && typeof sessions === "object") {
+        // Could be a map of key → session
+        for (const [key, s] of Object.entries(sessions)) {
+          all.push({ key, updatedAt: (s as Record<string, unknown>).updatedAt as number, kind: "" });
+        }
+      }
+
+      const list = all
+        .filter(s => {
+          if (!s.key) return false;
+          // Only show sessions for this agent
+          const prefix = agentId === "main" ? "agent:main:" : `agent:${agentId}:`;
+          return s.key === "main" || s.key.startsWith(prefix);
+        })
         .sort((a, b) => b.updatedAt - a.updatedAt);
       setSessions(list);
     } catch { /* ignore */ }

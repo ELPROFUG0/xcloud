@@ -75,6 +75,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
 
   const leftPanel = view.type === "chat" ? (
     <ChatPanel
+      key={view.agentId}
       engine={engine}
       agentId={view.agentId}
       agentName={agents.find((a) => a.id === view.agentId)?.name ?? view.agentId}
