@@ -110,6 +110,7 @@ export function useAgentUI(_agentId: string, wsPath: string) {
   const [devServerUrl, setDevServerUrl] = useState<string | null>(null);
   const [devServerLoading, setDevServerLoading] = useState(false);
   const [uiView, setUiView] = useState<"menu" | "create" | "preview">("menu");
+  const [hasProject, setHasProject] = useState(false);
 
   const configPath = `${wsPath}/ui-config.json`;
   const home = "/Users/contentmanager";
@@ -122,6 +123,9 @@ export function useAgentUI(_agentId: string, wsPath: string) {
         const config = JSON.parse(content);
         if (config.repoPath) {
           setRepoPath(config.repoPath);
+          // Check if project has package.json with dev script
+          const pkgCheck = await invoke<string>("run_shell", { cmd: `grep -q '"dev"' "${config.repoPath}/package.json" 2>/dev/null && echo "yes" || echo "no"` }).catch(() => "no");
+          setHasProject(pkgCheck.trim() === "yes");
           if (config.port) {
             try {
               const status = await invoke<string>("run_shell", {
@@ -252,7 +256,7 @@ export function useAgentUI(_agentId: string, wsPath: string) {
   }, [_agentId, wsPath, home, saveConfig]);
 
   return {
-    repoPath, devServerUrl, devServerLoading, uiView,
+    repoPath, devServerUrl, devServerLoading, uiView, hasProject,
     setUiView, selectRepo, disconnectRepo, launchPreview, createUI,
   };
 }
@@ -295,7 +299,7 @@ export function AgentUIHeaderControls({
 
 /** Main UI tab content */
 export function AgentUIContent({
-  uiView, repoPath, devServerUrl, devServerLoading,
+  uiView, repoPath, devServerUrl, devServerLoading, hasProject,
   setUiView, selectRepo, disconnectRepo, launchPreview, createUI,
 }: ReturnType<typeof useAgentUI>) {
   // Preview
@@ -386,15 +390,37 @@ export function AgentUIContent({
           <div className="text-center max-w-xs">
             <h3 className="text-sm font-medium text-text">{repoPath.split("/").pop()}</h3>
             <p className="mt-1 text-[10px] text-text-muted truncate max-w-[220px]">{repoPath}</p>
+            {!hasProject && (
+              <p className="mt-1.5 text-[10px] text-amber-400/70">Waiting for project to be built...</p>
+            )}
           </div>
           <div className="flex flex-col gap-2 w-full max-w-[220px]">
-            <button
-              onClick={launchPreview}
-              className="flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-xs font-medium text-white hover:opacity-90 transition-opacity"
-            >
-              <Layout className="h-3.5 w-3.5" />
-              Launch Preview
-            </button>
+            {hasProject ? (
+              <button
+                onClick={launchPreview}
+                className="flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-xs font-medium text-white hover:opacity-90 transition-opacity"
+              >
+                <Layout className="h-3.5 w-3.5" />
+                Launch Preview
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => invoke("run_shell", { cmd: `open -a "Cursor" "${repoPath}"` }).catch(() => {})}
+                  className="flex items-center justify-center gap-2 rounded-lg bg-surface-hover px-4 py-2.5 text-xs font-medium text-text hover:bg-border transition-colors"
+                >
+                  <Code className="h-3.5 w-3.5" />
+                  Continue in Cursor
+                </button>
+                <button
+                  onClick={() => invoke("run_shell", { cmd: `osascript -e 'tell application "Terminal" to do script "cd \\"${repoPath}\\" && claude"'` }).catch(() => {})}
+                  className="flex items-center justify-center gap-2 rounded-lg bg-surface-hover px-4 py-2.5 text-xs font-medium text-text hover:bg-border transition-colors"
+                >
+                  <Terminal className="h-3.5 w-3.5" />
+                  Continue in Claude Code
+                </button>
+              </>
+            )}
             <button
               onClick={selectRepo}
               className="flex items-center justify-center gap-2 rounded-lg bg-surface-hover px-4 py-2.5 text-xs font-medium text-text hover:bg-border transition-colors"
