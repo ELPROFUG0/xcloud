@@ -9,8 +9,11 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import dagre from "@dagrejs/dagre";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { BrowserEngine } from "@/lib/engine";
 import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
+import { X } from "lucide-react";
 import { TriggerNode } from "./nodes/TriggerNode";
 import { ToolNode } from "./nodes/ToolNode";
 import { AgentNode } from "./nodes/AgentNode";
@@ -40,6 +43,13 @@ interface AgentData {
   memoryFiles: string[];
 }
 
+interface DetailPanel {
+  title: string;
+  type: "markdown" | "list" | "info";
+  content: string;
+  items?: Array<{ label: string; file?: string }>;
+}
+
 const nodeTypes: NodeTypes = {
   trigger: TriggerNode,
   tool: ToolNode,
@@ -58,28 +68,15 @@ function layoutGraph(nodes: Node[], edges: Edge[]): Node[] {
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({ rankdir: "TB", ranksep: 70, nodesep: 30 });
-
-  nodes.forEach((node) => {
-    g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
-  });
-  edges.forEach((edge) => {
-    g.setEdge(edge.source, edge.target);
-  });
-
+  nodes.forEach((n) => g.setNode(n.id, { width: NODE_WIDTH, height: NODE_HEIGHT }));
+  edges.forEach((e) => g.setEdge(e.source, e.target));
   dagre.layout(g);
-
   return nodes.map((node) => {
     const pos = g.node(node.id);
-    return {
-      ...node,
-      position: { x: pos.x - NODE_WIDTH / 2, y: pos.y - NODE_HEIGHT / 2 },
-      sourcePosition: Position.Bottom,
-      targetPosition: Position.Top,
-    };
+    return { ...node, position: { x: pos.x - NODE_WIDTH / 2, y: pos.y - NODE_HEIGHT / 2 }, sourcePosition: Position.Bottom, targetPosition: Position.Top };
   });
 }
 
-/** Parse IDENTITY.md */
 function parseIdentity(content: string) {
   const get = (key: string) => {
     const m = content.match(new RegExp(`\\*\\*${key}:\\*\\*\\s*(.+)`, "i"));
@@ -88,11 +85,9 @@ function parseIdentity(content: string) {
   return { name: get("Name"), emoji: get("Emoji"), creature: get("Creature"), vibe: get("Vibe") };
 }
 
-/** Parse SOUL.md — extract core traits */
 function parseSoul(content: string): string[] {
   const traits: string[] = [];
-  const matches = content.matchAll(/\*\*([^*]+)\*\*/g);
-  for (const m of matches) {
+  for (const m of content.matchAll(/\*\*([^*]+)\*\*/g)) {
     const t = m[1]!.trim();
     if (t.length > 3 && t.length < 40 && !t.includes(":")) traits.push(t);
   }
@@ -109,12 +104,13 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
     memoryFiles: [],
   });
   const [tab, setTab] = useState<"canvas" | "logs">("canvas");
+  const [detail, setDetail] = useState<DetailPanel | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
-  // Load all agent data
+  const wsPath = agentId === "main" ? ".openclaw/workspace" : `.openclaw/workspace/${agentId}`;
+
+  // Load agent data
   const loadData = useCallback(async () => {
-    // Workspace path: main uses root, others use subfolder
-    const wsPath = agentId === "main" ? ".openclaw/workspace" : `.openclaw/workspace/${agentId}`;
-
     const data: AgentData = {
       identity: { name: agentId, emoji: "", creature: "", vibe: "" },
       soul: { traits: [] },
@@ -124,70 +120,56 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
       memoryFiles: [],
     };
 
-    // Identity
     try {
-      const content = await readTextFile(`${wsPath}/IDENTITY.md`, { baseDir: BaseDirectory.Home });
-      data.identity = parseIdentity(content);
+      const c = await readTextFile(`${wsPath}/IDENTITY.md`, { baseDir: BaseDirectory.Home });
+      data.identity = parseIdentity(c);
     } catch { /* */ }
 
-    // Soul
     try {
-      const content = await readTextFile(`${wsPath}/SOUL.md`, { baseDir: BaseDirectory.Home });
-      data.soul.traits = parseSoul(content);
+      const c = await readTextFile(`${wsPath}/SOUL.md`, { baseDir: BaseDirectory.Home });
+      data.soul.traits = parseSoul(c);
     } catch { /* */ }
 
-    // Tools
     try {
       const result = await engine.rpc("tools.catalog", {});
       data.tools = (result as { groups?: ToolGroup[] }).groups ?? [];
     } catch { /* */ }
 
-    // Model from config
     try {
       const result = await engine.rpc("config.get", {});
       const config = (result as { config?: Record<string, unknown> }).config ?? result;
       const agents = config.agents as Record<string, unknown> | undefined;
-
-      // Check agent-specific model first, then defaults
       let primary = "";
       const agentList = agents?.list as Array<Record<string, unknown>> | undefined;
       if (agentList) {
         const thisAgent = agentList.find(a => a.id === agentId);
-        const agentModel = thisAgent?.model as Record<string, unknown> | undefined;
-        primary = (agentModel?.primary as string) ?? "";
+        primary = ((thisAgent?.model as Record<string, unknown>)?.primary as string) ?? "";
       }
       if (!primary) {
-        const defaults = agents?.defaults as Record<string, unknown> | undefined;
-        const modelConfig = defaults?.model as Record<string, unknown> | undefined;
-        primary = (modelConfig?.primary as string) ?? "";
+        primary = ((agents?.defaults as Record<string, unknown>)?.model as Record<string, unknown>)?.primary as string ?? "";
       }
-
       if (primary) {
-        const parts = primary.split("/");
-        data.model = { provider: parts[0] ?? "", model: primary, contextWindow: 200000 };
+        data.model = { provider: primary.split("/")[0] ?? "", model: primary, contextWindow: 200000 };
       }
     } catch { /* */ }
 
-    // Commands/Skills
     try {
       const commands = await engine.listCommands();
       data.skills = commands.slice(0, 20).map((c) => c.name);
     } catch { /* */ }
 
-    // Memory files
-    for (const file of ["MEMORY.md", "HEARTBEAT.md", "USER.md", "TOOLS.md"]) {
+    for (const file of ["MEMORY.md", "HEARTBEAT.md", "USER.md", "TOOLS.md", "AGENTS.md"]) {
       try {
-        const content = await readTextFile(`${wsPath}/${file}`, { baseDir: BaseDirectory.Home });
-        if (content.trim()) data.memoryFiles.push(file);
+        const c = await readTextFile(`${wsPath}/${file}`, { baseDir: BaseDirectory.Home });
+        if (c.trim()) data.memoryFiles.push(file);
       } catch { /* */ }
     }
 
     setAgentData(data);
-  }, [engine, agentId]);
+  }, [engine, agentId, wsPath]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Refresh on agent lifecycle end
   useEffect(() => {
     const unsub = engine.onEvent((frame) => {
       const event = frame.event as string;
@@ -195,86 +177,98 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
       if (event === "agent") {
         const stream = payload.stream as string;
         const data = payload.data as Record<string, unknown> | undefined;
-        if (stream === "lifecycle" && data?.phase === "end") {
-          loadData();
-        }
+        if (stream === "lifecycle" && data?.phase === "end") loadData();
       }
     });
     return unsub;
   }, [engine, loadData]);
+
+  // Handle node click — load detail content
+  const onNodeClick = useCallback(async (_: unknown, node: Node) => {
+    setDetailLoading(true);
+
+    try {
+      if (node.id === "identity") {
+        const content = await readTextFile(`${wsPath}/IDENTITY.md`, { baseDir: BaseDirectory.Home }).catch(() => "No IDENTITY.md found");
+        setDetail({ title: "Identity", type: "markdown", content });
+      } else if (node.id === "soul") {
+        const content = await readTextFile(`${wsPath}/SOUL.md`, { baseDir: BaseDirectory.Home }).catch(() => "No SOUL.md found");
+        setDetail({ title: "Soul", type: "markdown", content });
+      } else if (node.id === "memory") {
+        setDetail({
+          title: "Memory",
+          type: "list",
+          content: "",
+          items: agentData.memoryFiles.map(f => ({ label: f, file: f })),
+        });
+      } else if (node.id === "skills") {
+        setDetail({
+          title: "Skills",
+          type: "list",
+          content: "",
+          items: agentData.skills.map(s => ({ label: s })),
+        });
+      } else if (node.id === "model") {
+        const m = agentData.model;
+        setDetail({
+          title: "Model",
+          type: "info",
+          content: `**Provider:** ${m.provider}\n\n**Model:** ${m.model}\n\n**Context Window:** ${m.contextWindow.toLocaleString()} tokens`,
+        });
+      } else if (node.id === "agent") {
+        const content = await readTextFile(`${wsPath}/AGENTS.md`, { baseDir: BaseDirectory.Home }).catch(() => "No AGENTS.md found");
+        setDetail({ title: "Agent Config", type: "markdown", content });
+      } else {
+        setDetail(null);
+      }
+    } catch {
+      setDetail(null);
+    }
+
+    setDetailLoading(false);
+  }, [wsPath, agentData]);
+
+  // Load a memory file when clicked in the list
+  const loadMemoryFile = useCallback(async (file: string) => {
+    setDetailLoading(true);
+    try {
+      const content = await readTextFile(`${wsPath}/${file}`, { baseDir: BaseDirectory.Home });
+      setDetail({ title: file, type: "markdown", content });
+    } catch {
+      setDetail({ title: file, type: "markdown", content: "Failed to load file" });
+    }
+    setDetailLoading(false);
+  }, [wsPath]);
 
   // Build graph
   const { nodes, edges } = useMemo(() => {
     const rawNodes: Node[] = [];
     const rawEdges: Edge[] = [];
 
-    // Trigger
-    rawNodes.push({
-      id: "trigger",
-      type: "trigger",
-      data: { label: "Chat", triggerType: "conversation" },
-      position: { x: 0, y: 0 },
-    });
-
-    // Agent (center)
-    rawNodes.push({
-      id: "agent",
-      type: "agent",
-      data: { label: agentData.identity.name || agentId, status: "active" },
-      position: { x: 0, y: 0 },
-    });
+    rawNodes.push({ id: "trigger", type: "trigger", data: { label: "Chat", triggerType: "conversation" }, position: { x: 0, y: 0 } });
+    rawNodes.push({ id: "agent", type: "agent", data: { label: agentData.identity.name || agentId, status: "active" }, position: { x: 0, y: 0 } });
     rawEdges.push({ id: "e-trigger-agent", source: "trigger", target: "agent" });
 
-    // Identity
-    rawNodes.push({
-      id: "identity",
-      type: "identity",
-      data: agentData.identity,
-      position: { x: 0, y: 0 },
-    });
+    rawNodes.push({ id: "identity", type: "identity", data: agentData.identity, position: { x: 0, y: 0 } });
     rawEdges.push({ id: "e-agent-identity", source: "agent", target: "identity" });
 
-    // Model
     if (agentData.model.model) {
-      rawNodes.push({
-        id: "model",
-        type: "model",
-        data: agentData.model,
-        position: { x: 0, y: 0 },
-      });
+      rawNodes.push({ id: "model", type: "model", data: agentData.model, position: { x: 0, y: 0 } });
       rawEdges.push({ id: "e-agent-model", source: "agent", target: "model" });
     }
 
-    // Soul
     if (agentData.soul.traits.length > 0) {
-      rawNodes.push({
-        id: "soul",
-        type: "soul",
-        data: { label: "Soul", traits: agentData.soul.traits },
-        position: { x: 0, y: 0 },
-      });
+      rawNodes.push({ id: "soul", type: "soul", data: { label: "Soul", traits: agentData.soul.traits }, position: { x: 0, y: 0 } });
       rawEdges.push({ id: "e-agent-soul", source: "agent", target: "soul" });
     }
 
-    // Memory
     if (agentData.memoryFiles.length > 0) {
-      rawNodes.push({
-        id: "memory",
-        type: "memory",
-        data: { label: "Memory", files: agentData.memoryFiles },
-        position: { x: 0, y: 0 },
-      });
+      rawNodes.push({ id: "memory", type: "memory", data: { label: "Memory", files: agentData.memoryFiles }, position: { x: 0, y: 0 } });
       rawEdges.push({ id: "e-agent-memory", source: "agent", target: "memory" });
     }
 
-    // Skills
     if (agentData.skills.length > 0) {
-      rawNodes.push({
-        id: "skills",
-        type: "skill",
-        data: { label: "Skills", count: agentData.skills.length, skills: agentData.skills },
-        position: { x: 0, y: 0 },
-      });
+      rawNodes.push({ id: "skills", type: "skill", data: { label: "Skills", count: agentData.skills.length, skills: agentData.skills }, position: { x: 0, y: 0 } });
       rawEdges.push({ id: "e-agent-skills", source: "agent", target: "skills" });
     }
 
@@ -301,20 +295,68 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
       </div>
 
       {tab === "canvas" ? (
-        <div className="flex-1">
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={nodeTypes}
-            fitView
-            proOptions={{ hideAttribution: true }}
-            defaultEdgeOptions={{
-              style: { stroke: "#27272a", strokeWidth: 1.5 },
-              animated: true,
-            }}
-          >
-            <Background color="#1c1c1f" gap={20} size={1} />
-          </ReactFlow>
+        <div className="flex flex-1 min-h-0">
+          {/* Canvas */}
+          <div className={detail ? "flex-1" : "w-full"}>
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              nodeTypes={nodeTypes}
+              onNodeClick={onNodeClick}
+              fitView
+              proOptions={{ hideAttribution: true }}
+              defaultEdgeOptions={{
+                style: { stroke: "#27272a", strokeWidth: 1.5 },
+                animated: true,
+              }}
+            >
+              <Background color="#1c1c1f" gap={20} size={1} />
+            </ReactFlow>
+          </div>
+
+          {/* Detail panel */}
+          {detail && (
+            <div className="w-[280px] shrink-0 border-l border-border bg-bg overflow-hidden flex flex-col">
+              <div className="flex h-9 items-center justify-between border-b border-border px-3">
+                <span className="text-[11px] font-medium text-text">{detail.title}</span>
+                <button onClick={() => setDetail(null)} className="text-text-muted hover:text-text">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-3">
+                {detailLoading ? (
+                  <div className="text-xs text-text-muted">Loading...</div>
+                ) : detail.type === "markdown" ? (
+                  <div className="prose-chat text-[12px] leading-relaxed text-[#D4D4D4]">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {detail.content}
+                    </ReactMarkdown>
+                  </div>
+                ) : detail.type === "list" ? (
+                  <div className="space-y-1">
+                    {detail.items?.map((item) => (
+                      <button
+                        key={item.label}
+                        onClick={() => item.file && loadMemoryFile(item.file)}
+                        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] transition-colors ${
+                          item.file ? "hover:bg-surface-hover text-text cursor-pointer" : "text-text-muted cursor-default"
+                        }`}
+                      >
+                        <span className="truncate">{item.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : detail.type === "info" ? (
+                  <div className="prose-chat text-[12px] leading-relaxed text-[#D4D4D4]">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {detail.content}
+                    </ReactMarkdown>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto p-4">
