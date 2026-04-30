@@ -10,7 +10,7 @@ interface IdentityNodeData {
 export function IdentityNode({ data }: NodeProps) {
   const d = data as unknown as IdentityNodeData;
   return (
-    <div className="rounded-xl border border-purple-800/60 bg-purple-950/30 px-4 py-3 min-w-[160px]">
+    <div className="rounded-xl border border-purple-800/60 bg-purple-950/30 px-4 py-3 min-w-[160px] cursor-pointer hover:border-purple-500/60 transition-colors">
       <Handle type="target" position={Position.Top} className="!bg-purple-400 !border-0 !w-2 !h-2" />
       <div className="flex items-center gap-2">
         <span className="text-lg">{d.emoji || "🤖"}</span>

@@ -9,7 +9,7 @@ interface SoulNodeData {
 export function SoulNode({ data }: NodeProps) {
   const d = data as unknown as SoulNodeData;
   return (
-    <div className="rounded-xl border border-rose-800/60 bg-rose-950/30 px-4 py-3 min-w-[140px]">
+    <div className="rounded-xl border border-rose-800/60 bg-rose-950/30 px-4 py-3 min-w-[140px] cursor-pointer hover:border-rose-500/60 transition-colors">
       <Handle type="target" position={Position.Top} className="!bg-rose-400 !border-0 !w-2 !h-2" />
       <div className="flex items-center gap-2">
         <Heart className="h-3.5 w-3.5 text-rose-400" />

@@ -9,7 +9,7 @@ interface AgentNodeData {
 export function AgentNode({ data }: NodeProps) {
   const d = data as unknown as AgentNodeData;
   return (
-    <div className="flex items-center gap-2 rounded-xl border-2 border-accent bg-surface px-4 py-3 shadow-lg shadow-accent/10">
+    <div className="flex items-center gap-2 rounded-xl border-2 border-accent bg-surface px-4 py-3 shadow-lg shadow-accent/10 cursor-pointer hover:shadow-accent/20 transition-shadow">
       <Handle type="target" position={Position.Top} className="!bg-accent !border-0 !w-2 !h-2" />
       <Bot className="h-4 w-4 text-accent" />
       <div>

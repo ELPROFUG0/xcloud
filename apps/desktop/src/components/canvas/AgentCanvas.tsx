@@ -13,7 +13,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { BrowserEngine } from "@/lib/engine";
 import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
-import { X } from "lucide-react";
+import { X, ArrowLeft } from "lucide-react";
 import { TriggerNode } from "./nodes/TriggerNode";
 import { ToolNode } from "./nodes/ToolNode";
 import { AgentNode } from "./nodes/AgentNode";
@@ -39,7 +39,7 @@ interface AgentData {
   soul: { traits: string[] };
   model: { provider: string; model: string; contextWindow: number };
   tools: ToolGroup[];
-  skills: string[];
+  skills: Array<{ name: string; description: string }>;
   memoryFiles: string[];
 }
 
@@ -47,7 +47,7 @@ interface DetailPanel {
   title: string;
   type: "markdown" | "list" | "info";
   content: string;
-  items?: Array<{ label: string; file?: string }>;
+  items?: Array<{ label: string; file?: string; description?: string }>;
 }
 
 const nodeTypes: NodeTypes = {
@@ -105,6 +105,7 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
   });
   const [tab, setTab] = useState<"canvas" | "logs">("canvas");
   const [detail, setDetail] = useState<DetailPanel | null>(null);
+  const [detailHistory, setDetailHistory] = useState<DetailPanel[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
 
   const wsPath = agentId === "main" ? ".openclaw/workspace" : `.openclaw/workspace/${agentId}`;
@@ -155,7 +156,7 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
 
     try {
       const commands = await engine.listCommands();
-      data.skills = commands.slice(0, 20).map((c) => c.name);
+      data.skills = commands.slice(0, 20).map((c) => ({ name: c.name, description: c.description ?? "" }));
     } catch { /* */ }
 
     for (const file of ["MEMORY.md", "HEARTBEAT.md", "USER.md", "TOOLS.md", "AGENTS.md"]) {
@@ -183,9 +184,34 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
     return unsub;
   }, [engine, loadData]);
 
-  // Handle node click — load detail content
+  // Navigate to a detail panel, pushing current to history
+  const navigateTo = useCallback((panel: DetailPanel) => {
+    setDetail((prev) => {
+      if (prev) setDetailHistory((h) => [...h, prev]);
+      return panel;
+    });
+  }, []);
+
+  // Go back in history
+  const goBack = useCallback(() => {
+    setDetailHistory((h) => {
+      if (h.length === 0) return h;
+      const prev = h[h.length - 1]!;
+      setDetail(prev);
+      return h.slice(0, -1);
+    });
+  }, []);
+
+  // Close panel and clear history
+  const closeDetail = useCallback(() => {
+    setDetail(null);
+    setDetailHistory([]);
+  }, []);
+
+  // Handle node click
   const onNodeClick = useCallback(async (_: unknown, node: Node) => {
     setDetailLoading(true);
+    setDetailHistory([]);
 
     try {
       if (node.id === "identity") {
@@ -206,7 +232,7 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
           title: "Skills",
           type: "list",
           content: "",
-          items: agentData.skills.map(s => ({ label: s })),
+          items: agentData.skills.map(s => ({ label: s.name, description: s.description })),
         });
       } else if (node.id === "model") {
         const m = agentData.model;
@@ -233,12 +259,12 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
     setDetailLoading(true);
     try {
       const content = await readTextFile(`${wsPath}/${file}`, { baseDir: BaseDirectory.Home });
-      setDetail({ title: file, type: "markdown", content });
+      navigateTo({ title: file, type: "markdown", content });
     } catch {
-      setDetail({ title: file, type: "markdown", content: "Failed to load file" });
+      navigateTo({ title: file, type: "markdown", content: "Failed to load file" });
     }
     setDetailLoading(false);
-  }, [wsPath]);
+  }, [wsPath, navigateTo]);
 
   // Build graph
   const { nodes, edges } = useMemo(() => {
@@ -268,7 +294,7 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
     }
 
     if (agentData.skills.length > 0) {
-      rawNodes.push({ id: "skills", type: "skill", data: { label: "Skills", count: agentData.skills.length, skills: agentData.skills }, position: { x: 0, y: 0 } });
+      rawNodes.push({ id: "skills", type: "skill", data: { label: "Skills", count: agentData.skills.length, skills: agentData.skills.map(s => s.name) }, position: { x: 0, y: 0 } });
       rawEdges.push({ id: "e-agent-skills", source: "agent", target: "skills" });
     }
 
@@ -318,8 +344,15 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
           {detail && (
             <div className="w-[280px] shrink-0 border-l border-border bg-bg overflow-hidden flex flex-col">
               <div className="flex h-9 items-center justify-between border-b border-border px-3">
-                <span className="text-[11px] font-medium text-text">{detail.title}</span>
-                <button onClick={() => setDetail(null)} className="text-text-muted hover:text-text">
+                <div className="flex items-center gap-1.5">
+                  {detailHistory.length > 0 && (
+                    <button onClick={goBack} className="text-text-muted hover:text-text">
+                      <ArrowLeft className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                  <span className="text-[11px] font-medium text-text">{detail.title}</span>
+                </div>
+                <button onClick={closeDetail} className="text-text-muted hover:text-text">
                   <X className="h-3.5 w-3.5" />
                 </button>
               </div>
@@ -334,16 +367,19 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
                     </ReactMarkdown>
                   </div>
                 ) : detail.type === "list" ? (
-                  <div className="space-y-1">
+                  <div className="space-y-0.5">
                     {detail.items?.map((item) => (
                       <button
                         key={item.label}
                         onClick={() => item.file && loadMemoryFile(item.file)}
-                        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] transition-colors ${
-                          item.file ? "hover:bg-surface-hover text-text cursor-pointer" : "text-text-muted cursor-default"
+                        className={`flex w-full flex-col rounded-lg px-2.5 py-2 text-left transition-colors ${
+                          item.file ? "hover:bg-surface-hover cursor-pointer" : "hover:bg-surface-hover/50"
                         }`}
                       >
-                        <span className="truncate">{item.label}</span>
+                        <span className="text-[11px] font-medium text-text truncate">{item.label}</span>
+                        {item.description && (
+                          <span className="text-[10px] text-text-muted leading-tight mt-0.5 line-clamp-2">{item.description}</span>
+                        )}
                       </button>
                     ))}
                   </div>

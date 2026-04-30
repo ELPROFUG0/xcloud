@@ -10,7 +10,7 @@ interface ToolNodeData {
 export function ToolNode({ data }: NodeProps) {
   const d = data as unknown as ToolNodeData;
   return (
-    <div className="rounded-xl border border-border bg-surface px-4 py-3 min-w-[140px]">
+    <div className="rounded-xl border border-border bg-surface px-4 py-3 min-w-[140px] cursor-pointer hover:border-text-muted transition-colors">
       <Handle type="target" position={Position.Top} className="!bg-border !border-0 !w-2 !h-2" />
       <div className="flex items-center gap-2">
         <Wrench className="h-3.5 w-3.5 text-text-muted" />

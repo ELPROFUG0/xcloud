@@ -9,7 +9,7 @@ interface TriggerNodeData {
 export function TriggerNode({ data }: NodeProps) {
   const d = data as unknown as TriggerNodeData;
   return (
-    <div className="flex items-center gap-2 rounded-xl border border-amber-700 bg-amber-950/50 px-4 py-3">
+    <div className="flex items-center gap-2 rounded-xl border border-amber-700 bg-amber-950/50 px-4 py-3 cursor-pointer hover:border-amber-500 transition-colors">
       <Zap className="h-4 w-4 text-amber-400" />
       <div>
         <div className="text-xs font-semibold text-text">{d.label}</div>
