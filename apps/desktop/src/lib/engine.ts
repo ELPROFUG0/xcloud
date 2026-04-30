@@ -95,9 +95,8 @@ export class BrowserEngine {
         if (frame.type === "event" && frame.event === "connect.challenge") {
           const nonce = frame.payload.nonce as string;
           const signedAt = Date.now();
-          const scopes = ["operator.read", "operator.write"];
+          const scopes = ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing", "operator.talk.secrets"];
 
-          // Build v2 signing payload
           const sigPayload = [
             "v2",
             this.config.deviceId,
@@ -108,9 +107,7 @@ export class BrowserEngine {
             nonce,
           ].join("|");
 
-          try {
-            const signature = await this.signPayload(sigPayload);
-
+          this.signPayload(sigPayload).then((signature) => {
             ws.send(JSON.stringify({
               type: "req",
               id: "__handshake",
@@ -131,12 +128,12 @@ export class BrowserEngine {
                 },
               },
             }));
-          } catch (err) {
+          }).catch((err) => {
             if (!settled) {
               settled = true;
               reject(new Error("Signing failed: " + (err instanceof Error ? err.message : String(err))));
             }
-          }
+          });
           return;
         }
 
@@ -158,6 +155,11 @@ export class BrowserEngine {
             }
           }
           return;
+        }
+
+        // RPC error logging
+        if (frame.type === "res" && !frame.ok) {
+          console.error("[RPC ERROR]", frame.id, frame.error?.message);
         }
 
         // RPC responses
