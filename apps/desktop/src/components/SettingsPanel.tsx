@@ -490,8 +490,8 @@ export function SettingsPanel({ engine }: SettingsPanelProps) {
               <div className="mb-6">
                 <p className="text-xs text-text-muted mb-3 uppercase tracking-wider font-semibold">Subscriptions</p>
                 {[
-                  { id: "github-copilot-login", name: "GitHub Copilot", logo: githubLogo, cmd: "openclaw models auth login-github-copilot", description: "Use your Copilot subscription" },
-                  { id: "codex-login", name: "OpenAI Codex", logo: openaiLogo, cmd: "openclaw models auth login --provider openai-codex", description: "Use your Codex subscription" },
+                  { id: "github-copilot-login", name: "GitHub Copilot", logo: githubLogo, cmd: "openclaw models auth login-github-copilot", disconnectCmd: "openclaw models auth paste-token --provider github-copilot --token ''", description: "Use your Copilot subscription" },
+                  { id: "codex-login", name: "OpenAI Codex", logo: openaiLogo, cmd: "openclaw models auth login --provider openai-codex", disconnectCmd: "openclaw models auth paste-token --provider openai-codex --token ''", description: "Use your Codex subscription" },
                 ].map((item) => (
                   <div key={item.id} className="flex items-center justify-between border-b border-border/50 py-3.5 last:border-0">
                     <div className="flex items-center gap-3 min-w-0 mr-4">
@@ -501,28 +501,59 @@ export function SettingsPanel({ engine }: SettingsPanelProps) {
                         <p className="text-xs text-text-muted">{item.description}</p>
                       </div>
                     </div>
-                    <button
-                      onClick={async () => {
-                        setAuthLoading(p => ({ ...p, [item.id]: true }));
-                        setAuthStatus(p => ({ ...p, [item.id]: "" }));
-                        try {
-                          await invoke("run_shell", { cmd: `export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use 24 2>/dev/null && ${item.cmd}` });
-                          setAuthStatus(p => ({ ...p, [item.id]: "connected" }));
-                        } catch (e) {
-                          // For GitHub Copilot, open terminal since it needs TTY
-                          await invoke("run_shell", { cmd: `osascript -e 'tell application "Terminal" to do script "nvm use 24 && ${item.cmd}"'` }).catch(() => {});
-                          setAuthStatus(p => ({ ...p, [item.id]: "check-terminal" }));
-                        }
-                        setAuthLoading(p => ({ ...p, [item.id]: false }));
-                      }}
-                      disabled={authLoading[item.id]}
-                      className="rounded-xl bg-[#262626] px-4 py-1.5 text-sm text-text hover:text-white transition-colors disabled:opacity-50"
-                    >
-                      {authLoading[item.id] ? "..." :
-                       authStatus[item.id] === "connected" ? <CheckCircle className="h-4 w-4 text-emerald-400" /> :
-                       authStatus[item.id] === "check-terminal" ? "Check Terminal" :
-                       "Login"}
-                    </button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {authStatus[item.id] === "connected" ? (
+                        <button
+                          onClick={async () => {
+                            setAuthLoading(p => ({ ...p, [item.id]: true }));
+                            try {
+                              await invoke("run_shell", { cmd: `export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use 24 2>/dev/null && ${item.disconnectCmd}` });
+                            } catch { /* */ }
+                            setAuthStatus(p => ({ ...p, [item.id]: "" }));
+                            setAuthLoading(p => ({ ...p, [item.id]: false }));
+                          }}
+                          disabled={authLoading[item.id]}
+                          className="rounded-xl px-3 py-1.5 text-sm text-red-400/70 hover:text-red-400 transition-colors disabled:opacity-50"
+                        >
+                          Disconnect
+                        </button>
+                      ) : authStatus[item.id] === "check-terminal" ? (
+                        <button
+                          onClick={async () => {
+                            setAuthLoading(p => ({ ...p, [item.id]: true }));
+                            try {
+                              await invoke<string>("run_shell", { cmd: `export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use 24 2>/dev/null && openclaw models status --probe 2>&1 | grep -i "${item.name.split(" ")[0]}"` });
+                              setAuthStatus(p => ({ ...p, [item.id]: "connected" }));
+                            } catch {
+                              setAuthStatus(p => ({ ...p, [item.id]: "failed" }));
+                            }
+                            setAuthLoading(p => ({ ...p, [item.id]: false }));
+                          }}
+                          disabled={authLoading[item.id]}
+                          className="rounded-xl bg-[#262626] px-4 py-1.5 text-sm text-amber-400 hover:text-amber-300 transition-colors disabled:opacity-50"
+                        >
+                          {authLoading[item.id] ? "..." : "Verify"}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={async () => {
+                            setAuthLoading(p => ({ ...p, [item.id]: true }));
+                            // Open terminal for TTY-based login
+                            await invoke("run_shell", { cmd: `osascript -e 'tell application "Terminal" to do script "nvm use 24 && ${item.cmd}"'` }).catch(() => {});
+                            setAuthStatus(p => ({ ...p, [item.id]: "check-terminal" }));
+                            setAuthLoading(p => ({ ...p, [item.id]: false }));
+                          }}
+                          disabled={authLoading[item.id]}
+                          className="rounded-xl bg-[#262626] px-4 py-1.5 text-sm text-text hover:text-white transition-colors disabled:opacity-50"
+                        >
+                          {authLoading[item.id] ? "..." :
+                           authStatus[item.id] === "failed" ? "Retry" : "Login"}
+                        </button>
+                      )}
+                      {authStatus[item.id] === "connected" && (
+                        <CheckCircle className="h-4 w-4 text-emerald-400" />
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
