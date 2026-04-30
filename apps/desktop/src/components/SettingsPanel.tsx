@@ -4,7 +4,7 @@ import type { BrowserEngine } from "@/lib/engine";
 import { useModels } from "@/hooks/use-models";
 import { PROVIDERS } from "@/types/provider";
 import {
-  Key, Save, Loader2, CheckCircle, AlertCircle,
+  Key, CheckCircle, AlertCircle,
   Cpu, ChevronLeft, Check, Search, X, Settings2, Radio,
 } from "lucide-react";
 import telegramLogo from "@/assets/channels/telegram.svg";
@@ -16,6 +16,32 @@ import imessageLogo from "@/assets/channels/imessage.svg";
 import matrixLogo from "@/assets/channels/matrix.svg";
 import teamsLogo from "@/assets/channels/teams.svg";
 import googleChatLogo from "@/assets/channels/google-chat.svg";
+
+// Provider logos
+import anthropicLogo from "@/assets/providers/anthropic.svg";
+import openaiLogo from "@/assets/providers/openai.svg";
+import googleProvLogo from "@/assets/providers/google.svg";
+import awsLogo from "@/assets/providers/aws.svg";
+import azureLogo from "@/assets/providers/azure.svg";
+import mistralLogo from "@/assets/providers/mistral.svg";
+import groqLogo from "@/assets/providers/groq.svg";
+import deepseekLogo from "@/assets/providers/deepseek.svg";
+import fireworksLogo from "@/assets/providers/fireworks.svg";
+import openrouterLogo from "@/assets/providers/openrouter.svg";
+import xaiLogo from "@/assets/providers/xai.svg";
+import cerebrasLogo from "@/assets/providers/cerebras.svg";
+import huggingfaceLogo from "@/assets/providers/huggingface.svg";
+import githubLogo from "@/assets/providers/github.svg";
+import ollamaLogo from "@/assets/providers/ollama.svg";
+
+const PROVIDER_LOGOS: Record<string, string> = {
+  anthropic: anthropicLogo, openai: openaiLogo, google: googleProvLogo,
+  "google-vertex": googleProvLogo, mistral: mistralLogo, groq: groqLogo,
+  deepseek: deepseekLogo, fireworks: fireworksLogo, openrouter: openrouterLogo,
+  xai: xaiLogo, cerebras: cerebrasLogo, "amazon-bedrock": awsLogo,
+  "azure-openai-responses": azureLogo, huggingface: huggingfaceLogo,
+  "github-copilot": githubLogo, ollama: ollamaLogo,
+};
 
 interface SettingsPanelProps {
   engine: BrowserEngine;
@@ -456,41 +482,40 @@ export function SettingsPanel({ engine }: SettingsPanelProps) {
 
           {/* API Keys */}
           {section === "keys" && (
-            <div className="space-y-3">
-              <p className="text-[11px] text-text-muted mb-2">
-                Keys are stored in the gateway config and never leave your machine.
+            <div>
+              <p className="text-xs text-text-muted mb-4">
+                Keys are stored locally and never leave your machine.
               </p>
               {PROVIDERS.map((provider) => {
                 const state = getKeyState(provider.envKey);
+                const logo = PROVIDER_LOGOS[provider.id];
                 return (
-                  <div key={provider.id} className="rounded-lg bg-container p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[13px] font-medium">{provider.name}</span>
-                      <span className="text-[10px] text-text-muted font-mono">{provider.envKey}</span>
+                  <div key={provider.id} className="flex items-center justify-between border-b border-border/50 py-3.5 last:border-0">
+                    <div className="flex items-center gap-3 min-w-0 mr-4">
+                      {logo && <img src={logo} alt={provider.name} className="h-5 w-5 shrink-0" />}
+                      <span className="text-sm font-medium text-text">{provider.name}</span>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 shrink-0">
                       <input
                         type="password"
                         value={state.value}
                         onChange={(e) => updateKey(provider.envKey, e.target.value)}
                         onKeyDown={(e) => e.key === "Enter" && saveKey(provider.envKey)}
                         placeholder={provider.placeholder}
-                        className="flex-1 rounded-md bg-bg border-0 px-3 py-2 text-xs text-text font-mono placeholder:text-text-muted focus:ring-1 focus:ring-accent/50 focus:outline-none"
+                        className="w-48 rounded-xl bg-[#262626] px-3 py-1.5 text-sm text-text font-mono placeholder:text-text-muted focus:outline-none"
                       />
                       <button
                         onClick={() => saveKey(provider.envKey)}
                         disabled={!state.value.trim() || state.saving}
-                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-bg text-text-muted transition-colors hover:text-accent disabled:opacity-30"
+                        className="rounded-xl bg-[#262626] px-3 py-1.5 text-sm text-text-muted hover:text-text transition-colors disabled:opacity-30"
                       >
-                        {state.saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> :
-                         state.saved ? <CheckCircle className="h-3.5 w-3.5 text-emerald-400" /> :
-                         <Save className="h-3.5 w-3.5" />}
+                        {state.saving ? "..." :
+                         state.saved ? <CheckCircle className="h-4 w-4 text-emerald-400" /> :
+                         "Save"}
                       </button>
                     </div>
                     {state.error && (
-                      <div className="mt-2 flex items-center gap-1 text-[10px] text-red-400">
-                        <AlertCircle className="h-3 w-3" />{state.error}
-                      </div>
+                      <div className="mt-1 text-xs text-red-400">{state.error}</div>
                     )}
                   </div>
                 );
