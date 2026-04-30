@@ -4,7 +4,7 @@ import { useChat } from "@/hooks/use-chat";
 import { MessageBubble } from "./MessageBubble";
 import { ToolCallBadge } from "./ToolCallBadge";
 import { ChatInput } from "./ChatInput";
-import { ArrowLeft, Loader2, Clock, Plus, ChevronDown, Bot } from "lucide-react";
+import { ArrowLeft, Clock, Plus, ChevronDown, Bot } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { ChatMessage } from "@/types/chat";
 import type { AgentInfo } from "@/hooks/use-agents";
@@ -45,7 +45,7 @@ interface SessionEntry {
 
 export function ChatPanel({ engine, agentId = "main", agentName, agents = [], onSwitchAgent, onBack }: ChatPanelProps) {
   const [activeSession, setActiveSession] = useState(agentId === "main" ? "main" : `agent:${agentId}:main`);
-  const { messages, tools, isStreaming, send } = useChat({ engine, sessionKey: activeSession });
+  const { messages, isStreaming, send } = useChat({ engine, sessionKey: activeSession });
   const [showHistory, setShowHistory] = useState(false);
   const [showAgentPicker, setShowAgentPicker] = useState(false);
   const [sessions, setSessions] = useState<SessionEntry[]>([]);
@@ -305,28 +305,16 @@ export function ChatPanel({ engine, agentId = "main", agentName, agents = [], on
                 <MessageBubble message={page.userMessage} />
               </div>
 
-              {/* Tools */}
-              {isLast && tools.length > 0 && (
-                <div className="flex flex-wrap gap-2 px-4 py-1.5">
-                  {tools.map((tool) => (
-                    <ToolCallBadge key={tool.id} tool={tool} />
-                  ))}
-                </div>
+              {/* Responses — tools as inline badges, text as normal messages */}
+              {page.responses.map((msg) =>
+                msg.role === "tool" && msg.tool ? (
+                  <div key={msg.id} className="px-4 py-1 pl-[52px]">
+                    <ToolCallBadge tool={msg.tool} />
+                  </div>
+                ) : (
+                  <MessageBubble key={msg.id} message={msg} />
+                ),
               )}
-
-              {/* Thinking */}
-              {isLast && isStreaming && page.responses.length > 0 &&
-                page.responses[page.responses.length - 1]?.content === "" && (
-                <div className="flex items-center gap-2 px-4 py-1.5 text-text-muted">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span className="text-xs">Thinking...</span>
-                </div>
-              )}
-
-              {/* Responses */}
-              {page.responses.map((msg) => (
-                <MessageBubble key={msg.id} message={msg} />
-              ))}
             </div>
           );
         })}

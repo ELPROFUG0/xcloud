@@ -9,21 +9,39 @@ interface UseChatOptions {
 
 interface UseChatReturn {
   messages: ChatMessage[];
-  tools: ToolCallInfo[];
   isStreaming: boolean;
   send: (message: string) => Promise<void>;
 }
 
+/** Build a readable title from tool name + arguments */
+function buildToolTitle(name: string, args?: Record<string, unknown>): string {
+  if (!args) return name;
+  if ((name === "exec" || name === "shell" || name === "bash") && args.command) {
+    const cmd = String(args.command).split("\n")[0]!.trim();
+    return cmd.length > 50 ? cmd.slice(0, 50) + "..." : cmd;
+  }
+  if ((name === "read" || name === "write" || name === "edit") && (args.path || args.file_path)) {
+    const p = String(args.path ?? args.file_path);
+    const short = p.split("/").slice(-2).join("/");
+    return `${name} ${short}`;
+  }
+  if ((name === "search" || name === "grep") && (args.query || args.pattern)) {
+    return `${name} "${args.query ?? args.pattern}"`;
+  }
+  if (name === "glob" && args.pattern) {
+    return `find ${args.pattern}`;
+  }
+  return name;
+}
+
 export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [tools, setTools] = useState<ToolCallInfo[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const subscribedRef = useRef(false);
 
   // Reset when session changes
   useEffect(() => {
     setMessages([]);
-    setTools([]);
     setIsStreaming(false);
     subscribedRef.current = false;
   }, [sessionKey]);
@@ -40,26 +58,118 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
         const result = await engine.rpc("chat.history", { sessionKey });
         if (!cancelled) {
           const history = (result as { messages?: Array<{ role: string; content: unknown; timestamp?: number }> }).messages ?? [];
-          const loaded: ChatMessage[] = history
-            .filter(m => m.role === "user" || m.role === "assistant")
-            .map((m, i) => {
-              let content = "";
-              if (typeof m.content === "string") {
-                content = m.content;
-              } else if (Array.isArray(m.content)) {
-                content = (m.content as Array<{ type: string; text?: string }>)
-                  .filter(b => b.type === "text" && b.text)
-                  .map(b => b.text)
-                  .join("");
+
+          // First pass: parse all messages, collect toolResult outputs
+          const toolOutputs = new Map<string, string>();
+          const parsed: Array<{ role: string; content: string; tools: ToolCallInfo[]; timestamp: number }> = [];
+
+          // Pre-scan for toolResult outputs (they follow assistant messages with toolCall)
+          for (let i = 0; i < history.length; i++) {
+            const m = history[i]!;
+            if (m.role === "toolResult" && Array.isArray(m.content)) {
+              const text = (m.content as Array<{ type: string; text?: string }>)
+                .filter(b => b.type === "text" && b.text)
+                .map(b => b.text)
+                .join("");
+              // Find the preceding toolCall to associate output
+              for (let j = i - 1; j >= 0; j--) {
+                const prev = history[j]!;
+                if (prev.role === "assistant" && Array.isArray(prev.content)) {
+                  const toolBlock = (prev.content as Array<{ type: string; id?: string }>)
+                    .find(b => b.type === "toolCall" && b.id);
+                  if (toolBlock?.id) {
+                    toolOutputs.set(toolBlock.id, text.slice(0, 500));
+                    break;
+                  }
+                }
               }
-              return {
+            }
+          }
+
+          for (let i = 0; i < history.length; i++) {
+            const m = history[i]!;
+            if (m.role !== "user" && m.role !== "assistant") continue;
+
+            let content = "";
+            const msgTools: ToolCallInfo[] = [];
+
+            if (typeof m.content === "string") {
+              content = m.content;
+            } else if (Array.isArray(m.content)) {
+              const blocks = m.content as Array<{ type: string; text?: string; name?: string; id?: string; arguments?: Record<string, unknown> }>;
+              content = blocks
+                .filter(b => b.type === "text" && b.text)
+                .map(b => b.text)
+                .join("");
+
+              if (m.role === "assistant") {
+                for (const block of blocks) {
+                  if (block.type === "toolCall" && block.name) {
+                    const toolId = block.id ?? `${block.name}-hist-${i}`;
+                    msgTools.push({
+                      id: toolId,
+                      name: block.name,
+                      title: buildToolTitle(block.name, block.arguments),
+                      output: toolOutputs.get(toolId),
+                      status: "done",
+                      timestamp: m.timestamp ?? Date.now(),
+                    });
+                  }
+                }
+              }
+            }
+
+            parsed.push({ role: m.role, content, tools: msgTools, timestamp: m.timestamp ?? Date.now() });
+          }
+
+          // Second pass: build interleaved messages (tool messages + text messages)
+          const loaded: ChatMessage[] = [];
+          let pendingTools: ToolCallInfo[] = [];
+
+          for (let i = 0; i < parsed.length; i++) {
+            const p = parsed[i]!;
+
+            if (p.role === "user" && p.content.length > 0) {
+              loaded.push({
                 id: `history-${i}`,
-                role: m.role as "user" | "assistant",
-                content,
-                timestamp: m.timestamp ?? Date.now(),
-              };
-            })
-            .filter(m => m.content.length > 0);
+                role: "user",
+                content: p.content,
+                timestamp: p.timestamp,
+              });
+              continue;
+            }
+
+            if (p.role === "assistant") {
+              // Add tools as inline messages
+              for (const tool of [...pendingTools, ...p.tools]) {
+                loaded.push({
+                  id: `tool-${tool.id}`,
+                  role: "tool",
+                  content: "",
+                  timestamp: tool.timestamp,
+                  tool,
+                });
+              }
+              pendingTools = [];
+
+              // Add text message if has content
+              if (p.content.length > 0) {
+                loaded.push({
+                  id: `history-${i}`,
+                  role: "assistant",
+                  content: p.content,
+                  timestamp: p.timestamp,
+                });
+              }
+              continue;
+            }
+
+            // Tool-only messages: collect for next
+            if (p.role === "assistant" && p.content.length === 0 && p.tools.length > 0) {
+              pendingTools.push(...p.tools);
+            }
+          }
+
           setMessages(loaded);
         }
       } catch {
@@ -103,6 +213,57 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
           const phase = (data as Record<string, unknown>)?.phase as string;
           if (phase === "start") setIsStreaming(true);
         }
+
+        // Tool events — insert as inline messages
+        if (stream === "item" && data?.kind === "tool") {
+          const phase = data.phase as string;
+          const name = (data.name as string) ?? "unknown";
+          const title = (data.title as string) ?? name;
+          const toolCallId = (data.toolCallId as string) ?? `${name}-${Date.now()}`;
+
+          if (phase === "start") {
+            const toolInfo: ToolCallInfo = { id: toolCallId, name, title, status: "running", timestamp: Date.now() };
+            setMessages((prev) => {
+              const last = prev[prev.length - 1];
+              // Insert tool before the streaming placeholder
+              if (last?.isStreaming && last.content === "") {
+                return [
+                  ...prev.slice(0, -1),
+                  { id: `tool-${toolCallId}`, role: "tool" as const, content: "", timestamp: Date.now(), tool: toolInfo },
+                  last,
+                ];
+              }
+              return [
+                ...prev,
+                { id: `tool-${toolCallId}`, role: "tool" as const, content: "", timestamp: Date.now(), tool: toolInfo },
+              ];
+            });
+          } else if (phase === "end") {
+            const finalStatus = data.status === "completed" ? "done" : "error";
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.role === "tool" && m.tool?.id === toolCallId
+                  ? { ...m, tool: { ...m.tool!, status: finalStatus as ToolCallInfo["status"] } }
+                  : m,
+              ),
+            );
+          }
+        }
+
+        // Capture command output
+        if (stream === "command_output" && data) {
+          const toolCallId = data.toolCallId as string;
+          const output = data.output as string | undefined;
+          if (toolCallId && output) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.role === "tool" && m.tool?.id === toolCallId
+                  ? { ...m, tool: { ...m.tool!, output } }
+                  : m,
+              ),
+            );
+          }
+        }
       }
 
       // Chat final — response complete
@@ -113,7 +274,6 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
         if (state === "final" && message?.role === "assistant") {
           setIsStreaming(false);
 
-          // Extract text from content blocks
           const content = message.content;
           let text = "";
           if (Array.isArray(content)) {
@@ -138,25 +298,6 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
         }
       }
 
-      // Tool events
-      if (event === "session.tool") {
-        const tool = payload.tool as Record<string, unknown> | undefined;
-        const status = (payload.status as string) ?? "running";
-        const name = (tool?.name as string) ?? "unknown";
-
-        setTools((prev) => {
-          const existing = prev.find((t) => t.name === name && t.status === "running");
-          if (existing && status !== "running") {
-            return prev.map((t) =>
-              t.id === existing.id ? { ...t, status: status as ToolCallInfo["status"] } : t,
-            );
-          }
-          return [
-            ...prev,
-            { id: `${name}-${Date.now()}`, name, status: status as ToolCallInfo["status"], timestamp: Date.now() },
-          ];
-        });
-      }
     });
 
     return () => {
@@ -184,7 +325,6 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
         userMsg,
         { id: streamId, role: "assistant", content: "", timestamp: Date.now(), isStreaming: true },
       ]);
-      setTools([]);
       setIsStreaming(true);
 
       try {
@@ -196,5 +336,5 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
     [engine, sessionKey],
   );
 
-  return { messages, tools, isStreaming, send };
+  return { messages, isStreaming, send };
 }

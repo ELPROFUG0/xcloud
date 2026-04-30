@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
 import { Titlebar } from "./Titlebar";
@@ -6,6 +6,7 @@ import { HomeScreen } from "./home/HomeScreen";
 import { ChatPanel } from "./chat/ChatPanel";
 import { AgentCanvas } from "./canvas/AgentCanvas";
 import { SettingsPanel } from "./SettingsPanel";
+import { DevPreview } from "./DevPreview";
 
 interface AppLayoutProps {
   engine: BrowserEngine;
@@ -21,8 +22,21 @@ export function AppLayout({ engine }: AppLayoutProps) {
   const { agents } = useAgents(engine);
   const [view, setView] = useState<View>({ type: "home" });
   const [showSettings, setShowSettings] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
   const dragging = useRef(false);
+
+  // Cmd+Shift+P to toggle dev preview
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.metaKey && e.shiftKey && e.key === "p") {
+        e.preventDefault();
+        setShowPreview((v) => !v);
+      }
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, []);
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -48,7 +62,9 @@ export function AppLayout({ engine }: AppLayoutProps) {
     document.body.style.userSelect = "none";
   }, []);
 
-  const rightPanel = showSettings ? (
+  const rightPanel = showPreview ? (
+    <DevPreview />
+  ) : showSettings ? (
     <SettingsPanel engine={engine} />
   ) : (
     <AgentCanvas
@@ -76,8 +92,10 @@ export function AppLayout({ engine }: AppLayoutProps) {
   return (
     <div className="flex h-full flex-col">
       <Titlebar
-        onToggleSettings={() => setShowSettings(!showSettings)}
+        onToggleSettings={() => { setShowSettings(!showSettings); setShowPreview(false); }}
+        onTogglePreview={() => { setShowPreview(!showPreview); setShowSettings(false); }}
         settingsOpen={showSettings}
+        previewOpen={showPreview}
       />
       <div className="flex flex-1 min-h-0">
         {/* Left panel */}

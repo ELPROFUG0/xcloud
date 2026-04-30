@@ -175,6 +175,7 @@ export class BrowserEngine {
         if (frame.type === "event") {
           for (const handler of this.eventHandlers) handler(frame);
         }
+
       };
 
       ws.onclose = () => {
