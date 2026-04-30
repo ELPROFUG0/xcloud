@@ -4,6 +4,107 @@ import { readTextFile } from "@tauri-apps/plugin-fs";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Layout, Code, Terminal, FolderOpen, Plus, RefreshCw, ExternalLink, ArrowLeft, X } from "lucide-react";
 
+/** Scaffold the UI workspace with agent context files */
+async function scaffoldUI(agentId: string, wsPath: string, home: string): Promise<string> {
+  const uiPath = `${home}/${wsPath}/ui`;
+
+  // Create ui directory
+  await invoke("run_shell", { cmd: `mkdir -p "${uiPath}"` });
+
+  // Read agent files for context
+  const readFile = async (name: string) => {
+    try { return await readTextFile(`${wsPath}/${name}`, { baseDir: undefined }); }
+    catch { try { return await invoke<string>("run_shell", { cmd: `cat "${home}/${wsPath}/${name}" 2>/dev/null` }); } catch { return ""; } }
+  };
+
+  const identity = await readFile("IDENTITY.md");
+  const soul = await readFile("SOUL.md");
+  const tools = await readFile("TOOLS.md");
+  const agents = await readFile("AGENTS.md");
+
+  // Build AGENT-CONTEXT.md
+  const context = `# Agent Context
+
+This file describes the AI agent that this UI is being built for.
+Read this carefully before building anything.
+
+## Agent ID
+\`${agentId}\`
+
+## Identity
+${identity || "No identity configured yet."}
+
+## Personality
+${soul || "No soul/personality configured yet."}
+
+## Tools & Capabilities
+${tools || "No custom tools configured."}
+
+## Agent Configuration
+${agents || "Default agent configuration."}
+
+## What This UI Should Do
+
+This UI is the visual interface for this AI agent. The agent runs on OpenClaw
+(an AI gateway) and communicates via WebSocket on \`ws://127.0.0.1:18789\`.
+
+The UI should:
+- Reflect the agent's personality and purpose
+- Provide a way for users to interact with what the agent does
+- Be visually clean and modern
+- Work as a standalone web app (will be embedded in an iframe)
+
+## Technical Notes
+- The UI will be previewed inside Agent Studio (a Tauri desktop app)
+- It runs in an iframe, so keep it self-contained
+- Use any framework/stack you think fits best
+- Include a \`dev\` script in package.json so the preview can auto-launch
+- The dev server should respect the \`PORT\` environment variable
+`;
+
+  // Build CLAUDE.md for Claude Code
+  const claudeMd = `# CLAUDE.md
+
+You are building a UI for an AI agent. Read \`AGENT-CONTEXT.md\` for full details about the agent.
+
+## Guidelines
+- Read AGENT-CONTEXT.md first to understand the agent
+- Choose the stack that best fits the agent's purpose
+- Keep the UI clean, modern, and dark-themed
+- Include a \`dev\` script in package.json
+- The dev server must respect the \`PORT\` env variable
+- The UI will run inside an iframe in a desktop app
+- Make it functional, not just pretty — it should serve the agent's purpose
+- Start by scaffolding the project, then build the core features
+`;
+
+  // Build .cursorrules for Cursor
+  const cursorRules = `You are building a UI for an AI agent.
+
+FIRST: Read AGENT-CONTEXT.md in this directory to understand the agent.
+
+RULES:
+- Choose the stack that best fits the agent's purpose
+- Clean, modern, dark-themed UI
+- Include a "dev" script in package.json
+- Dev server must respect the PORT env variable
+- UI runs inside an iframe in a desktop app
+- Make it functional — serve the agent's purpose
+- Start by scaffolding the project, then build core features
+`;
+
+  // Write files using shell (reliable)
+  const writeFile = async (path: string, content: string) => {
+    await invoke("run_shell", { cmd: `cat > "${path}" << 'SCAFFOLD_EOF'\n${content}\nSCAFFOLD_EOF` });
+  };
+
+  await writeFile(`${uiPath}/AGENT-CONTEXT.md`, context);
+  await writeFile(`${uiPath}/CLAUDE.md`, claudeMd);
+  await writeFile(`${uiPath}/.cursorrules`, cursorRules);
+
+  return uiPath;
+}
+
 export function useAgentUI(_agentId: string, wsPath: string) {
   const [repoPath, setRepoPath] = useState<string | null>(null);
   const [devServerUrl, setDevServerUrl] = useState<string | null>(null);
@@ -133,9 +234,26 @@ export function useAgentUI(_agentId: string, wsPath: string) {
     }
   }, [repoPath, devServerUrl, startDevServer]);
 
+  // Create UI — scaffold and open editor
+  const createUI = useCallback(async (editor: "cursor" | "claude-code") => {
+    const uiPath = await scaffoldUI(_agentId, wsPath, home);
+    setRepoPath(uiPath);
+    await saveConfig(uiPath);
+
+    if (editor === "cursor") {
+      await invoke("run_shell", { cmd: `open -a "Cursor" "${uiPath}"` }).catch(() => {
+        // Fallback: try cursor CLI
+        invoke("run_shell", { cmd: `cursor "${uiPath}"` }).catch(() => {});
+      });
+    } else {
+      // Create a temp script that opens claude in the project dir
+      await invoke("run_shell", { cmd: `echo '#!/bin/bash\ncd "${uiPath}"\nclaude' > /tmp/open-claude.sh && chmod +x /tmp/open-claude.sh && open -a Terminal /tmp/open-claude.sh` }).catch(() => {});
+    }
+  }, [_agentId, wsPath, home, saveConfig]);
+
   return {
     repoPath, devServerUrl, devServerLoading, uiView,
-    setUiView, selectRepo, disconnectRepo, launchPreview,
+    setUiView, selectRepo, disconnectRepo, launchPreview, createUI,
   };
 }
 
@@ -177,9 +295,9 @@ export function AgentUIHeaderControls({
 
 /** Main UI tab content */
 export function AgentUIContent({
-  uiView, repoPath, devServerUrl, devServerLoading, wsPath,
-  setUiView, selectRepo, disconnectRepo, launchPreview,
-}: ReturnType<typeof useAgentUI> & { wsPath: string }) {
+  uiView, repoPath, devServerUrl, devServerLoading,
+  setUiView, selectRepo, disconnectRepo, launchPreview, createUI,
+}: ReturnType<typeof useAgentUI>) {
   // Preview
   if (uiView === "preview") {
     return (
@@ -217,44 +335,42 @@ export function AgentUIContent({
 
   // Create
   if (uiView === "create") {
-    const home = "/Users/contentmanager";
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-6 px-8">
-        <button onClick={() => setUiView("menu")} className="absolute top-14 left-4 text-text-muted hover:text-text">
-          <ArrowLeft className="h-4 w-4" />
-        </button>
         <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-hover">
           <Plus className="h-7 w-7 text-text-muted" />
         </div>
         <div className="text-center max-w-xs">
           <h3 className="text-sm font-medium text-text">Create UI</h3>
           <p className="mt-1.5 text-xs text-text-muted leading-relaxed">
-            Open the agent workspace in your editor to build its interface.
+            Choose an editor to build this agent's interface. The editor will receive full context about the agent.
           </p>
         </div>
-        <div className="flex flex-col gap-2 w-full max-w-[200px]">
+        <div className="flex flex-col gap-2 w-full max-w-[220px]">
           <button
-            onClick={() => window.open(`cursor://file${home}/${wsPath}`, "_blank")}
+            onClick={() => createUI("cursor")}
             className="flex items-center justify-center gap-2 rounded-lg bg-surface-hover px-4 py-2.5 text-xs font-medium text-text hover:bg-border transition-colors"
           >
             <Code className="h-3.5 w-3.5" />
             Open with Cursor
           </button>
           <button
-            onClick={() => {
-              import("@tauri-apps/plugin-opener").then(({ openUrl }) => {
-                openUrl(`vscode://file${home}/${wsPath}`).catch(() => {});
-              }).catch(() => {});
-            }}
+            onClick={() => createUI("claude-code")}
             className="flex items-center justify-center gap-2 rounded-lg bg-surface-hover px-4 py-2.5 text-xs font-medium text-text hover:bg-border transition-colors"
           >
             <Terminal className="h-3.5 w-3.5" />
             Open with Claude Code
           </button>
         </div>
-        <p className="text-[10px] text-text-muted text-center leading-relaxed max-w-[240px]">
-          Build the agent's UI without spending tokens.
-        </p>
+        <div className="text-center max-w-[260px] space-y-1.5">
+          <p className="text-[10px] text-text-muted leading-relaxed">
+            A project folder will be created with the agent's context.
+            Just tell the editor "build the UI" and it will know what to do.
+          </p>
+          <p className="text-[10px] text-text-muted/60 leading-relaxed">
+            No tokens spent on this chat — uses your editor's AI instead.
+          </p>
+        </div>
       </div>
     );
   }

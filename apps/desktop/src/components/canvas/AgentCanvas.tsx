@@ -299,7 +299,7 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
           )}
         </div>
       ) : (
-        <AgentUIContent {...agentUI} wsPath={wsPath} />
+        <AgentUIContent {...agentUI} />
       )}
     </div>
   );
