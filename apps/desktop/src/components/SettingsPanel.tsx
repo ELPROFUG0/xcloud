@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/cn";
 import type { BrowserEngine } from "@/lib/engine";
 import { useModels } from "@/hooks/use-models";
@@ -248,6 +249,8 @@ export function SettingsPanel({ engine }: SettingsPanelProps) {
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [keys, setKeys] = useState<Record<string, KeyState>>({});
+  const [authLoading, setAuthLoading] = useState<Record<string, boolean>>({});
+  const [authStatus, setAuthStatus] = useState<Record<string, string>>({});
   const [channelValues, setChannelValues] = useState<Record<string, Record<string, string>>>({});
   const [channelSaving, setChannelSaving] = useState<Record<string, boolean>>({});
   const [channelSaved, setChannelSaved] = useState<Record<string, boolean>>({});
@@ -483,9 +486,48 @@ export function SettingsPanel({ engine }: SettingsPanelProps) {
           {/* API Keys */}
           {section === "keys" && (
             <div>
-              <p className="text-xs text-text-muted mb-4">
-                Keys are stored locally and never leave your machine.
-              </p>
+              {/* Subscription logins */}
+              <div className="mb-6">
+                <p className="text-xs text-text-muted mb-3 uppercase tracking-wider font-semibold">Subscriptions</p>
+                {[
+                  { id: "github-copilot-login", name: "GitHub Copilot", logo: githubLogo, cmd: "openclaw models auth login-github-copilot", description: "Use your Copilot subscription" },
+                  { id: "codex-login", name: "OpenAI Codex", logo: openaiLogo, cmd: "openclaw models auth login --provider openai-codex", description: "Use your Codex subscription" },
+                ].map((item) => (
+                  <div key={item.id} className="flex items-center justify-between border-b border-border/50 py-3.5 last:border-0">
+                    <div className="flex items-center gap-3 min-w-0 mr-4">
+                      <img src={item.logo} alt={item.name} className="h-5 w-5 shrink-0" />
+                      <div>
+                        <span className="text-sm font-medium text-text">{item.name}</span>
+                        <p className="text-xs text-text-muted">{item.description}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        setAuthLoading(p => ({ ...p, [item.id]: true }));
+                        setAuthStatus(p => ({ ...p, [item.id]: "" }));
+                        try {
+                          await invoke("run_shell", { cmd: `export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use 24 2>/dev/null && ${item.cmd}` });
+                          setAuthStatus(p => ({ ...p, [item.id]: "connected" }));
+                        } catch (e) {
+                          // For GitHub Copilot, open terminal since it needs TTY
+                          await invoke("run_shell", { cmd: `osascript -e 'tell application "Terminal" to do script "nvm use 24 && ${item.cmd}"'` }).catch(() => {});
+                          setAuthStatus(p => ({ ...p, [item.id]: "check-terminal" }));
+                        }
+                        setAuthLoading(p => ({ ...p, [item.id]: false }));
+                      }}
+                      disabled={authLoading[item.id]}
+                      className="rounded-xl bg-[#262626] px-4 py-1.5 text-sm text-text hover:text-white transition-colors disabled:opacity-50"
+                    >
+                      {authLoading[item.id] ? "..." :
+                       authStatus[item.id] === "connected" ? <CheckCircle className="h-4 w-4 text-emerald-400" /> :
+                       authStatus[item.id] === "check-terminal" ? "Check Terminal" :
+                       "Login"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <p className="text-xs text-text-muted mb-3 uppercase tracking-wider font-semibold">API Keys</p>
               {PROVIDERS.map((provider) => {
                 const state = getKeyState(provider.envKey);
                 const logo = PROVIDER_LOGOS[provider.id];
