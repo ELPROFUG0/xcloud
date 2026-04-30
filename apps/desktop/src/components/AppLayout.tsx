@@ -68,6 +68,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
     <SettingsPanel engine={engine} />
   ) : (
     <AgentCanvas
+      key={view.type === "chat" ? view.agentId : "default"}
       engine={engine}
       agentId={view.type === "chat" ? view.agentId : (agents.find((a) => a.isDefault)?.id ?? "main")}
     />

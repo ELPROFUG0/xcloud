@@ -24,6 +24,7 @@ import { MemoryNode } from "./nodes/MemoryNode";
 import { SoulNode } from "./nodes/SoulNode";
 import { ModelNode } from "./nodes/ModelNode";
 import { SkillNode } from "./nodes/SkillNode";
+import { UINode } from "./nodes/UINode";
 
 interface AgentCanvasProps {
   engine: BrowserEngine;
@@ -61,6 +62,7 @@ const nodeTypes: NodeTypes = {
   soul: SoulNode,
   model: ModelNode,
   skill: SkillNode,
+  ui: UINode,
 };
 
 const NODE_WIDTH = 200;
@@ -115,6 +117,107 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
   const [devServerLoading, setDevServerLoading] = useState(false);
 
   const wsPath = agentId === "main" ? ".openclaw/workspace" : `.openclaw/workspace/${agentId}`;
+  const uiConfigPath = `${wsPath}/ui-config.json`;
+
+  // Load saved repo for this agent — auto-connect if server already running
+  useEffect(() => {
+    const home = "/Users/contentmanager";
+    const fullPath = `${home}/${uiConfigPath}`;
+    invoke<string>("run_shell", { cmd: `cat "${fullPath}" 2>/dev/null || echo "{}"` })
+      .then(async (content) => {
+        const config = JSON.parse(content);
+        if (config.repoPath) {
+          setRepoPath(config.repoPath);
+          // Check if dev server is already running on saved port
+          if (config.port) {
+            try {
+              const status = await invoke<string>("run_shell", { cmd: `curl -s -o /dev/null -w "%{http_code}" http://localhost:${config.port} 2>/dev/null || echo "0"` });
+              if (["200", "304", "302"].includes(status.trim())) {
+                setDevServerUrl(`http://localhost:${config.port}`);
+                setUiView("preview");
+              }
+            } catch { /* */ }
+          }
+        }
+      })
+      .catch(() => { /* no config yet */ });
+  }, [uiConfigPath]); // eslint-disable-line
+
+  // Save repo association with port
+  const saveRepoConfig = useCallback(async (path: string, port?: number) => {
+    try {
+      const home = "/Users/contentmanager";
+      const fullPath = `${home}/${uiConfigPath}`;
+      const config = { repoPath: path, ...(port ? { port } : {}) };
+      await invoke("run_shell", { cmd: `echo '${JSON.stringify(config)}' > "${fullPath}"` });
+    } catch { /* */ }
+  }, [uiConfigPath]);
+
+  // Start dev server for a repo path (or reconnect if already running)
+  const startDevServer = useCallback(async (path: string, savedPort?: number) => {
+    const cleanPath = path.replace(/\/$/, "");
+
+    // Check if server is already running on saved port
+    if (savedPort) {
+      try {
+        const status = await invoke<string>("run_shell", { cmd: `curl -s -o /dev/null -w "%{http_code}" http://localhost:${savedPort} 2>/dev/null || echo "0"` });
+        if (["200", "304", "302"].includes(status.trim())) {
+          setDevServerUrl(`http://localhost:${savedPort}`);
+          setDevServerLoading(false);
+          return;
+        }
+      } catch { /* */ }
+    }
+
+    try {
+      const pkgStr = await readTextFile(`${cleanPath}/package.json`).catch(() => "");
+      if (pkgStr) {
+        const pkg = JSON.parse(pkgStr);
+        const script = pkg.scripts?.dev ? "dev" : pkg.scripts?.start ? "start" : null;
+        if (script) {
+          const port = savedPort ?? (3100 + Math.floor(Math.random() * 900));
+          await invoke("spawn_shell", { cmd: `cd "${cleanPath}" && PORT=${port} npm run ${script}` }).catch(() => {});
+          // Save port for next time
+          saveRepoConfig(path, port);
+
+          let retries = 0;
+          while (retries < 30) {
+            try {
+              const status = await invoke<string>("run_shell", { cmd: `curl -s -o /dev/null -w "%{http_code}" http://localhost:${port} 2>/dev/null || echo "0"` });
+              if (["200", "304", "302"].includes(status.trim())) {
+                setDevServerUrl(`http://localhost:${port}`);
+                setDevServerLoading(false);
+                return;
+              }
+            } catch { /* */ }
+            retries++;
+            await new Promise(r => setTimeout(r, 1000));
+          }
+        }
+      }
+      const htmlContent = await readTextFile(`${cleanPath}/index.html`).catch(() => "");
+      if (htmlContent) {
+        setDevServerUrl(`file://${cleanPath}/index.html`);
+        setDevServerLoading(false);
+        return;
+      }
+      setDevServerLoading(false);
+    } catch {
+      setDevServerLoading(false);
+    }
+  }, [saveRepoConfig]);
+
+  // Disconnect repo
+  const disconnectRepo = useCallback(async () => {
+    setRepoPath(null);
+    setDevServerUrl(null);
+    setUiView("menu");
+    try {
+      const home = "/Users/contentmanager";
+      const fullPath = `${home}/${uiConfigPath}`;
+      await invoke("run_shell", { cmd: `rm -f "${fullPath}"` });
+    } catch { /* */ }
+  }, [uiConfigPath]);
 
   // Load agent data
   const loadData = useCallback(async () => {
@@ -250,6 +353,10 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
       } else if (node.id === "agent") {
         const content = await readTextFile(`${wsPath}/AGENTS.md`, { baseDir: BaseDirectory.Home }).catch(() => "No AGENTS.md found");
         setDetail({ title: "Agent Config", type: "markdown", content });
+      } else if (node.id === "ui-repo") {
+        setTab("ui");
+        if (repoPath) setUiView("preview");
+        setDetail(null);
       } else {
         setDetail(null);
       }
@@ -304,8 +411,19 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
       rawEdges.push({ id: "e-agent-skills", source: "agent", target: "skills" });
     }
 
+    // UI repo node
+    if (repoPath) {
+      rawNodes.push({
+        id: "ui-repo",
+        type: "ui",
+        data: { label: "UI", repoName: repoPath.split("/").pop() ?? "repo", status: devServerUrl ? "connected" : "disconnected" },
+        position: { x: 0, y: 0 },
+      });
+      rawEdges.push({ id: "e-agent-ui", source: "agent", target: "ui-repo" });
+    }
+
     return { nodes: layoutGraph(rawNodes, rawEdges), edges: rawEdges };
-  }, [agentId, agentData]);
+  }, [agentId, agentData, repoPath, devServerUrl]);
 
   return (
     <div className="flex h-full flex-col">
@@ -318,7 +436,17 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
             Canvas
           </button>
           <button
-            onClick={() => setTab("ui")}
+            onClick={() => {
+              setTab("ui");
+              // Auto-launch preview if repo is connected and not already showing
+              if (repoPath && uiView === "menu" && !devServerUrl) {
+                setUiView("preview");
+                setDevServerLoading(true);
+                startDevServer(repoPath);
+              } else if (repoPath && devServerUrl) {
+                setUiView("preview");
+              }
+            }}
             className={`px-3 py-1 transition-colors ${tab === "ui" ? "bg-surface-hover text-text" : "text-text-muted"}`}
           >
             UI
@@ -342,8 +470,8 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
                 </button>
               </>
             )}
-            <button onClick={() => { setUiView("menu"); setDevServerUrl(null); }} className="text-text-muted hover:text-text" title="Close preview">
-              <X className="h-3 w-3" />
+            <button onClick={() => { setUiView("menu"); setDevServerUrl(null); }} className="text-text-muted hover:text-text" title="Back">
+              <ArrowLeft className="h-3 w-3" />
             </button>
           </div>
         )}
@@ -430,10 +558,12 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
           repoPath={repoPath}
           setRepoPath={setRepoPath}
           devServerUrl={devServerUrl}
-          setDevServerUrl={setDevServerUrl}
           devServerLoading={devServerLoading}
           setDevServerLoading={setDevServerLoading}
           wsPath={wsPath}
+          onSaveRepo={saveRepoConfig}
+          onDisconnectRepo={disconnectRepo}
+          onStartDevServer={startDevServer}
         />
       )}
     </div>
@@ -443,77 +573,30 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
 /** UI Tab — Open Repo, Create, or Preview */
 function UITab({
   uiView, setUiView, repoPath, setRepoPath,
-  devServerUrl, setDevServerUrl, devServerLoading, setDevServerLoading, wsPath,
+  devServerUrl, devServerLoading, setDevServerLoading, wsPath,
+  onSaveRepo, onDisconnectRepo, onStartDevServer,
 }: {
   uiView: "menu" | "create" | "preview";
   setUiView: (v: "menu" | "create" | "preview") => void;
   repoPath: string | null;
   setRepoPath: (v: string | null) => void;
   devServerUrl: string | null;
-  setDevServerUrl: (v: string | null) => void;
   devServerLoading: boolean;
   setDevServerLoading: (v: boolean) => void;
   wsPath: string;
+  onSaveRepo: (path: string) => Promise<void>;
+  onDisconnectRepo: () => Promise<void>;
+  onStartDevServer: (path: string) => Promise<void>;
 }) {
   const selectRepo = async () => {
     const selected = await openDialog({ directory: true, title: "Select UI Project" });
     if (!selected) return;
     const path = typeof selected === "string" ? selected : (selected as unknown as string);
     setRepoPath(path);
+    await onSaveRepo(path);
     setDevServerLoading(true);
     setUiView("preview");
-
-    // Try to detect and start dev server
-    const cleanPath = path.replace(/\/$/, "");
-    try {
-      // Read package.json using Tauri fs (works reliably)
-      const pkgStr = await readTextFile(`${cleanPath}/package.json`).catch(() => "");
-
-      if (pkgStr) {
-        const pkg = JSON.parse(pkgStr);
-        const script = pkg.scripts?.dev ? "dev" : pkg.scripts?.start ? "start" : null;
-
-        if (script) {
-          const port = 3100 + Math.floor(Math.random() * 900);
-
-          // Start dev server via Rust command
-          await invoke("spawn_shell", { cmd: `cd "${cleanPath}" && PORT=${port} npm run ${script}` }).catch(() => {});
-
-          // Poll until server is ready
-          let retries = 0;
-          const checkReady = async () => {
-            while (retries < 30) {
-              try {
-                const status = await invoke<string>("run_shell", { cmd: `curl -s -o /dev/null -w "%{http_code}" http://localhost:${port} 2>/dev/null || echo "0"` });
-                const code = status.trim();
-                if (code === "200" || code === "304" || code === "302") {
-                  setDevServerUrl(`http://localhost:${port}`);
-                  setDevServerLoading(false);
-                  return;
-                }
-              } catch { /* */ }
-              retries++;
-              await new Promise(r => setTimeout(r, 1000));
-            }
-            setDevServerLoading(false);
-          };
-          checkReady();
-          return;
-        }
-      }
-
-      // Check for index.html
-      const htmlContent = await readTextFile(`${cleanPath}/index.html`).catch(() => "");
-      if (htmlContent) {
-        setDevServerUrl(`file://${cleanPath}/index.html`);
-        setDevServerLoading(false);
-        return;
-      }
-
-      setDevServerLoading(false);
-    } catch {
-      setDevServerLoading(false);
-    }
+    await onStartDevServer(path);
   };
 
   // Preview view
@@ -599,31 +682,68 @@ function UITab({
   // Menu view (default)
   return (
     <div className="flex-1 flex flex-col items-center justify-center gap-6 px-8">
-      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-surface-hover">
-        <Layout className="h-8 w-8 text-text-muted" />
-      </div>
-      <div className="text-center max-w-xs">
-        <h3 className="text-sm font-medium text-text">Agent UI</h3>
-        <p className="mt-1.5 text-xs text-text-muted leading-relaxed">
-          Connect an existing project or create a new interface for this agent.
-        </p>
-      </div>
-      <div className="flex flex-col gap-2 w-full max-w-[220px]">
-        <button
-          onClick={selectRepo}
-          className="flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-xs font-medium text-white hover:opacity-90 transition-opacity"
-        >
-          <FolderOpen className="h-3.5 w-3.5" />
-          Open Repo
-        </button>
-        <button
-          onClick={() => setUiView("create")}
-          className="flex items-center justify-center gap-2 rounded-lg bg-surface-hover px-4 py-2.5 text-xs font-medium text-text hover:bg-border transition-colors"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Create
-        </button>
-      </div>
+      {repoPath ? (
+        <>
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-950/40 border border-blue-800/40">
+            <Layout className="h-8 w-8 text-blue-400" />
+          </div>
+          <div className="text-center max-w-xs">
+            <h3 className="text-sm font-medium text-text">{repoPath.split("/").pop()}</h3>
+            <p className="mt-1 text-[10px] text-text-muted truncate max-w-[220px]">{repoPath}</p>
+          </div>
+          <div className="flex flex-col gap-2 w-full max-w-[220px]">
+            <button
+              onClick={() => { setDevServerLoading(true); setUiView("preview"); onStartDevServer(repoPath!); }}
+              className="flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-xs font-medium text-white hover:opacity-90 transition-opacity"
+            >
+              <Layout className="h-3.5 w-3.5" />
+              Launch Preview
+            </button>
+            <button
+              onClick={selectRepo}
+              className="flex items-center justify-center gap-2 rounded-lg bg-surface-hover px-4 py-2.5 text-xs font-medium text-text hover:bg-border transition-colors"
+            >
+              <FolderOpen className="h-3.5 w-3.5" />
+              Change Repo
+            </button>
+            <button
+              onClick={onDisconnectRepo}
+              className="flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-xs font-medium text-red-400/70 hover:text-red-400 transition-colors"
+            >
+              <X className="h-3.5 w-3.5" />
+              Disconnect
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-surface-hover">
+            <Layout className="h-8 w-8 text-text-muted" />
+          </div>
+          <div className="text-center max-w-xs">
+            <h3 className="text-sm font-medium text-text">Agent UI</h3>
+            <p className="mt-1.5 text-xs text-text-muted leading-relaxed">
+              Connect an existing project or create a new interface for this agent.
+            </p>
+          </div>
+          <div className="flex flex-col gap-2 w-full max-w-[220px]">
+            <button
+              onClick={selectRepo}
+              className="flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-xs font-medium text-white hover:opacity-90 transition-opacity"
+            >
+              <FolderOpen className="h-3.5 w-3.5" />
+              Open Repo
+            </button>
+            <button
+              onClick={() => setUiView("create")}
+              className="flex items-center justify-center gap-2 rounded-lg bg-surface-hover px-4 py-2.5 text-xs font-medium text-text hover:bg-border transition-colors"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Create
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
