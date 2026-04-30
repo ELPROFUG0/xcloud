@@ -60,21 +60,26 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
 
       setAgents(list);
 
-      // Try to read IDENTITY.md for the default agent only
-      readTextFile(`.openclaw/workspace/IDENTITY.md`, { baseDir: BaseDirectory.Home })
-        .then((content) => {
-          const identity = parseIdentity(content);
-          if (identity.name || identity.emoji) {
-            setAgents((prev) =>
-              prev.map((a) =>
-                a.isDefault
-                  ? { ...a, name: identity.name ?? a.name, emoji: identity.emoji ?? a.emoji }
-                  : a,
-              ),
-            );
-          }
-        })
-        .catch(() => { /* IDENTITY.md may not exist */ });
+      // Read IDENTITY.md for each agent from their workspace
+      for (const agent of list) {
+        const wsPath = agent.isDefault
+          ? ".openclaw/workspace/IDENTITY.md"
+          : `.openclaw/workspace/${agent.id}/IDENTITY.md`;
+        readTextFile(wsPath, { baseDir: BaseDirectory.Home })
+          .then((content) => {
+            const identity = parseIdentity(content);
+            if (identity.name || identity.emoji) {
+              setAgents((prev) =>
+                prev.map((a) =>
+                  a.id === agent.id
+                    ? { ...a, name: identity.name ?? a.name, emoji: identity.emoji ?? a.emoji }
+                    : a,
+                ),
+              );
+            }
+          })
+          .catch(() => { /* IDENTITY.md may not exist */ });
+      }
 
       // If selected agent no longer exists, fallback to default
       if (!list.find((a) => a.id === selectedId)) {
