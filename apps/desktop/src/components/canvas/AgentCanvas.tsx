@@ -13,7 +13,9 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { BrowserEngine } from "@/lib/engine";
 import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
-import { X, ArrowLeft } from "lucide-react";
+import { X, ArrowLeft, Layout, Code, Terminal, FolderOpen, Plus, RefreshCw, ExternalLink } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import { TriggerNode } from "./nodes/TriggerNode";
 import { ToolNode } from "./nodes/ToolNode";
 import { AgentNode } from "./nodes/AgentNode";
@@ -103,10 +105,14 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
     skills: [],
     memoryFiles: [],
   });
-  const [tab, setTab] = useState<"canvas" | "logs">("canvas");
+  const [tab, setTab] = useState<"canvas" | "ui">("canvas");
   const [detail, setDetail] = useState<DetailPanel | null>(null);
   const [detailHistory, setDetailHistory] = useState<DetailPanel[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [uiView, setUiView] = useState<"menu" | "create" | "preview">("menu");
+  const [repoPath, setRepoPath] = useState<string | null>(null);
+  const [devServerUrl, setDevServerUrl] = useState<string | null>(null);
+  const [devServerLoading, setDevServerLoading] = useState(false);
 
   const wsPath = agentId === "main" ? ".openclaw/workspace" : `.openclaw/workspace/${agentId}`;
 
@@ -303,7 +309,7 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-9 shrink-0 items-center border-b border-border bg-bg px-3">
+      <div className="flex h-9 shrink-0 items-center justify-between border-b border-border bg-bg px-3">
         <div className="flex rounded-lg border border-border text-[10px]">
           <button
             onClick={() => setTab("canvas")}
@@ -312,12 +318,35 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
             Canvas
           </button>
           <button
-            onClick={() => setTab("logs")}
-            className={`px-3 py-1 transition-colors ${tab === "logs" ? "bg-surface-hover text-text" : "text-text-muted"}`}
+            onClick={() => setTab("ui")}
+            className={`px-3 py-1 transition-colors ${tab === "ui" ? "bg-surface-hover text-text" : "text-text-muted"}`}
           >
-            Logs
+            UI
           </button>
         </div>
+
+        {/* Preview controls in header */}
+        {tab === "ui" && uiView === "preview" && (
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-text-muted truncate max-w-[150px]">{repoPath?.split("/").pop()}</span>
+            {devServerUrl && (
+              <>
+                <button onClick={() => setDevServerUrl(devServerUrl)} className="text-text-muted hover:text-text" title="Refresh">
+                  <RefreshCw className="h-3 w-3" />
+                </button>
+                <button
+                  onClick={() => { import("@tauri-apps/plugin-opener").then(({ openUrl }) => openUrl(devServerUrl)).catch(() => {}); }}
+                  className="text-text-muted hover:text-text" title="Open in browser"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                </button>
+              </>
+            )}
+            <button onClick={() => { setUiView("menu"); setDevServerUrl(null); }} className="text-text-muted hover:text-text" title="Close preview">
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        )}
       </div>
 
       {tab === "canvas" ? (
@@ -395,10 +424,206 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
           )}
         </div>
       ) : (
-        <div className="flex-1 overflow-y-auto p-4">
-          <p className="text-xs text-text-muted">Agent logs will appear here during execution.</p>
-        </div>
+        <UITab
+          uiView={uiView}
+          setUiView={setUiView}
+          repoPath={repoPath}
+          setRepoPath={setRepoPath}
+          devServerUrl={devServerUrl}
+          setDevServerUrl={setDevServerUrl}
+          devServerLoading={devServerLoading}
+          setDevServerLoading={setDevServerLoading}
+          wsPath={wsPath}
+        />
       )}
+    </div>
+  );
+}
+
+/** UI Tab — Open Repo, Create, or Preview */
+function UITab({
+  uiView, setUiView, repoPath, setRepoPath,
+  devServerUrl, setDevServerUrl, devServerLoading, setDevServerLoading, wsPath,
+}: {
+  uiView: "menu" | "create" | "preview";
+  setUiView: (v: "menu" | "create" | "preview") => void;
+  repoPath: string | null;
+  setRepoPath: (v: string | null) => void;
+  devServerUrl: string | null;
+  setDevServerUrl: (v: string | null) => void;
+  devServerLoading: boolean;
+  setDevServerLoading: (v: boolean) => void;
+  wsPath: string;
+}) {
+  const selectRepo = async () => {
+    const selected = await openDialog({ directory: true, title: "Select UI Project" });
+    if (!selected) return;
+    const path = typeof selected === "string" ? selected : (selected as unknown as string);
+    setRepoPath(path);
+    setDevServerLoading(true);
+    setUiView("preview");
+
+    // Try to detect and start dev server
+    const cleanPath = path.replace(/\/$/, "");
+    try {
+      // Read package.json using Tauri fs (works reliably)
+      const pkgStr = await readTextFile(`${cleanPath}/package.json`).catch(() => "");
+
+      if (pkgStr) {
+        const pkg = JSON.parse(pkgStr);
+        const script = pkg.scripts?.dev ? "dev" : pkg.scripts?.start ? "start" : null;
+
+        if (script) {
+          const port = 3100 + Math.floor(Math.random() * 900);
+
+          // Start dev server via Rust command
+          await invoke("spawn_shell", { cmd: `cd "${cleanPath}" && PORT=${port} npm run ${script}` }).catch(() => {});
+
+          // Poll until server is ready
+          let retries = 0;
+          const checkReady = async () => {
+            while (retries < 30) {
+              try {
+                const status = await invoke<string>("run_shell", { cmd: `curl -s -o /dev/null -w "%{http_code}" http://localhost:${port} 2>/dev/null || echo "0"` });
+                const code = status.trim();
+                if (code === "200" || code === "304" || code === "302") {
+                  setDevServerUrl(`http://localhost:${port}`);
+                  setDevServerLoading(false);
+                  return;
+                }
+              } catch { /* */ }
+              retries++;
+              await new Promise(r => setTimeout(r, 1000));
+            }
+            setDevServerLoading(false);
+          };
+          checkReady();
+          return;
+        }
+      }
+
+      // Check for index.html
+      const htmlContent = await readTextFile(`${cleanPath}/index.html`).catch(() => "");
+      if (htmlContent) {
+        setDevServerUrl(`file://${cleanPath}/index.html`);
+        setDevServerLoading(false);
+        return;
+      }
+
+      setDevServerLoading(false);
+    } catch {
+      setDevServerLoading(false);
+    }
+  };
+
+  // Preview view
+  if (uiView === "preview") {
+    return (
+      <div className="flex-1 flex flex-col">
+        <div className="flex-1">
+          {devServerLoading ? (
+            <div className="flex h-full items-center justify-center">
+              <div className="text-center">
+                <RefreshCw className="h-6 w-6 text-text-muted animate-spin mx-auto" />
+                <p className="mt-3 text-xs text-text-muted">Starting dev server...</p>
+                <p className="mt-1 text-[10px] text-text-muted">{repoPath?.split("/").pop()}</p>
+              </div>
+            </div>
+          ) : devServerUrl ? (
+            <iframe
+              src={devServerUrl}
+              className="w-full h-full border-0 bg-white"
+              title="UI Preview"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center">
+              <div className="text-center px-8">
+                <p className="text-xs text-text-muted">No dev server detected</p>
+                <p className="mt-1 text-[10px] text-text-muted">Add a <code className="text-accent">dev</code> script to package.json or include an index.html</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Create view
+  if (uiView === "create") {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-6 px-8">
+        <button onClick={() => setUiView("menu")} className="absolute top-14 left-4 text-text-muted hover:text-text">
+          <ArrowLeft className="h-4 w-4" />
+        </button>
+        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-hover">
+          <Plus className="h-7 w-7 text-text-muted" />
+        </div>
+        <div className="text-center max-w-xs">
+          <h3 className="text-sm font-medium text-text">Create UI</h3>
+          <p className="mt-1.5 text-xs text-text-muted leading-relaxed">
+            Open the agent workspace in your editor to build its interface.
+          </p>
+        </div>
+        <div className="flex flex-col gap-2 w-full max-w-[200px]">
+          <button
+            onClick={() => {
+              const home = "/Users/contentmanager";
+              window.open(`cursor://file${home}/${wsPath}`, "_blank");
+            }}
+            className="flex items-center justify-center gap-2 rounded-lg bg-surface-hover px-4 py-2.5 text-xs font-medium text-text hover:bg-border transition-colors"
+          >
+            <Code className="h-3.5 w-3.5" />
+            Open with Cursor
+          </button>
+          <button
+            onClick={() => {
+              const home = "/Users/contentmanager";
+              import("@tauri-apps/plugin-opener").then(({ openUrl }) => {
+                openUrl(`vscode://file${home}/${wsPath}`).catch(() => {});
+              }).catch(() => {});
+            }}
+            className="flex items-center justify-center gap-2 rounded-lg bg-surface-hover px-4 py-2.5 text-xs font-medium text-text hover:bg-border transition-colors"
+          >
+            <Terminal className="h-3.5 w-3.5" />
+            Open with Claude Code
+          </button>
+        </div>
+        <p className="text-[10px] text-text-muted text-center leading-relaxed max-w-[240px]">
+          Build the agent's UI without spending tokens.
+        </p>
+      </div>
+    );
+  }
+
+  // Menu view (default)
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center gap-6 px-8">
+      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-surface-hover">
+        <Layout className="h-8 w-8 text-text-muted" />
+      </div>
+      <div className="text-center max-w-xs">
+        <h3 className="text-sm font-medium text-text">Agent UI</h3>
+        <p className="mt-1.5 text-xs text-text-muted leading-relaxed">
+          Connect an existing project or create a new interface for this agent.
+        </p>
+      </div>
+      <div className="flex flex-col gap-2 w-full max-w-[220px]">
+        <button
+          onClick={selectRepo}
+          className="flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-xs font-medium text-white hover:opacity-90 transition-opacity"
+        >
+          <FolderOpen className="h-3.5 w-3.5" />
+          Open Repo
+        </button>
+        <button
+          onClick={() => setUiView("create")}
+          className="flex items-center justify-center gap-2 rounded-lg bg-surface-hover px-4 py-2.5 text-xs font-medium text-text hover:bg-border transition-colors"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Create
+        </button>
+      </div>
     </div>
   );
 }

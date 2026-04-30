@@ -7,13 +7,18 @@
     "core:default",
     "opener:default",
     "core:window:allow-start-dragging",
+    "dialog:default",
     {
       "identifier": "fs:allow-read-text-file",
-      "allow": [{ "path": "$HOME/.openclaw/**" }]
+      "allow": [{ "path": "$HOME/.openclaw/**" }, { "path": "$HOME/**" }]
     },
     {
       "identifier": "fs:allow-write-text-file",
       "allow": [{ "path": "$HOME/.openclaw/**" }]
+    },
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [{ "path": "$HOME/**" }]
     }
   ]
 }
