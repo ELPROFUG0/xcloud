@@ -53,12 +53,17 @@ export function ChatPanel({ engine, agentId = "main", agentName, onBack }: ChatP
     prevPageCount.current = pages.length;
   }, [pages.length]);
 
-  // Calculate spacer: just enough so the last user msg can reach the top
+  // Calculate spacer: enough so last user msg reaches top,
+  // but subtract its own height so responses don't hide behind it
+  const userMsgRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (!scrollRef.current || !lastPageRef.current) { setSpacerHeight(0); return; }
     const containerH = scrollRef.current.clientHeight;
     const lastPageH = lastPageRef.current.scrollHeight;
-    const needed = Math.max(0, containerH - lastPageH);
+    const userMsgH = userMsgRef.current?.offsetHeight ?? 0;
+    // Spacer = container - page content, but clamp so content stays below the sticky header
+    const needed = Math.max(0, containerH - lastPageH + userMsgH);
     setSpacerHeight(needed);
   }, [messages]);
 
@@ -92,7 +97,7 @@ export function ChatPanel({ engine, agentId = "main", agentName, onBack }: ChatP
           return (
             <div key={page.userMessage.id} ref={isLast ? lastPageRef : undefined}>
               {/* User message — sticky header */}
-              <div className="sticky top-0 z-10 bg-bg">
+              <div className="sticky top-0 z-10 bg-bg" ref={isLast ? userMsgRef : undefined}>
                 <MessageBubble message={page.userMessage} />
               </div>
 
