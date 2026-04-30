@@ -163,53 +163,55 @@ function renderChannelFields(
   _setEnabled: (fn: (prev: Record<string, boolean>) => Record<string, boolean>) => void,
 ) {
   return fields.map((field) => (
-    <div key={field.key} className="rounded-lg bg-container p-4">
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-[12px] font-medium">{field.label}</span>
+    <div key={field.key} className="flex items-center justify-between border-b border-border/50 py-3 last:border-0">
+      <div className="min-w-0 flex-1 mr-4">
+        <span className="text-sm text-text">{field.label}</span>
+        {field.description && (
+          <p className="text-xs text-text-muted mt-0.5 leading-tight">{field.description}</p>
+        )}
       </div>
-      {field.description && (
-        <p className="text-[10px] text-text-muted mb-2">{field.description}</p>
-      )}
-      {field.type === "select" ? (
-        <select
-          value={values[field.key] ?? field.placeholder}
-          onChange={(e) => updateField(channelId, field.key, e.target.value)}
-          className="w-full rounded-md bg-bg border-0 px-3 py-2 text-xs text-text focus:ring-1 focus:ring-accent/50 focus:outline-none"
-        >
-          {field.options?.map((opt) => (
-            <option key={opt} value={opt}>{opt}</option>
-          ))}
-        </select>
-      ) : field.type === "toggle" ? (
-        <button
-          onClick={() => updateField(channelId, field.key, values[field.key] === "true" ? "false" : "true")}
-          className={cn(
-            "relative h-5 w-9 rounded-full transition-colors",
-            values[field.key] === "true" ? "bg-accent" : "bg-text-muted/30",
-          )}
-        >
-          <div className={cn(
-            "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform",
-            values[field.key] === "true" ? "translate-x-4" : "translate-x-0.5",
-          )} />
-        </button>
-      ) : field.type === "number" ? (
-        <input
-          type="number"
-          value={values[field.key] ?? field.placeholder}
-          onChange={(e) => updateField(channelId, field.key, e.target.value)}
-          placeholder={field.placeholder}
-          className="w-full rounded-md bg-bg border-0 px-3 py-2 text-xs text-text font-mono placeholder:text-text-muted focus:ring-1 focus:ring-accent/50 focus:outline-none"
-        />
-      ) : (
-        <input
-          type={field.type ?? "text"}
-          value={values[field.key] ?? ""}
-          onChange={(e) => updateField(channelId, field.key, e.target.value)}
-          placeholder={field.placeholder}
-          className="w-full rounded-md bg-bg border-0 px-3 py-2 text-xs text-text font-mono placeholder:text-text-muted focus:ring-1 focus:ring-accent/50 focus:outline-none"
-        />
-      )}
+      <div className="shrink-0">
+        {field.type === "select" ? (
+          <select
+            value={values[field.key] ?? field.placeholder}
+            onChange={(e) => updateField(channelId, field.key, e.target.value)}
+            className="rounded-xl bg-[#262626] px-3 py-1.5 text-sm text-text focus:outline-none appearance-none pr-7 cursor-pointer"
+          >
+            {field.options?.map((opt) => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
+        ) : field.type === "toggle" ? (
+          <button
+            onClick={() => updateField(channelId, field.key, values[field.key] === "true" ? "false" : "true")}
+            className={cn(
+              "relative h-5 w-9 rounded-full transition-colors",
+              values[field.key] === "true" ? "bg-emerald-500" : "bg-text-muted/20",
+            )}
+          >
+            <div className={cn(
+              "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform",
+              values[field.key] === "true" ? "translate-x-4" : "translate-x-0.5",
+            )} />
+          </button>
+        ) : field.type === "number" ? (
+          <input
+            type="number"
+            value={values[field.key] ?? field.placeholder}
+            onChange={(e) => updateField(channelId, field.key, e.target.value)}
+            placeholder={field.placeholder}
+            className="w-20 rounded-xl bg-[#262626] px-3 py-1.5 text-sm text-text font-mono text-right placeholder:text-text-muted focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+          />
+        ) : (
+          <input
+            type={field.type ?? "text"}
+            value={values[field.key] ?? ""}
+            onChange={(e) => updateField(channelId, field.key, e.target.value)}
+            placeholder={field.placeholder}
+            className="w-48 rounded-xl bg-[#262626] px-3 py-1.5 text-sm text-text font-mono placeholder:text-text-muted focus:outline-none"
+          />
+        )}
+      </div>
     </div>
   ));
 }
@@ -509,7 +511,7 @@ export function SettingsPanel({ engine }: SettingsPanelProps) {
                   >
                     <div className="flex items-center gap-3">
                       <img src={ch.logo} alt={ch.name} className="h-5 w-5" />
-                      <span className="text-[13px] font-medium text-text">{ch.name}</span>
+                      <span className="text-sm font-medium text-text">{ch.name}</span>
                     </div>
                     <div className={cn(
                       "h-2 w-2 rounded-full shrink-0",
@@ -535,19 +537,19 @@ export function SettingsPanel({ engine }: SettingsPanelProps) {
                 <div className="flex items-center gap-3 mb-2">
                   <img src={ch.logo} alt={ch.name} className="h-7 w-7" />
                   <div>
-                    <h4 className="text-[14px] font-medium">{ch.name}</h4>
-                    <p className="text-[10px] text-text-muted">{ch.description}</p>
+                    <h4 className="text-sm font-medium">{ch.name}</h4>
+                    <p className="text-[11px] text-text-muted">{ch.description}</p>
                   </div>
                 </div>
 
                 {/* Enable toggle */}
-                <div className="flex items-center justify-between rounded-lg bg-container px-4 py-3">
-                  <span className="text-xs text-text">Enabled</span>
+                <div className="flex items-center justify-between border-b border-border/50 py-3">
+                  <span className="text-sm text-text">Enabled</span>
                   <button
                     onClick={() => setChannelEnabled((prev) => ({ ...prev, [ch.id]: !enabled }))}
                     className={cn(
                       "relative h-5 w-9 rounded-full transition-colors",
-                      enabled ? "bg-accent" : "bg-text-muted/30",
+                      enabled ? "bg-emerald-500" : "bg-text-muted/20",
                     )}
                   >
                     <div className={cn(
@@ -565,25 +567,29 @@ export function SettingsPanel({ engine }: SettingsPanelProps) {
                   <>
                     <button
                       onClick={() => setShowAdvanced(!showAdvanced)}
-                      className="flex w-full items-center justify-between rounded-lg bg-container px-4 py-2.5 text-xs text-text-muted hover:text-text transition-colors"
+                      className="flex w-full items-center justify-between py-3 text-sm text-text-muted hover:text-text transition-colors"
                     >
-                      <span>Advanced Settings</span>
-                      <ChevronLeft className={cn("h-3.5 w-3.5 transition-transform", showAdvanced ? "-rotate-90" : "rotate-0")} />
+                      <span>Advanced</span>
+                      <ChevronLeft className={cn("h-4 w-4 transition-transform", showAdvanced ? "rotate-90" : "-rotate-90")} />
                     </button>
-                    {showAdvanced && renderChannelFields(ch.advancedFields, ch.id, values, enabled, updateChannelField, setChannelEnabled)}
+                    {showAdvanced && (
+                      <div className="rounded-lg bg-container/50 px-4 mb-2">
+                        {renderChannelFields(ch.advancedFields, ch.id, values, enabled, updateChannelField, setChannelEnabled)}
+                      </div>
+                    )}
                   </>
                 )}
 
                 {/* Save */}
-                <button
-                  onClick={() => saveChannel(ch.id)}
-                  disabled={saving}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-xs font-medium text-white hover:opacity-90 transition-opacity disabled:opacity-50"
-                >
-                  {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> :
-                   saved ? <><CheckCircle className="h-3.5 w-3.5" /> Saved</> :
-                   <><Save className="h-3.5 w-3.5" /> Save Configuration</>}
-                </button>
+                <div className="flex justify-center mt-4">
+                  <button
+                    onClick={() => saveChannel(ch.id)}
+                    disabled={saving}
+                    className="rounded-2xl bg-text text-bg px-8 py-2 text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+                  >
+                    {saving ? "Saving..." : saved ? "Saved" : "Save"}
+                  </button>
+                </div>
 
                 {error && (
                   <div className="flex items-center gap-1 text-[10px] text-red-400">
