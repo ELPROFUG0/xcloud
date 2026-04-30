@@ -62,6 +62,8 @@ export function AppLayout({ engine }: AppLayoutProps) {
       engine={engine}
       agentId={view.agentId}
       agentName={agents.find((a) => a.id === view.agentId)?.name ?? view.agentId}
+      agents={agents}
+      onSwitchAgent={(id) => setView({ type: "chat", agentId: id })}
       onBack={() => setView({ type: "home" })}
     />
   ) : (
