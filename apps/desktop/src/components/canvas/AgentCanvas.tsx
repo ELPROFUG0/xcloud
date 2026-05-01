@@ -279,7 +279,7 @@ export function AgentCanvas({ engine, agentId, savedViewport, onViewportChange }
               }}
               onMoveEnd={(_, viewport) => { onViewportChange?.(viewport); }}
             >
-              <Background color="#1c1c1f" gap={20} size={1} />
+              <Background color="#2a2a2e" gap={20} size={1} />
             </ReactFlow>
           </div>
 
