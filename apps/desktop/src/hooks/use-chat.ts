@@ -10,6 +10,7 @@ interface UseChatOptions {
 interface UseChatReturn {
   messages: ChatMessage[];
   isStreaming: boolean;
+  loading: boolean;
   send: (message: string) => Promise<void>;
 }
 
@@ -37,12 +38,14 @@ function buildToolTitle(name: string, args?: Record<string, unknown>): string {
 export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [loading, setLoading] = useState(true);
   const subscribedRef = useRef(false);
 
   // Reset when session changes
   useEffect(() => {
     setMessages([]);
     setIsStreaming(false);
+    setLoading(true);
     subscribedRef.current = false;
   }, [sessionKey]);
 
@@ -171,9 +174,11 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
           }
 
           setMessages(loaded);
+          setLoading(false);
         }
       } catch {
         // History may not be available — that's OK
+        if (!cancelled) setLoading(false);
       }
 
       try {
@@ -343,5 +348,5 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
     [engine, sessionKey],
   );
 
-  return { messages, isStreaming, send };
+  return { messages, isStreaming, loading, send };
 }

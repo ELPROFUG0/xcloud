@@ -25,8 +25,12 @@ export function AppLayout({ engine }: AppLayoutProps) {
   const [showPreview, setShowPreview] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [canvasWidth, setCanvasWidth] = useState(450);
+  const [canvasWidth, setCanvasWidth] = useState(() => {
+    const saved = localStorage.getItem("canvasWidth");
+    return saved ? Number(saved) : 450;
+  });
   const [isDragging, setIsDragging] = useState(false);
+  const canvasViewportRef = useRef<Record<string, { x: number; y: number; zoom: number }>>({});
   const dragging = useRef(false);
   const draggingCanvas = useRef(false);
 
@@ -41,6 +45,14 @@ export function AppLayout({ engine }: AppLayoutProps) {
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
+
+  // Persist canvas width when drag ends
+  useEffect(() => {
+    if (!isDragging) {
+      localStorage.setItem("canvasWidth", String(canvasWidth));
+    }
+  }, [isDragging, canvasWidth]);
+
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -105,19 +117,6 @@ export function AppLayout({ engine }: AppLayoutProps) {
 
   const currentAgentId = activeAgentId ?? agents.find((a) => a.isDefault)?.id ?? "main";
   const hasChat = activeAgentId !== null;
-
-  // What goes in the right-most panel
-  const thirdPanel = showPreview ? (
-    <DevPreview />
-  ) : showSettings ? (
-    <SettingsPanel engine={engine} />
-  ) : showCanvas ? (
-    <AgentCanvas
-      key={currentAgentId}
-      engine={engine}
-      agentId={currentAgentId}
-    />
-  ) : null;
 
   const showThirdPanel = showPreview || showSettings || showCanvas;
 
@@ -235,7 +234,18 @@ export function AppLayout({ engine }: AppLayoutProps) {
             }}
           >
             <div className="flex-1 min-h-0" style={{ minWidth: canvasWidth }}>
-              {thirdPanel}
+              {/* Canvas — always mounted, hidden when settings/preview active */}
+              <div className="h-full" style={{ display: (showSettings || showPreview) ? "none" : undefined }}>
+                <AgentCanvas
+                  key={currentAgentId}
+                  engine={engine}
+                  agentId={currentAgentId}
+                  savedViewport={canvasViewportRef.current[currentAgentId]}
+                  onViewportChange={(vp) => { canvasViewportRef.current[currentAgentId] = vp; }}
+                />
+              </div>
+              {showSettings && <SettingsPanel engine={engine} />}
+              {showPreview && <DevPreview />}
             </div>
           </div>
         </div>

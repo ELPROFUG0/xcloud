@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useMemo, useState } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { useChat } from "@/hooks/use-chat";
 import { ToolCallBadge } from "./ToolCallBadge";
@@ -45,25 +45,35 @@ export function ChatPanel({ engine, agentId = "main", agentName, agents = [], si
     setActiveSession(defaultSessionKey);
   }, [defaultSessionKey]);
 
-  const { messages, isStreaming, send } = useChat({ engine, sessionKey: activeSession });
+  const { messages, isStreaming, loading, send } = useChat({ engine, sessionKey: activeSession });
 
   const pages = useMemo(() => paginate(messages), [messages]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const prevMsgCount = useRef(0);
 
-  // Auto-scroll to bottom on new messages
-  useEffect(() => {
-    if (messages.length > prevMsgCount.current) {
-      requestAnimationFrame(() => {
-        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-      });
+  // Scroll to bottom instantly on mount, smoothly on new messages
+  useLayoutEffect(() => {
+    if (messages.length > 0) {
+      const isFirstLoad = prevMsgCount.current === 0;
+      if (isFirstLoad) {
+        // Instant scroll before paint — no visible jump
+        bottomRef.current?.scrollIntoView({ behavior: "instant" as ScrollBehavior });
+      } else {
+        requestAnimationFrame(() => {
+          bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+        });
+      }
     }
     prevMsgCount.current = messages.length;
   }, [messages.length]);
 
   const currentAgent = agents.find(a => a.id === agentId);
   const displayName = currentAgent?.name ?? agentName ?? agentId;
+
+  if (loading) {
+    return <div className="flex h-full flex-col bg-bg" />;
+  }
 
   return (
     <div className="flex h-full flex-col">

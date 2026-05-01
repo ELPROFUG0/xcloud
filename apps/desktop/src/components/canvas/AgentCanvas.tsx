@@ -28,6 +28,8 @@ import { useAgentUI, AgentUIHeaderControls, AgentUIContent } from "./AgentUI";
 interface AgentCanvasProps {
   engine: BrowserEngine;
   agentId: string;
+  savedViewport?: { x: number; y: number; zoom: number };
+  onViewportChange?: (vp: { x: number; y: number; zoom: number }) => void;
 }
 
 interface AgentData {
@@ -87,7 +89,7 @@ function parseSoul(content: string): string[] {
   return traits.slice(0, 6);
 }
 
-export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
+export function AgentCanvas({ engine, agentId, savedViewport, onViewportChange }: AgentCanvasProps) {
   const wsPath = agentId === "main" ? ".openclaw/workspace" : `.openclaw/workspace/${agentId}`;
 
   const [agentData, setAgentData] = useState<AgentData>({
@@ -98,6 +100,7 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
     memoryFiles: [],
   });
   const [tab, setTab] = useState<"canvas" | "ui">("canvas");
+  const [dataLoaded, setDataLoaded] = useState(false);
   const [detail, setDetail] = useState<DetailPanel | null>(null);
   const [detailHistory, setDetailHistory] = useState<DetailPanel[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -139,6 +142,7 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
     }
 
     setAgentData(data);
+    setDataLoaded(true);
   }, [engine, agentId, wsPath]);
 
   useEffect(() => { loadData(); }, [loadData]);
@@ -258,10 +262,23 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
 
       {/* Content */}
       {tab === "canvas" ? (
-        <div className="flex flex-1 min-h-0">
+        <div className="flex flex-1 min-h-0" style={{ opacity: dataLoaded ? 1 : 0 }}>
           <div className={detail ? "flex-1" : "w-full"}>
-            <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} onNodeClick={onNodeClick} fitView proOptions={{ hideAttribution: true }}
-              defaultEdgeOptions={{ style: { stroke: "#27272a", strokeWidth: 1.5 }, animated: true }}>
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              nodeTypes={nodeTypes}
+              onNodeClick={onNodeClick}
+              proOptions={{ hideAttribution: true }}
+              defaultEdgeOptions={{ style: { stroke: "#27272a", strokeWidth: 1.5 }, animated: true }}
+              defaultViewport={savedViewport ?? { x: 0, y: 0, zoom: 1 }}
+              onInit={(instance) => {
+                if (!savedViewport) {
+                  instance.fitView();
+                }
+              }}
+              onMoveEnd={(_, viewport) => { onViewportChange?.(viewport); }}
+            >
               <Background color="#1c1c1f" gap={20} size={1} />
             </ReactFlow>
           </div>
