@@ -4,10 +4,11 @@ import { cn } from "@/lib/cn";
 
 interface HomeScreenProps {
   agents: AgentInfo[];
+  activeAgentId?: string | null;
   onSelectAgent: (id: string) => void;
 }
 
-export function HomeScreen({ agents, onSelectAgent }: HomeScreenProps) {
+export function HomeScreen({ agents, activeAgentId, onSelectAgent }: HomeScreenProps) {
   const mainAgent = agents.find((a) => a.isDefault) ?? agents[0];
   const otherAgents = agents.filter((a) => a.id !== mainAgent?.id);
 
@@ -41,7 +42,10 @@ export function HomeScreen({ agents, onSelectAgent }: HomeScreenProps) {
             </div>
             <button
               onClick={() => onSelectAgent(mainAgent.id)}
-              className="group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-white/6 active:bg-white/8"
+              className={cn(
+                "group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors",
+                activeAgentId === mainAgent.id ? "bg-white/8" : "hover:bg-white/6 active:bg-white/8",
+              )}
             >
               <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent/15 text-accent">
                 {mainAgent.emoji ? (
@@ -77,7 +81,10 @@ export function HomeScreen({ agents, onSelectAgent }: HomeScreenProps) {
               <button
                 key={agent.id}
                 onClick={() => onSelectAgent(agent.id)}
-                className="group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-white/6 active:bg-white/8"
+                className={cn(
+                  "group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors",
+                  activeAgentId === agent.id ? "bg-white/8" : "hover:bg-white/6 active:bg-white/8",
+                )}
               >
                 <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white/5 text-text-muted group-hover:text-text">
                   {agent.emoji ? (

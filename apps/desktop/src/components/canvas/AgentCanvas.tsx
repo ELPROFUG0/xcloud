@@ -13,7 +13,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { BrowserEngine } from "@/lib/engine";
 import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
-import { X, ArrowLeft } from "lucide-react";
+import { X, ArrowLeft, PanelRight } from "lucide-react";
 import { TriggerNode } from "./nodes/TriggerNode";
 import { ToolNode } from "./nodes/ToolNode";
 import { AgentNode } from "./nodes/AgentNode";
@@ -29,6 +29,7 @@ interface AgentCanvasProps {
   engine: BrowserEngine;
   agentId: string;
   sidebarCollapsed?: boolean;
+  onToggle?: () => void;
 }
 
 interface AgentData {
@@ -88,7 +89,7 @@ function parseSoul(content: string): string[] {
   return traits.slice(0, 6);
 }
 
-export function AgentCanvas({ engine, agentId, sidebarCollapsed }: AgentCanvasProps) {
+export function AgentCanvas({ engine, agentId, sidebarCollapsed, onToggle }: AgentCanvasProps) {
   const wsPath = agentId === "main" ? ".openclaw/workspace" : `.openclaw/workspace/${agentId}`;
 
   const [agentData, setAgentData] = useState<AgentData>({
@@ -254,7 +255,18 @@ export function AgentCanvas({ engine, agentId, sidebarCollapsed }: AgentCanvasPr
             UI
           </button>
         </div>
-        {tab === "ui" && <AgentUIHeaderControls uiView={agentUI.uiView} repoPath={agentUI.repoPath} devServerUrl={agentUI.devServerUrl} setUiView={agentUI.setUiView} />}
+        <div className="flex items-center gap-1">
+          {tab === "ui" && <AgentUIHeaderControls uiView={agentUI.uiView} repoPath={agentUI.repoPath} devServerUrl={agentUI.devServerUrl} setUiView={agentUI.setUiView} />}
+          {onToggle && (
+            <button
+              onClick={onToggle}
+              className="flex h-6 w-6 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-white/8 hover:text-text"
+              title="Hide canvas"
+            >
+              <PanelRight className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Content */}

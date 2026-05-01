@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
-import { Settings, Eye } from "lucide-react";
+import { Settings, Eye, PanelRight } from "lucide-react";
 import { HomeScreen } from "./home/HomeScreen";
 import { ChatPanel } from "./chat/ChatPanel";
 import { AgentCanvas } from "./canvas/AgentCanvas";
@@ -13,21 +13,22 @@ interface AppLayoutProps {
   engine: BrowserEngine;
 }
 
-type View = { type: "home" } | { type: "chat"; agentId: string };
-
-const MIN_WIDTH = 280;
-const MAX_WIDTH = 600;
-const DEFAULT_WIDTH = 360;
+const MIN_WIDTH = 240;
+const MAX_WIDTH = 400;
+const DEFAULT_WIDTH = 280;
 
 export function AppLayout({ engine }: AppLayoutProps) {
   const { agents } = useAgents(engine);
-  const [view, setView] = useState<View>({ type: "home" });
+  const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
+  const [showCanvas, setShowCanvas] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [canvasWidth, setCanvasWidth] = useState(450);
   const [isDragging, setIsDragging] = useState(false);
   const dragging = useRef(false);
+  const draggingCanvas = useRef(false);
 
   // Cmd+Shift+P to toggle dev preview
   useEffect(() => {
@@ -67,39 +68,64 @@ export function AppLayout({ engine }: AppLayoutProps) {
     document.body.style.userSelect = "none";
   }, []);
 
-  const rightPanel = showPreview ? (
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  const onCanvasMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    draggingCanvas.current = true;
+    setIsDragging(true);
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!draggingCanvas.current || !cardRef.current) return;
+      const cardRect = cardRef.current.getBoundingClientRect();
+      const newWidth = Math.min(800, Math.max(250, cardRect.right - ev.clientX));
+      setCanvasWidth(newWidth);
+    };
+
+    const onMouseUp = () => {
+      draggingCanvas.current = false;
+      setIsDragging(false);
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }, []);
+
+  const handleSelectAgent = useCallback((id: string) => {
+    setActiveAgentId(id);
+    setShowSettings(false);
+    setShowPreview(false);
+  }, []);
+
+  const currentAgentId = activeAgentId ?? agents.find((a) => a.isDefault)?.id ?? "main";
+  const hasChat = activeAgentId !== null;
+
+  // What goes in the right-most panel
+  const thirdPanel = showPreview ? (
     <DevPreview />
   ) : showSettings ? (
     <SettingsPanel engine={engine} />
-  ) : (
+  ) : showCanvas ? (
     <AgentCanvas
-      key={view.type === "chat" ? view.agentId : "default"}
+      key={currentAgentId}
       engine={engine}
-      agentId={view.type === "chat" ? view.agentId : (agents.find((a) => a.isDefault)?.id ?? "main")}
+      agentId={currentAgentId}
       sidebarCollapsed={sidebarCollapsed}
+      onToggle={() => setShowCanvas(false)}
     />
-  );
+  ) : null;
 
-  const leftPanel = view.type === "chat" ? (
-    <ChatPanel
-      key={view.agentId}
-      engine={engine}
-      agentId={view.agentId}
-      agentName={agents.find((a) => a.id === view.agentId)?.name ?? view.agentId}
-      agents={agents}
-      onSwitchAgent={(id) => setView({ type: "chat", agentId: id })}
-      onBack={() => setView({ type: "home" })}
-    />
-  ) : (
-    <HomeScreen
-      agents={agents}
-      onSelectAgent={(id) => setView({ type: "chat", agentId: id })}
-    />
-  );
+  const showThirdPanel = showPreview || showSettings || showCanvas;
 
   return (
     <div className="flex h-full">
-      {/* Toggle sidebar — fixed next to macOS traffic lights, always visible */}
+      {/* Toggle sidebar — fixed next to macOS traffic lights */}
       <button
         onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
         className="fixed z-20 flex h-6 w-6 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-white/8 hover:text-text"
@@ -115,13 +141,17 @@ export function AppLayout({ engine }: AppLayoutProps) {
         </svg>
       </button>
 
-      {/* Left panel — sidebar with vibrancy */}
+      {/* 1. Sidebar — agent list */}
       <div className="flex h-full shrink-0 flex-col" style={{ width: sidebarCollapsed ? 0 : panelWidth, backgroundColor: "rgba(30,30,30,0.30)", overflow: "hidden", transition: isDragging ? "none" : "width 150ms ease" }}>
         <div className="flex flex-1 min-h-0 flex-col" style={{ minWidth: panelWidth }}>
-          {leftPanel}
+          <HomeScreen
+            agents={agents}
+            activeAgentId={hasChat ? currentAgentId : null}
+            onSelectAgent={handleSelectAgent}
+          />
         </div>
 
-        {/* Sidebar footer — sticky bottom */}
+        {/* Sidebar footer */}
         <div className="shrink-0 px-3 py-1.5" style={{ minWidth: panelWidth }}>
           <div className="flex items-center justify-between">
             <button
@@ -142,7 +172,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
         </div>
       </div>
 
-      {/* Resize handle — overlaps edges, no extra gap */}
+      {/* Resize handle */}
       <div
         onMouseDown={onMouseDown}
         className="relative z-10 h-full w-0 shrink-0 cursor-col-resize"
@@ -152,24 +182,73 @@ export function AppLayout({ engine }: AppLayoutProps) {
         </div>
       </div>
 
-      {/* Right panel — solid, rounded card with padding */}
+      {/* 2 & 3. Chat + Canvas — single rounded card */}
       <div
         className={`flex h-full flex-1 min-w-0 flex-col py-2 pr-2 ${sidebarCollapsed ? "pl-2" : ""}`}
         style={{ backgroundColor: "rgba(30,30,30,0.30)", transition: "padding 150ms ease" }}
       >
         <div
-          className="flex flex-1 min-h-0 flex-col rounded-xl bg-bg overflow-hidden"
+          ref={cardRef}
+          className="flex flex-1 min-h-0 rounded-xl bg-bg overflow-hidden"
           onMouseDown={async (e) => {
             if (e.button !== 0) return;
-            if ((e.target as HTMLElement).closest("button, input, a, [data-interactive]")) return;
+            if ((e.target as HTMLElement).closest("button, input, textarea, a, [data-interactive]")) return;
             await getCurrentWindow().startDragging();
           }}
         >
-          <div className="flex-1 min-h-0">
-            {rightPanel}
+          {/* Chat */}
+          <div className="flex flex-1 min-w-0 flex-col">
+            {hasChat ? (
+              <ChatPanel
+                key={currentAgentId}
+                engine={engine}
+                agentId={currentAgentId}
+                agentName={agents.find((a) => a.id === currentAgentId)?.name ?? currentAgentId}
+                agents={agents}
+                onSwitchAgent={(id) => setActiveAgentId(id)}
+              />
+            ) : (
+              <div className="flex h-full flex-col items-center justify-center gap-4 text-text-muted">
+                <div className="text-3xl opacity-20">✦</div>
+                <p className="text-sm">Select an agent to start chatting</p>
+              </div>
+            )}
           </div>
+
+          {/* Canvas / Settings / Preview */}
+          {showThirdPanel && (
+            <>
+              {/* Resize handle */}
+              <div
+                onMouseDown={onCanvasMouseDown}
+                data-interactive
+                className="relative z-10 h-full w-0 shrink-0 cursor-col-resize"
+              >
+                <div className="absolute -left-1.5 top-0 h-full w-3 group">
+                  <div className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-border/30 transition-colors group-hover:bg-accent" />
+                </div>
+              </div>
+              <div className="flex h-full shrink-0 flex-col" style={{ width: canvasWidth }}>
+                <div className="flex-1 min-h-0">
+                  {thirdPanel}
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
+
+      {/* Show canvas button — when canvas is hidden */}
+      {!showCanvas && !showSettings && !showPreview && (
+        <button
+          onClick={() => setShowCanvas(true)}
+          className="fixed z-20 flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-white/8 hover:text-text"
+          style={{ top: 14, right: 14 }}
+          title="Show canvas"
+        >
+          <PanelRight className="h-4 w-4" />
+        </button>
+      )}
     </div>
   );
 }
