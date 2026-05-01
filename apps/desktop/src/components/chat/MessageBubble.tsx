@@ -2,6 +2,7 @@ import type { ChatMessage } from "@/types/chat";
 import { Bot } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -27,7 +28,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       </div>
       <div className="min-w-0 flex-1 text-[13px] leading-relaxed text-[#D4D4D4] prose-chat">
         {message.content ? (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
             {message.content}
           </ReactMarkdown>
         ) : (

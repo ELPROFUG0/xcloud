@@ -67,20 +67,53 @@ html, body {
   color: #79c0ff;
 }
 .prose-chat pre {
-  background: #161b22;
-  border: 1px solid #2a3040;
+  background: #1D1D1D;
+  border: none;
   border-radius: 8px;
-  padding: 12px;
+  padding: 0;
   margin: 8px 0;
-  overflow-x: auto;
+  overflow: hidden;
 }
 .prose-chat pre code {
   background: none;
   border: none;
-  padding: 0;
-  font-size: 0.85em;
-  color: #D4D4D4;
+  padding: 14px 16px;
+  display: block;
+  font-size: 0.82em;
+  line-height: 1.65;
+  color: #c9d1d9;
+  overflow-x: auto;
 }
+/* Syntax highlighting — Vibrant theme */
+.prose-chat pre code .hljs-keyword,
+.prose-chat pre code .hljs-selector-tag { color: #d670ff; }
+.prose-chat pre code .hljs-string,
+.prose-chat pre code .hljs-addition { color: #7ee787; }
+.prose-chat pre code .hljs-number,
+.prose-chat pre code .hljs-literal { color: #ffa657; }
+.prose-chat pre code .hljs-comment,
+.prose-chat pre code .hljs-doctag { color: #6e7681; font-style: italic; }
+.prose-chat pre code .hljs-title,
+.prose-chat pre code .hljs-title\.function_,
+.prose-chat pre code .hljs-section { color: #79c0ff; }
+.prose-chat pre code .hljs-attr,
+.prose-chat pre code .hljs-variable,
+.prose-chat pre code .hljs-name,
+.prose-chat pre code .hljs-tag { color: #ff7b72; }
+.prose-chat pre code .hljs-type,
+.prose-chat pre code .hljs-built_in,
+.prose-chat pre code .hljs-class { color: #ffd666; }
+.prose-chat pre code .hljs-params { color: #c9d1d9; }
+.prose-chat pre code .hljs-regexp,
+.prose-chat pre code .hljs-template-variable { color: #56d4dd; }
+.prose-chat pre code .hljs-symbol,
+.prose-chat pre code .hljs-bullet { color: #79c0ff; }
+.prose-chat pre code .hljs-meta,
+.prose-chat pre code .hljs-meta .hljs-keyword { color: #ff7b72; }
+.prose-chat pre code .hljs-deletion { color: #ff7b72; background: rgba(255, 123, 114, 0.12); }
+.prose-chat pre code .hljs-addition { background: rgba(126, 231, 135, 0.12); }
+.prose-chat pre code .hljs-emphasis { font-style: italic; }
+.prose-chat pre code .hljs-strong { font-weight: 700; }
 .prose-chat ul {
   list-style-type: disc;
   padding-left: 1.4em;

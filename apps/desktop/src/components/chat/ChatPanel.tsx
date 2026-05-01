@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback, memo } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { useChat } from "@/hooks/use-chat";
 import { ToolCallBadge } from "./ToolCallBadge";
@@ -9,6 +9,7 @@ import type { ChatMessage } from "@/types/chat";
 import type { AgentInfo } from "@/hooks/use-agents";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
 import { EmojiPicker } from "../ui/EmojiPicker";
 import { updateAgentEmoji } from "@/lib/update-identity";
 
@@ -233,10 +234,10 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function MessageBubbleContent({ content }: { content: string }) {
+const MessageBubbleContent = memo(function MessageBubbleContent({ content }: { content: string }) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
       {content}
     </ReactMarkdown>
   );
-}
+});
