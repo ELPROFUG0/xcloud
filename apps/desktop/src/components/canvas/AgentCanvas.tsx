@@ -13,7 +13,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { BrowserEngine } from "@/lib/engine";
 import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
-import { X, ArrowLeft, PanelRight } from "lucide-react";
+import { X, ArrowLeft } from "lucide-react";
 import { TriggerNode } from "./nodes/TriggerNode";
 import { ToolNode } from "./nodes/ToolNode";
 import { AgentNode } from "./nodes/AgentNode";
@@ -28,8 +28,6 @@ import { useAgentUI, AgentUIHeaderControls, AgentUIContent } from "./AgentUI";
 interface AgentCanvasProps {
   engine: BrowserEngine;
   agentId: string;
-  sidebarCollapsed?: boolean;
-  onToggle?: () => void;
 }
 
 interface AgentData {
@@ -89,7 +87,7 @@ function parseSoul(content: string): string[] {
   return traits.slice(0, 6);
 }
 
-export function AgentCanvas({ engine, agentId, sidebarCollapsed, onToggle }: AgentCanvasProps) {
+export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
   const wsPath = agentId === "main" ? ".openclaw/workspace" : `.openclaw/workspace/${agentId}`;
 
   const [agentData, setAgentData] = useState<AgentData>({
@@ -243,7 +241,7 @@ export function AgentCanvas({ engine, agentId, sidebarCollapsed, onToggle }: Age
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="flex h-9 shrink-0 items-center justify-between border-b border-border bg-bg px-3" style={{ paddingLeft: sidebarCollapsed ? 110 : undefined, transition: "padding-left 150ms ease" }}>
+      <div className="flex h-9 shrink-0 items-center justify-between border-b border-border bg-bg px-3">
         <div className="flex rounded-lg border border-border text-[10px]">
           <button onClick={() => setTab("canvas")} className={`px-3 py-1 transition-colors ${tab === "canvas" ? "bg-surface-hover text-text" : "text-text-muted"}`}>
             Canvas
@@ -255,18 +253,7 @@ export function AgentCanvas({ engine, agentId, sidebarCollapsed, onToggle }: Age
             UI
           </button>
         </div>
-        <div className="flex items-center gap-1">
-          {tab === "ui" && <AgentUIHeaderControls uiView={agentUI.uiView} repoPath={agentUI.repoPath} devServerUrl={agentUI.devServerUrl} setUiView={agentUI.setUiView} />}
-          {onToggle && (
-            <button
-              onClick={onToggle}
-              className="flex h-6 w-6 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-white/8 hover:text-text"
-              title="Hide canvas"
-            >
-              <PanelRight className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
+        {tab === "ui" && <AgentUIHeaderControls uiView={agentUI.uiView} repoPath={agentUI.repoPath} devServerUrl={agentUI.devServerUrl} setUiView={agentUI.setUiView} />}
       </div>
 
       {/* Content */}
