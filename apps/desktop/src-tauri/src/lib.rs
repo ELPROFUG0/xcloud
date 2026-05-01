@@ -51,6 +51,7 @@ pub fn run() {
                 #[allow(deprecated)]
                 apply_vibrancy(&window, NSVisualEffectMaterial::UltraDark, Some(NSVisualEffectState::Active), None)
                     .expect("Failed to apply vibrancy");
+
             }
 
             Ok(())

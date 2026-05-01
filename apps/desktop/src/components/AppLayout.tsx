@@ -1,12 +1,13 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
-import { Titlebar } from "./Titlebar";
+import { PanelLeftClose, PanelLeftOpen, Settings, Eye } from "lucide-react";
 import { HomeScreen } from "./home/HomeScreen";
 import { ChatPanel } from "./chat/ChatPanel";
 import { AgentCanvas } from "./canvas/AgentCanvas";
 import { SettingsPanel } from "./SettingsPanel";
 import { DevPreview } from "./DevPreview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface AppLayoutProps {
   engine: BrowserEngine;
@@ -24,6 +25,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
   const [showSettings, setShowSettings] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const dragging = useRef(false);
 
   // Cmd+Shift+P to toggle dev preview
@@ -71,6 +73,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
       key={view.type === "chat" ? view.agentId : "default"}
       engine={engine}
       agentId={view.type === "chat" ? view.agentId : (agents.find((a) => a.isDefault)?.id ?? "main")}
+      sidebarCollapsed={sidebarCollapsed}
     />
   );
 
@@ -93,9 +96,41 @@ export function AppLayout({ engine }: AppLayoutProps) {
 
   return (
     <div className="flex h-full">
+      {/* Toggle sidebar — fixed next to macOS traffic lights, always visible */}
+      <button
+        onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+        className="fixed z-20 flex h-6 w-6 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-white/8 hover:text-text"
+        style={{ top: 14, left: 88 }}
+        title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+      >
+        {sidebarCollapsed ? <PanelLeftOpen className="h-3.5 w-3.5" /> : <PanelLeftClose className="h-3.5 w-3.5" />}
+      </button>
+
       {/* Left panel — sidebar with vibrancy */}
-      <div className="flex h-full shrink-0 flex-col" style={{ width: panelWidth, backgroundColor: "rgba(30,30,30,0.30)" }}>
-        {leftPanel}
+      <div className="flex h-full shrink-0 flex-col" style={{ width: sidebarCollapsed ? 0 : panelWidth, backgroundColor: "rgba(30,30,30,0.30)", overflow: "hidden", transition: "width 150ms ease" }}>
+        <div className="flex flex-1 min-h-0 flex-col" style={{ minWidth: panelWidth }}>
+          {leftPanel}
+        </div>
+
+        {/* Sidebar footer — sticky bottom */}
+        <div className="shrink-0 px-3 py-1.5" style={{ minWidth: panelWidth }}>
+          <div className="flex items-center justify-between">
+            <button
+              onClick={() => { setShowSettings(!showSettings); setShowPreview(false); }}
+              className="flex items-center gap-2.5 rounded-lg px-2.5 py-1 text-text transition-colors hover:bg-white/6"
+            >
+              <Settings className="h-4 w-4" />
+              <span className="text-sm font-medium">Settings</span>
+            </button>
+            <button
+              onClick={() => { setShowPreview(!showPreview); setShowSettings(false); }}
+              className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-white/6 hover:text-text"
+              title="Preview"
+            >
+              <Eye className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Resize handle — overlaps edges, no extra gap */}
@@ -109,14 +144,18 @@ export function AppLayout({ engine }: AppLayoutProps) {
       </div>
 
       {/* Right panel — solid, rounded card with padding */}
-      <div className="flex h-full flex-1 min-w-0 flex-col py-2 pr-2" style={{ backgroundColor: "rgba(30,30,30,0.30)" }}>
-        <div className="flex flex-1 min-h-0 flex-col rounded-xl bg-bg overflow-hidden">
-          <Titlebar
-            onToggleSettings={() => { setShowSettings(!showSettings); setShowPreview(false); }}
-            onTogglePreview={() => { setShowPreview(!showPreview); setShowSettings(false); }}
-            settingsOpen={showSettings}
-            previewOpen={showPreview}
-          />
+      <div
+        className={`flex h-full flex-1 min-w-0 flex-col py-2 pr-2 ${sidebarCollapsed ? "pl-2" : ""}`}
+        style={{ backgroundColor: "rgba(30,30,30,0.30)", transition: "padding 150ms ease" }}
+      >
+        <div
+          className="flex flex-1 min-h-0 flex-col rounded-xl bg-bg overflow-hidden"
+          onMouseDown={async (e) => {
+            if (e.button !== 0) return;
+            if ((e.target as HTMLElement).closest("button, input, a, [data-interactive]")) return;
+            await getCurrentWindow().startDragging();
+          }}
+        >
           <div className="flex-1 min-h-0">
             {rightPanel}
           </div>

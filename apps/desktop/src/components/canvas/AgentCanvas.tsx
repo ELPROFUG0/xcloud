@@ -28,6 +28,7 @@ import { useAgentUI, AgentUIHeaderControls, AgentUIContent } from "./AgentUI";
 interface AgentCanvasProps {
   engine: BrowserEngine;
   agentId: string;
+  sidebarCollapsed?: boolean;
 }
 
 interface AgentData {
@@ -87,7 +88,7 @@ function parseSoul(content: string): string[] {
   return traits.slice(0, 6);
 }
 
-export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
+export function AgentCanvas({ engine, agentId, sidebarCollapsed }: AgentCanvasProps) {
   const wsPath = agentId === "main" ? ".openclaw/workspace" : `.openclaw/workspace/${agentId}`;
 
   const [agentData, setAgentData] = useState<AgentData>({
@@ -241,7 +242,7 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="flex h-9 shrink-0 items-center justify-between border-b border-border bg-bg px-3">
+      <div className="flex h-9 shrink-0 items-center justify-between border-b border-border bg-bg px-3" style={{ paddingLeft: sidebarCollapsed ? 110 : undefined, transition: "padding-left 150ms ease" }}>
         <div className="flex rounded-lg border border-border text-[10px]">
           <button onClick={() => setTab("canvas")} className={`px-3 py-1 transition-colors ${tab === "canvas" ? "bg-surface-hover text-text" : "text-text-muted"}`}>
             Canvas
