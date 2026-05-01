@@ -12,6 +12,7 @@ import remarkGfm from "remark-gfm";
 interface ChatPanelProps {
   engine: BrowserEngine;
   agentId?: string;
+  sessionKey?: string;
   agentName?: string;
   agents?: AgentInfo[];
   onSwitchAgent?: (id: string) => void;
@@ -38,8 +39,8 @@ function paginate(messages: ChatMessage[]): Page[] {
   return pages;
 }
 
-export function ChatPanel({ engine, agentId = "main", agentName, agents = [], sidebarCollapsed, isFullscreen }: ChatPanelProps) {
-  const defaultSessionKey = agentId === "main" ? "main" : `agent:${agentId}:main`;
+export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessionKey, agentName, agents = [], sidebarCollapsed, isFullscreen }: ChatPanelProps) {
+  const defaultSessionKey = externalSessionKey ?? (agentId === "main" ? "main" : `agent:${agentId}:main`);
   const [activeSession, setActiveSession] = useState(defaultSessionKey);
 
   useEffect(() => {

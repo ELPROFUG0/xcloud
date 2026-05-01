@@ -3,6 +3,7 @@ import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
 import { Settings, Eye } from "lucide-react";
 import { HomeScreen } from "./home/HomeScreen";
+import { useSessions } from "@/hooks/use-sessions";
 import { ChatPanel } from "./chat/ChatPanel";
 import { AgentCanvas } from "./canvas/AgentCanvas";
 import { SettingsPanel } from "./SettingsPanel";
@@ -19,7 +20,9 @@ const DEFAULT_WIDTH = 280;
 
 export function AppLayout({ engine }: AppLayoutProps) {
   const { agents } = useAgents(engine);
+  const { getAgentSessions } = useSessions(engine);
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
+  const [activeSessionKey, setActiveSessionKey] = useState<string | null>(null);
   const [showCanvas, setShowCanvas] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -121,6 +124,14 @@ export function AppLayout({ engine }: AppLayoutProps) {
 
   const handleSelectAgent = useCallback((id: string) => {
     setActiveAgentId(id);
+    setActiveSessionKey(null);
+    setShowSettings(false);
+    setShowPreview(false);
+  }, []);
+
+  const handleSelectSession = useCallback((agentId: string, sessionKey: string) => {
+    setActiveAgentId(agentId);
+    setActiveSessionKey(sessionKey);
     setShowSettings(false);
     setShowPreview(false);
   }, []);
@@ -155,6 +166,8 @@ export function AppLayout({ engine }: AppLayoutProps) {
             agents={agents}
             activeAgentId={hasChat ? currentAgentId : null}
             onSelectAgent={handleSelectAgent}
+            onSelectSession={handleSelectSession}
+            getAgentSessions={getAgentSessions}
             isFullscreen={isFullscreen}
           />
         </div>
@@ -208,9 +221,10 @@ export function AppLayout({ engine }: AppLayoutProps) {
           <div className="flex flex-1 min-w-0 flex-col">
             {hasChat ? (
               <ChatPanel
-                key={currentAgentId}
+                key={`${currentAgentId}-${activeSessionKey ?? "default"}`}
                 engine={engine}
                 agentId={currentAgentId}
+                sessionKey={activeSessionKey ?? undefined}
                 agentName={agents.find((a) => a.id === currentAgentId)?.name ?? currentAgentId}
                 agents={agents}
                 onSwitchAgent={(id) => setActiveAgentId(id)}
