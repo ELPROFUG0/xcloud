@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
-import { PanelLeftClose, PanelLeftOpen, Settings, Eye } from "lucide-react";
+import { Settings, Eye } from "lucide-react";
 import { HomeScreen } from "./home/HomeScreen";
 import { ChatPanel } from "./chat/ChatPanel";
 import { AgentCanvas } from "./canvas/AgentCanvas";
@@ -106,7 +106,13 @@ export function AppLayout({ engine }: AppLayoutProps) {
         style={{ top: 14, left: 88 }}
         title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
       >
-        {sidebarCollapsed ? <PanelLeftOpen className="h-3.5 w-3.5" /> : <PanelLeftClose className="h-3.5 w-3.5" />}
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.85 }}>
+          <path d="M11 3H13C16.7712 3 18.6569 3 19.8284 4.17157C21 5.34315 21 7.22876 21 11V13C21 16.7712 21 18.6569 19.8284 19.8284C18.6569 21 16.7712 21 13 21H11C7.22876 21 5.34315 21 4.17157 19.8284C3 18.6569 3 16.7712 3 13V11C3 7.22876 3 5.34315 4.17157 4.17157C5.34315 3 7.22876 3 11 3Z" />
+          {sidebarCollapsed
+            ? <path d="M16 8L16 16" />
+            : <path d="M8.00488 16.0049L8.00488 8.00488" />
+          }
+        </svg>
       </button>
 
       {/* Left panel — sidebar with vibrancy */}
