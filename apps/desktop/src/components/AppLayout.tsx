@@ -206,6 +206,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
                 agentName={agents.find((a) => a.id === currentAgentId)?.name ?? currentAgentId}
                 agents={agents}
                 onSwitchAgent={(id) => setActiveAgentId(id)}
+                sidebarCollapsed={sidebarCollapsed}
               />
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-4 text-text-muted">

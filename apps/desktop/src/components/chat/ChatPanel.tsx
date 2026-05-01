@@ -15,6 +15,7 @@ interface ChatPanelProps {
   agentName?: string;
   agents?: AgentInfo[];
   onSwitchAgent?: (id: string) => void;
+  sidebarCollapsed?: boolean;
 }
 
 interface Page {
@@ -36,7 +37,7 @@ function paginate(messages: ChatMessage[]): Page[] {
   return pages;
 }
 
-export function ChatPanel({ engine, agentId = "main", agentName, agents = [] }: ChatPanelProps) {
+export function ChatPanel({ engine, agentId = "main", agentName, agents = [], sidebarCollapsed }: ChatPanelProps) {
   const defaultSessionKey = agentId === "main" ? "main" : `agent:${agentId}:main`;
   const [activeSession, setActiveSession] = useState(defaultSessionKey);
 
@@ -67,7 +68,7 @@ export function ChatPanel({ engine, agentId = "main", agentName, agents = [] }: 
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
-      <header className="flex h-9 shrink-0 items-center px-4 border-b border-border">
+      <header className="flex h-9 shrink-0 items-center px-4 border-b border-border" style={{ paddingLeft: sidebarCollapsed ? 110 : undefined, transition: "padding-left 150ms ease" }}>
         <div className="flex items-center gap-2">
           <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-accent/15 text-accent">
             {currentAgent?.emoji ? (
