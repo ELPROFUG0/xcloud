@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useTheme, type ThemeName, type ThemeColors } from "@/hooks/use-theme";
 import { RotateCcw } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
@@ -8,7 +8,7 @@ import { useModels } from "@/hooks/use-models";
 import { PROVIDERS } from "@/types/provider";
 import {
   Key, CheckCircle, AlertCircle,
-  Cpu, ChevronLeft, Check, Search, X, Settings2, Radio,
+  Cpu, ChevronLeft, ChevronDown, Check, Search, X, Settings2, Radio,
 } from "lucide-react";
 import telegramLogo from "@/assets/channels/telegram.svg";
 import whatsappLogo from "@/assets/channels/whatsapp.svg";
@@ -263,6 +263,19 @@ export function SettingsPanel({ engine, section: externalSection }: SettingsPane
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [channelEnabled, setChannelEnabled] = useState<Record<string, boolean>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showThemeDropdown, setShowThemeDropdown] = useState(false);
+  const themeDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showThemeDropdown) return;
+    function handleClick(e: MouseEvent) {
+      if (themeDropdownRef.current && !themeDropdownRef.current.contains(e.target as Node)) {
+        setShowThemeDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showThemeDropdown]);
 
   const filteredProviders = providers.filter((g) => {
     if (!search.trim()) return true;
@@ -679,46 +692,62 @@ export function SettingsPanel({ engine, section: externalSection }: SettingsPane
             <div className="space-y-4">
               {/* Theme */}
               <div className="rounded-lg bg-container p-4">
-                <h4 className="text-[13px] font-medium mb-1">Theme</h4>
-                <p className="text-xs text-text-muted mb-4">Choose your preferred color scheme</p>
-
-                {/* Code preview */}
-                <div className="grid grid-cols-2 gap-2 mb-4 rounded-lg overflow-hidden">
-                  <div className="bg-[#1D1D1D] p-3 font-mono text-[11px] leading-relaxed">
-                    <div><span className="text-text-muted/40">1</span>  <span className="text-[#d670ff]">const</span> <span className="text-[#61afef]">themePreview</span>: <span className="text-[#e5c07b]">ThemeConfig</span></div>
-                    <div><span className="text-text-muted/40">2</span>    surface: <span className="text-[#98c379]">"sidebar"</span>,</div>
-                    <div><span className="text-text-muted/40">3</span>    accent: <span className="text-[#98c379]">"#6366f1"</span>,</div>
-                    <div><span className="text-text-muted/40">4</span>    contrast: <span className="text-[#d19a66]">42</span>,</div>
-                    <div><span className="text-text-muted/40">5</span>  &#125;;</div>
-                  </div>
-                  <div className="bg-[#1D1D1D] p-3 font-mono text-[11px] leading-relaxed">
-                    <div><span className="text-text-muted/40">1</span>  <span className="text-[#d670ff]">const</span> <span className="text-[#61afef]">themePreview</span>: <span className="text-[#e5c07b]">ThemeConfig</span></div>
-                    <div><span className="text-text-muted/40">2</span>    surface: <span className="text-[#98c379]">"sidebar-elevated"</span>,</div>
-                    <div><span className="text-text-muted/40">3</span>    accent: <span className="text-[#98c379]">"#818cf8"</span>,</div>
-                    <div><span className="text-text-muted/40">4</span>    contrast: <span className="text-[#d19a66]">68</span>,</div>
-                    <div><span className="text-text-muted/40">5</span>  &#125;;</div>
-                  </div>
-                </div>
-
-                {/* Theme buttons */}
-                <div className="flex gap-2">
-                  {([
-                    { id: "neutral" as ThemeName, label: "Neutral" },
-                    { id: "blue" as ThemeName, label: "Blue" },
-                  ]).map((t) => (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-text">Theme</span>
+                  <div className="relative" ref={themeDropdownRef}>
                     <button
-                      key={t.id}
-                      onClick={() => setTheme(t.id)}
-                      className={cn(
-                        "rounded-xl px-4 py-2 text-xs font-medium transition-all",
-                        theme === t.id
-                          ? "bg-text text-bg"
-                          : "bg-surface text-text-muted hover:text-text",
-                      )}
+                      onClick={() => setShowThemeDropdown(!showThemeDropdown)}
+                      className="flex items-center gap-2 rounded-lg bg-surface px-2 py-1.5 cursor-pointer transition-colors hover:bg-surface-hover"
                     >
-                      {t.label}
+                      <div
+                        className="flex h-5 w-5 items-center justify-center rounded-md text-[8px] font-bold"
+                        style={{ backgroundColor: themeColors.userBubble, color: themeColors.accent }}
+                      >
+                        Aa
+                      </div>
+                      <span className="text-xs font-mono text-text-muted">{theme.charAt(0).toUpperCase() + theme.slice(1)}</span>
                     </button>
-                  ))}
+
+                    {showThemeDropdown && (
+                      <div
+                        className="absolute right-0 top-full mt-2 z-30 w-48 rounded-2xl p-1 shadow-2xl animate-[slideUp_150ms_ease-out]"
+                        style={{
+                          backgroundColor: "rgba(30, 30, 30, 0.85)",
+                          backdropFilter: "blur(20px) saturate(180%)",
+                          WebkitBackdropFilter: "blur(20px) saturate(180%)",
+                          border: "1px solid rgba(255, 255, 255, 0.08)",
+                        }}
+                      >
+                        {([
+                          { id: "neutral" as ThemeName, label: "Neutral", accent: "#d4d4d8", bubble: "#1D1D1D" },
+                          { id: "blue" as ThemeName, label: "Blue", accent: "#3b82f6", bubble: "#01366A" },
+                          { id: "claude" as ThemeName, label: "Claude", accent: "#d97706", bubble: "#2c2417" },
+                          { id: "cursor" as ThemeName, label: "Cursor", accent: "#22d3ee", bubble: "#0c2a33" },
+                          { id: "emerald" as ThemeName, label: "Emerald", accent: "#10b981", bubble: "#132a1f" },
+                          { id: "rose" as ThemeName, label: "Rose", accent: "#f43f5e", bubble: "#2a1318" },
+                          { id: "purple" as ThemeName, label: "Purple", accent: "#a855f7", bubble: "#1e1530" },
+                          { id: "sunset" as ThemeName, label: "Sunset", accent: "#f97316", bubble: "#2a1a0e" },
+                        ]).map((t) => (
+                          <button
+                            key={t.id}
+                            onClick={() => { setTheme(t.id); setShowThemeDropdown(false); }}
+                            className={cn(
+                              "flex w-full items-center gap-2.5 rounded-lg px-2 py-1 text-left transition-colors",
+                              theme === t.id ? "bg-white/10" : "hover:bg-white/6",
+                            )}
+                          >
+                            <div
+                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[8px] font-bold"
+                              style={{ backgroundColor: t.bubble, color: t.accent }}
+                            >
+                              Aa
+                            </div>
+                            <span className="text-[11px] font-medium text-text">{t.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 

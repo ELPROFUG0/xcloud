@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 
-export type ThemeName = "neutral" | "blue" | "custom";
+export type ThemeName = "neutral" | "blue" | "claude" | "cursor" | "emerald" | "rose" | "purple" | "sunset" | "custom";
 
 export interface ThemeColors {
   accent: string;
@@ -30,6 +30,60 @@ const THEMES: Record<Exclude<ThemeName, "custom">, ThemeColors> = {
     inlineCodeBg: "rgba(56, 139, 253, 0.1)",
     inlineCodeBorder: "rgba(56, 139, 253, 0.2)",
     inlineCodeColor: "#79c0ff",
+  },
+  claude: {
+    accent: "#d97706",
+    bg: "#141414",
+    text: "#e8e8e8",
+    userBubble: "#2c2417",
+    inlineCodeBg: "rgba(217, 119, 6, 0.1)",
+    inlineCodeBorder: "rgba(217, 119, 6, 0.2)",
+    inlineCodeColor: "#fbbf24",
+  },
+  cursor: {
+    accent: "#22d3ee",
+    bg: "#141414",
+    text: "#e8e8e8",
+    userBubble: "#0c2a33",
+    inlineCodeBg: "rgba(34, 211, 238, 0.08)",
+    inlineCodeBorder: "rgba(34, 211, 238, 0.15)",
+    inlineCodeColor: "#67e8f9",
+  },
+  emerald: {
+    accent: "#10b981",
+    bg: "#141414",
+    text: "#e8e8e8",
+    userBubble: "#132a1f",
+    inlineCodeBg: "rgba(16, 185, 129, 0.1)",
+    inlineCodeBorder: "rgba(16, 185, 129, 0.2)",
+    inlineCodeColor: "#6ee7b7",
+  },
+  rose: {
+    accent: "#f43f5e",
+    bg: "#141414",
+    text: "#e8e8e8",
+    userBubble: "#2a1318",
+    inlineCodeBg: "rgba(244, 63, 94, 0.1)",
+    inlineCodeBorder: "rgba(244, 63, 94, 0.2)",
+    inlineCodeColor: "#fda4af",
+  },
+  purple: {
+    accent: "#a855f7",
+    bg: "#141414",
+    text: "#e8e8e8",
+    userBubble: "#1e1530",
+    inlineCodeBg: "rgba(168, 85, 247, 0.1)",
+    inlineCodeBorder: "rgba(168, 85, 247, 0.2)",
+    inlineCodeColor: "#c4b5fd",
+  },
+  sunset: {
+    accent: "#f97316",
+    bg: "#141414",
+    text: "#e8e8e8",
+    userBubble: "#2a1a0e",
+    inlineCodeBg: "rgba(249, 115, 22, 0.1)",
+    inlineCodeBorder: "rgba(249, 115, 22, 0.2)",
+    inlineCodeColor: "#fdba74",
   },
 };
 
