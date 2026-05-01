@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
-import { Settings, Eye } from "lucide-react";
+import { Settings, Eye, Cpu, Key, Radio, Settings2 } from "lucide-react";
 import { HomeScreen } from "./home/HomeScreen";
 import { useSessions } from "@/hooks/use-sessions";
 import { ChatPanel } from "./chat/ChatPanel";
@@ -25,6 +25,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
   const [activeSessionKey, setActiveSessionKey] = useState<string | null>(null);
   const [showCanvas, setShowCanvas] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<"models" | "keys" | "channels" | "general">("models");
   const [showPreview, setShowPreview] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -162,14 +163,54 @@ export function AppLayout({ engine }: AppLayoutProps) {
       {/* 1. Sidebar — agent list */}
       <div className="flex h-full shrink-0 flex-col" style={{ width: sidebarCollapsed ? 0 : panelWidth, backgroundColor: "rgba(30,30,30,0.30)", overflow: "hidden", transition: isDragging ? "none" : "width 150ms ease" }}>
         <div className="flex flex-1 min-h-0 flex-col" style={{ minWidth: panelWidth }}>
-          <HomeScreen
-            agents={agents}
-            activeAgentId={hasChat ? currentAgentId : null}
-            onSelectAgent={handleSelectAgent}
-            onSelectSession={handleSelectSession}
-            getAgentSessions={getAgentSessions}
-            isFullscreen={isFullscreen}
-          />
+          {showSettings ? (
+            /* Settings navigation */
+            <div className="flex h-full flex-col">
+              <div className={`px-3 pb-2 ${isFullscreen ? "pt-12" : "pt-14"}`}>
+                <button
+                  onClick={() => setShowSettings(false)}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text-muted transition-colors hover:bg-white/6 hover:text-text"
+                >
+                  <Settings className="h-4 w-4" />
+                  <span className="text-[13px] font-medium">Back</span>
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto px-3">
+                <div className="px-2.5 pb-1 pt-2">
+                  <span className="text-[12px] font-medium text-text/90">Settings</span>
+                </div>
+                {([
+                  { id: "models" as const, label: "Models", icon: Cpu },
+                  { id: "keys" as const, label: "API Keys", icon: Key },
+                  { id: "channels" as const, label: "Channels", icon: Radio },
+                  { id: "general" as const, label: "General", icon: Settings2 },
+                ]).map((s) => {
+                  const Icon = s.icon;
+                  return (
+                    <button
+                      key={s.id}
+                      onClick={() => setSettingsSection(s.id)}
+                      className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors ${
+                        settingsSection === s.id ? "bg-white/8 text-text" : "text-text-muted hover:bg-white/6 hover:text-text"
+                      }`}
+                    >
+                      <Icon className="h-4 w-4" />
+                      <span className="font-medium">{s.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <HomeScreen
+              agents={agents}
+              activeAgentId={hasChat ? currentAgentId : null}
+              onSelectAgent={handleSelectAgent}
+              onSelectSession={handleSelectSession}
+              getAgentSessions={getAgentSessions}
+              isFullscreen={isFullscreen}
+            />
+          )}
         </div>
 
         {/* Sidebar footer */}
@@ -217,6 +258,15 @@ export function AppLayout({ engine }: AppLayoutProps) {
             await getCurrentWindow().startDragging();
           }}
         >
+          {showSettings ? (
+            /* Settings — fills entire card */
+            <div className="flex flex-1 min-w-0 justify-center overflow-y-auto">
+              <div className="w-full max-w-2xl px-6 py-6">
+                <SettingsPanel engine={engine} section={settingsSection} />
+              </div>
+            </div>
+          ) : (
+            <>
           {/* Chat */}
           <div className="flex flex-1 min-w-0 flex-col">
             {hasChat ? (
@@ -260,8 +310,8 @@ export function AppLayout({ engine }: AppLayoutProps) {
             }}
           >
             <div className="flex-1 min-h-0" style={{ minWidth: canvasWidth }}>
-              {/* Canvas — always mounted, hidden when settings/preview active */}
-              <div className="h-full" style={{ display: (showSettings || showPreview) ? "none" : undefined }}>
+              {/* Canvas — always mounted, hidden when preview active */}
+              <div className="h-full" style={{ display: showPreview ? "none" : undefined }}>
                 <AgentCanvas
                   key={currentAgentId}
                   engine={engine}
@@ -270,10 +320,11 @@ export function AppLayout({ engine }: AppLayoutProps) {
                   onViewportChange={(vp) => { canvasViewportRef.current[currentAgentId] = vp; }}
                 />
               </div>
-              {showSettings && <SettingsPanel engine={engine} />}
               {showPreview && <DevPreview />}
             </div>
           </div>
+            </>
+          )}
         </div>
       </div>
 
