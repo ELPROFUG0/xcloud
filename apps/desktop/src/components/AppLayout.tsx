@@ -78,7 +78,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
     const onMouseMove = (ev: MouseEvent) => {
       if (!draggingCanvas.current || !cardRef.current) return;
       const cardRect = cardRef.current.getBoundingClientRect();
-      const newWidth = Math.min(800, Math.max(250, cardRect.right - ev.clientX));
+      const newWidth = Math.min(cardRect.width - 200, Math.max(200, cardRect.right - ev.clientX));
       setCanvasWidth(newWidth);
     };
 
