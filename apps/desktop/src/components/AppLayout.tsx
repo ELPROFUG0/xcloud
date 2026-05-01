@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
-import { Settings, Eye, Cpu, Key, Radio, Settings2 } from "lucide-react";
+import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft } from "lucide-react";
 import { HomeScreen } from "./home/HomeScreen";
 import { useSessions } from "@/hooks/use-sessions";
 import { ChatPanel } from "./chat/ChatPanel";
@@ -166,39 +166,40 @@ export function AppLayout({ engine }: AppLayoutProps) {
           {showSettings ? (
             /* Settings navigation */
             <div className="flex h-full flex-col">
-              <div className={`px-3 pb-2 ${isFullscreen ? "pt-12" : "pt-14"}`}>
+              <div className={`px-3 pb-3 ${isFullscreen ? "pt-12" : "pt-14"}`}>
                 <button
                   onClick={() => setShowSettings(false)}
                   className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text-muted transition-colors hover:bg-white/6 hover:text-text"
                 >
-                  <Settings className="h-4 w-4" />
-                  <span className="text-[13px] font-medium">Back</span>
+                  <ArrowLeft className="h-4 w-4" />
+                  <span className="text-[13px] font-medium">Back to app</span>
                 </button>
               </div>
               <div className="flex-1 overflow-y-auto px-3">
-                <div className="px-2.5 pb-1 pt-2">
-                  <span className="text-[12px] font-medium text-text/90">Settings</span>
-                </div>
                 {([
-                  { id: "models" as const, label: "Models", icon: Cpu },
-                  { id: "keys" as const, label: "API Keys", icon: Key },
-                  { id: "channels" as const, label: "Channels", icon: Radio },
-                  { id: "general" as const, label: "General", icon: Settings2 },
+                  { id: "models" as const, label: "Models", icon: Layers },
+                  { id: "keys" as const, label: "API Keys", icon: KeyRound },
+                  { id: "channels" as const, label: "Channels", icon: Globe },
+                  { id: "general" as const, label: "General", icon: SlidersHorizontal },
                 ]).map((s) => {
                   const Icon = s.icon;
                   return (
                     <button
                       key={s.id}
                       onClick={() => setSettingsSection(s.id)}
-                      className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors ${
-                        settingsSection === s.id ? "bg-white/8 text-text" : "text-text-muted hover:bg-white/6 hover:text-text"
+                      className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-text transition-colors ${
+                        settingsSection === s.id ? "bg-white/8" : "hover:bg-white/6"
                       }`}
                     >
                       <Icon className="h-4 w-4" />
                       <span className="font-medium">{s.label}</span>
                     </button>
                   );
-                })}
+                }).reduce<React.ReactNode[]>((acc, el, i) => {
+                  if (i > 0) acc.push(<div key={`sep-${i}`} className="h-1" />);
+                  acc.push(el);
+                  return acc;
+                }, [])}
               </div>
             </div>
           ) : (
@@ -213,8 +214,8 @@ export function AppLayout({ engine }: AppLayoutProps) {
           )}
         </div>
 
-        {/* Sidebar footer */}
-        <div className="shrink-0 px-3 py-1.5" style={{ minWidth: panelWidth }}>
+        {/* Sidebar footer — hidden when settings open */}
+        <div className="shrink-0 px-3 py-1.5" style={{ minWidth: panelWidth, display: showSettings ? "none" : undefined }}>
           <div className="flex items-center justify-between">
             <button
               onClick={() => { setShowSettings(!showSettings); setShowPreview(false); }}
