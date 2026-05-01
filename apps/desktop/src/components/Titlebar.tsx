@@ -21,7 +21,7 @@ export function Titlebar({ onToggleSettings, onTogglePreview, settingsOpen, prev
   return (
     <div
       onMouseDown={startDrag}
-      className="flex h-9 shrink-0 items-center justify-end border-b border-border bg-bg px-3 cursor-default select-none"
+      className="flex h-9 shrink-0 items-center justify-end border-b border-white/5 px-3 cursor-default select-none"
     >
       <div className="flex items-center gap-1">
         {onTogglePreview && (

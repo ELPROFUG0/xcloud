@@ -1,4 +1,5 @@
 use std::process::Command as StdCommand;
+use tauri::Manager;
 
 #[tauri::command]
 fn run_shell(cmd: String) -> Result<String, String> {
@@ -8,7 +9,6 @@ fn run_shell(cmd: String) -> Result<String, String> {
         .output()
         .map_err(|e| format!("spawn failed: {}", e))?;
 
-    // Always return stdout, even on non-zero exit
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     if !stdout.is_empty() {
         Ok(stdout)
@@ -41,6 +41,20 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            let window = app.get_webview_window("main").unwrap();
+
+            #[cfg(target_os = "macos")]
+            {
+                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+                use window_vibrancy::NSVisualEffectState;
+                #[allow(deprecated)]
+                apply_vibrancy(&window, NSVisualEffectMaterial::UltraDark, Some(NSVisualEffectState::Active), None)
+                    .expect("Failed to apply vibrancy");
+            }
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![greet, run_shell, spawn_shell])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

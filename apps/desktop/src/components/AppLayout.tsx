@@ -100,8 +100,8 @@ export function AppLayout({ engine }: AppLayoutProps) {
         previewOpen={showPreview}
       />
       <div className="flex flex-1 min-h-0">
-        {/* Left panel */}
-        <div className="h-full shrink-0" style={{ width: panelWidth }}>
+        {/* Left panel — transparent to show vibrancy */}
+        <div className="h-full shrink-0" style={{ width: panelWidth, backgroundColor: "rgba(30,30,30,0.30)", borderRight: "1px solid rgba(255,255,255,0.06)" }}>
           {leftPanel}
         </div>
 
@@ -115,8 +115,8 @@ export function AppLayout({ engine }: AppLayoutProps) {
           </div>
         </div>
 
-        {/* Right panel */}
-        <div className="h-full flex-1 min-w-0">
+        {/* Right panel — solid */}
+        <div className="h-full flex-1 min-w-0 bg-bg">
           {rightPanel}
         </div>
       </div>

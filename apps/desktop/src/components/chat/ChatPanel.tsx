@@ -168,7 +168,7 @@ export function ChatPanel({ engine, agentId = "main", agentName, agents = [], on
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
-      <header className="relative flex h-9 shrink-0 items-center justify-between border-b border-border bg-bg px-3">
+      <header className="relative flex h-9 shrink-0 items-center justify-between border-b border-white/5 px-3">
         <div className="flex items-center gap-1.5">
           {onBack && (
             <button onClick={onBack} className="text-text-muted transition-colors hover:text-text mr-1">

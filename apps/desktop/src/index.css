@@ -18,8 +18,8 @@
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
 }
 
-body {
-  background-color: var(--color-bg);
+html, body {
+  background-color: transparent;
   color: var(--color-text);
   font-family: var(--font-sans);
   margin: 0;
