@@ -30,9 +30,19 @@ export function AppLayout({ engine }: AppLayoutProps) {
     return saved ? Number(saved) : 450;
   });
   const [isDragging, setIsDragging] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const canvasViewportRef = useRef<Record<string, { x: number; y: number; zoom: number }>>({});
   const dragging = useRef(false);
   const draggingCanvas = useRef(false);
+
+  // Detect fullscreen
+  useEffect(() => {
+    const win = getCurrentWindow();
+    const check = async () => setIsFullscreen(await win.isFullscreen());
+    check();
+    const unlisten = win.onResized(() => { check(); });
+    return () => { unlisten.then(fn => fn()); };
+  }, []);
 
   // Cmd+Shift+P to toggle dev preview
   useEffect(() => {
@@ -126,7 +136,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
       <button
         onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
         className="fixed z-20 flex h-6 w-6 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-white/8 hover:text-text"
-        style={{ top: 14, left: 88 }}
+        style={{ top: 14, left: isFullscreen ? 20 : 88 }}
         title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
       >
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.85 }}>
@@ -145,6 +155,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
             agents={agents}
             activeAgentId={hasChat ? currentAgentId : null}
             onSelectAgent={handleSelectAgent}
+            isFullscreen={isFullscreen}
           />
         </div>
 
@@ -204,6 +215,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
                 agents={agents}
                 onSwitchAgent={(id) => setActiveAgentId(id)}
                 sidebarCollapsed={sidebarCollapsed}
+                isFullscreen={isFullscreen}
               />
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-4 text-text-muted">

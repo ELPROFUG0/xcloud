@@ -6,16 +6,17 @@ interface HomeScreenProps {
   agents: AgentInfo[];
   activeAgentId?: string | null;
   onSelectAgent: (id: string) => void;
+  isFullscreen?: boolean;
 }
 
-export function HomeScreen({ agents, activeAgentId, onSelectAgent }: HomeScreenProps) {
+export function HomeScreen({ agents, activeAgentId, onSelectAgent, isFullscreen }: HomeScreenProps) {
   const mainAgent = agents.find((a) => a.isDefault) ?? agents[0];
   const otherAgents = agents.filter((a) => a.id !== mainAgent?.id);
 
   return (
     <div className="flex h-full flex-col">
       {/* Top actions — padded for macOS traffic lights */}
-      <div className="flex flex-col gap-1 px-3 pb-2 pt-14">
+      <div className={`flex flex-col gap-1 px-3 pb-2 ${isFullscreen ? "pt-12" : "pt-14"}`}>
         <button className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text transition-colors hover:bg-white/6">
           <MessageSquarePlus className="h-4 w-4" />
           <span className="text-[13px] font-medium">New chat</span>
