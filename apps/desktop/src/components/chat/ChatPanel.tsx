@@ -1,13 +1,15 @@
-import { useEffect, useLayoutEffect, useRef, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { useChat } from "@/hooks/use-chat";
 import { ToolCallBadge } from "./ToolCallBadge";
 import { ChatInput } from "./ChatInput";
-import { Bot } from "lucide-react";
+import { AgentAvatar } from "../ui/AgentAvatar";
 import type { ChatMessage } from "@/types/chat";
 import type { AgentInfo } from "@/hooks/use-agents";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { EmojiPicker } from "../ui/EmojiPicker";
+import { updateAgentEmoji } from "@/lib/update-identity";
 
 interface ChatPanelProps {
   engine: BrowserEngine;
@@ -18,6 +20,7 @@ interface ChatPanelProps {
   onSwitchAgent?: (id: string) => void;
   sidebarCollapsed?: boolean;
   isFullscreen?: boolean;
+  onRefresh?: () => Promise<void>;
 }
 
 interface Page {
@@ -39,7 +42,7 @@ function paginate(messages: ChatMessage[]): Page[] {
   return pages;
 }
 
-export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessionKey, agentName, agents = [], sidebarCollapsed, isFullscreen }: ChatPanelProps) {
+export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessionKey, agentName, agents = [], sidebarCollapsed, isFullscreen, onRefresh }: ChatPanelProps) {
   const defaultSessionKey = externalSessionKey ?? (agentId === "main" ? "main" : `agent:${agentId}:main`);
   const [activeSession, setActiveSession] = useState(defaultSessionKey);
 
@@ -72,6 +75,13 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
 
   const currentAgent = agents.find(a => a.id === agentId);
   const displayName = currentAgent?.name ?? agentName ?? agentId;
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+
+  const handleEmojiSelect = useCallback(async (emoji: string) => {
+    setShowEmojiPicker(false);
+    await updateAgentEmoji(agentId, emoji);
+    onRefresh?.();
+  }, [agentId, onRefresh]);
 
   if (loading) {
     return <div className="flex h-full flex-col bg-bg" />;
@@ -81,16 +91,27 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
     <div className="flex h-full flex-col">
       {/* Header */}
       <header className="flex h-9 shrink-0 items-center px-4 border-b border-border" style={{ paddingLeft: sidebarCollapsed ? (isFullscreen ? 50 : 110) : undefined, transition: "padding-left 150ms ease" }}>
-        <div className="flex items-center gap-2">
-          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-accent/15 text-accent">
-            {currentAgent?.emoji ? (
-              <span className="text-xs">{currentAgent.emoji}</span>
-            ) : (
-              <Bot className="h-3 w-3" />
-            )}
-          </div>
+        <div className="relative flex items-center gap-2">
+          <button
+            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+            className="shrink-0 rounded-lg transition-opacity hover:opacity-80"
+            title="Change avatar"
+          >
+            <AgentAvatar emoji={currentAgent?.emoji} avatar={currentAgent?.avatar} isMain={currentAgent?.isDefault} />
+          </button>
           <span className="text-[13px] font-medium text-text">{displayName}</span>
           {isStreaming && <span className="text-[10px] text-text-muted ml-1">typing...</span>}
+
+          {showEmojiPicker && (
+            <div className="absolute left-0 top-full mt-2 z-30">
+              <EmojiPicker
+                agentId={agentId}
+                onSelect={handleEmojiSelect}
+                onSelectImage={() => { setShowEmojiPicker(false); onRefresh?.(); }}
+                onClose={() => setShowEmojiPicker(false)}
+              />
+            </div>
+          )}
         </div>
       </header>
 
@@ -98,13 +119,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         {pages.length === 0 && !isStreaming && (
           <div className="flex h-full flex-col items-center justify-center gap-4 text-text-muted">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent/10">
-              {currentAgent?.emoji ? (
-                <span className="text-2xl">{currentAgent.emoji}</span>
-              ) : (
-                <Bot className="h-6 w-6 text-accent" />
-              )}
-            </div>
+            <AgentAvatar emoji={currentAgent?.emoji} avatar={currentAgent?.avatar} isMain={currentAgent?.isDefault} size="lg" />
             <div className="text-center">
               <p className="text-base font-medium text-text">{displayName}</p>
               <p className="mt-1 text-sm text-text-muted">How can I help you today?</p>
@@ -131,12 +146,8 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
                     </div>
                   ) : (
                     <div key={msg.id} className="flex gap-3">
-                      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-surface-hover mt-1">
-                        {currentAgent?.emoji ? (
-                          <span className="text-sm">{currentAgent.emoji}</span>
-                        ) : (
-                          <Bot className="h-3.5 w-3.5 text-text-muted" />
-                        )}
+                      <div className="mt-1">
+                        <AgentAvatar emoji={currentAgent?.emoji} avatar={currentAgent?.avatar} isMain={currentAgent?.isDefault} />
                       </div>
                       <div className="min-w-0 flex-1 text-[14px] leading-relaxed text-text prose-chat">
                         {msg.content ? (

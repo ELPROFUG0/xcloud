@@ -19,6 +19,14 @@
     {
       "identifier": "fs:allow-exists",
       "allow": [{ "path": "$HOME/**" }]
+    },
+    {
+      "identifier": "fs:allow-copy-file",
+      "allow": [{ "path": "$HOME/.openclaw/**" }]
+    },
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": [{ "path": "$HOME/.openclaw/**" }, { "path": "$HOME/**" }]
     }
   ]
 }

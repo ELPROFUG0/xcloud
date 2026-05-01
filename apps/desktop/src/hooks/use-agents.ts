@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
+import { resolveAvatarUrl } from "@/lib/avatar";
 
 export interface AgentInfo {
   id: string;
   name?: string;
   emoji?: string;
+  avatar?: string;
   workspace: string;
   model?: { primary?: string };
   isDefault?: boolean;
@@ -21,12 +23,14 @@ interface UseAgentsReturn {
 }
 
 /** Parse IDENTITY.md frontmatter-style fields */
-function parseIdentity(content: string): { name?: string; emoji?: string } {
-  const result: { name?: string; emoji?: string } = {};
+function parseIdentity(content: string): { name?: string; emoji?: string; avatar?: string } {
+  const result: { name?: string; emoji?: string; avatar?: string } = {};
   const nameMatch = content.match(/\*\*Name:\*\*\s*(.+)/i) ?? content.match(/^-\s*\*\*Name:\*\*\s*(.+)/mi);
   if (nameMatch) result.name = nameMatch[1]!.trim();
   const emojiMatch = content.match(/\*\*Emoji:\*\*\s*(.+)/i) ?? content.match(/^-\s*\*\*Emoji:\*\*\s*(.+)/mi);
   if (emojiMatch) result.emoji = emojiMatch[1]!.trim();
+  const avatarMatch = content.match(/\*\*Avatar:\*\*\s*(.+)/i) ?? content.match(/^-\s*\*\*Avatar:\*\*\s*(.+)/mi);
+  if (avatarMatch && avatarMatch[1]!.trim()) result.avatar = avatarMatch[1]!.trim();
   return result;
 }
 
@@ -68,14 +72,27 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
         readTextFile(wsPath, { baseDir: BaseDirectory.Home })
           .then((content) => {
             const identity = parseIdentity(content);
-            if (identity.name || identity.emoji) {
-              setAgents((prev) =>
-                prev.map((a) =>
-                  a.id === agent.id
-                    ? { ...a, name: identity.name ?? a.name, emoji: identity.emoji ?? a.emoji }
-                    : a,
-                ),
-              );
+            if (identity.name || identity.emoji || identity.avatar) {
+              // Resolve avatar URL if present
+              if (identity.avatar) {
+                resolveAvatarUrl(agent.id, identity.avatar).then((url) => {
+                  setAgents((prev) =>
+                    prev.map((a) =>
+                      a.id === agent.id
+                        ? { ...a, name: identity.name ?? a.name, emoji: identity.emoji ?? a.emoji, avatar: url }
+                        : a,
+                    ),
+                  );
+                }).catch(() => {});
+              } else {
+                setAgents((prev) =>
+                  prev.map((a) =>
+                    a.id === agent.id
+                      ? { ...a, name: identity.name ?? a.name, emoji: identity.emoji ?? a.emoji }
+                      : a,
+                  ),
+                );
+              }
             }
           })
           .catch(() => { /* IDENTITY.md may not exist */ });

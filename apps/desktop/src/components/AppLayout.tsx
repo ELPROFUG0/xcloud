@@ -19,7 +19,7 @@ const MAX_WIDTH = 400;
 const DEFAULT_WIDTH = 280;
 
 export function AppLayout({ engine }: AppLayoutProps) {
-  const { agents } = useAgents(engine);
+  const { agents, refresh: refreshAgents } = useAgents(engine);
   const { getAgentSessions } = useSessions(engine);
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
   const [activeSessionKey, setActiveSessionKey] = useState<string | null>(null);
@@ -210,6 +210,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
               onSelectSession={handleSelectSession}
               getAgentSessions={getAgentSessions}
               isFullscreen={isFullscreen}
+              onRefresh={refreshAgents}
             />
           )}
         </div>
@@ -281,6 +282,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
                 onSwitchAgent={(id) => setActiveAgentId(id)}
                 sidebarCollapsed={sidebarCollapsed}
                 isFullscreen={isFullscreen}
+                onRefresh={refreshAgents}
               />
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-4 text-text-muted">
