@@ -94,7 +94,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
   return (
     <div className="flex h-full">
       {/* Left panel — sidebar with vibrancy */}
-      <div className="flex h-full shrink-0 flex-col" style={{ width: panelWidth, backgroundColor: "rgba(30,30,30,0.30)", borderRight: "1px solid rgba(255,255,255,0.06)" }}>
+      <div className="flex h-full shrink-0 flex-col" style={{ width: panelWidth, backgroundColor: "rgba(30,30,30,0.30)" }}>
         {leftPanel}
       </div>
 
@@ -104,20 +104,22 @@ export function AppLayout({ engine }: AppLayoutProps) {
         className="relative z-10 h-full w-0 shrink-0 cursor-col-resize"
       >
         <div className="absolute -left-1.5 top-0 h-full w-3 group">
-          <div className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-border transition-colors group-hover:bg-accent" />
+          <div className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-accent" />
         </div>
       </div>
 
-      {/* Right panel — solid, with titlebar */}
-      <div className="flex h-full flex-1 min-w-0 flex-col bg-bg">
-        <Titlebar
-          onToggleSettings={() => { setShowSettings(!showSettings); setShowPreview(false); }}
-          onTogglePreview={() => { setShowPreview(!showPreview); setShowSettings(false); }}
-          settingsOpen={showSettings}
-          previewOpen={showPreview}
-        />
-        <div className="flex-1 min-h-0">
-          {rightPanel}
+      {/* Right panel — solid, rounded card with padding */}
+      <div className="flex h-full flex-1 min-w-0 flex-col py-2 pr-2" style={{ backgroundColor: "rgba(30,30,30,0.30)" }}>
+        <div className="flex flex-1 min-h-0 flex-col rounded-xl bg-bg overflow-hidden">
+          <Titlebar
+            onToggleSettings={() => { setShowSettings(!showSettings); setShowPreview(false); }}
+            onTogglePreview={() => { setShowPreview(!showPreview); setShowSettings(false); }}
+            settingsOpen={showSettings}
+            previewOpen={showPreview}
+          />
+          <div className="flex-1 min-h-0">
+            {rightPanel}
+          </div>
         </div>
       </div>
     </div>
