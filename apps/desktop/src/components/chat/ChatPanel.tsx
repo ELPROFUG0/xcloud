@@ -138,7 +138,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
                 onMouseEnter={() => setHoveredMsgId(page.userMessage.id)}
                 onMouseLeave={() => setHoveredMsgId(null)}
               >
-                <div className="max-w-[85%] rounded-2xl bg-user-bubble px-4 py-3 text-[14px] leading-relaxed text-text break-words overflow-hidden">
+                <div className="max-w-[85%] rounded-2xl bg-user-bubble px-4 py-2 text-[13px] leading-relaxed text-text break-words overflow-hidden">
                   {page.userMessage.content}
                 </div>
                 <div className={`flex items-center gap-1 mt-1 ${hoveredMsgId === page.userMessage.id ? "visible" : "invisible"}`}>
@@ -160,7 +160,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
                       onMouseEnter={() => setHoveredMsgId(msg.id)}
                       onMouseLeave={() => setHoveredMsgId(null)}
                     >
-                      <div className="text-[14px] leading-relaxed text-text prose-chat">
+                      <div className="text-[13px] leading-relaxed text-text prose-chat">
                         {msg.content ? (
                           <MessageBubbleContent content={msg.content} />
                         ) : (
