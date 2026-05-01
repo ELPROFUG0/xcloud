@@ -26,6 +26,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
   const [showPreview, setShowPreview] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const dragging = useRef(false);
 
   // Cmd+Shift+P to toggle dev preview
@@ -43,6 +44,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     dragging.current = true;
+    setIsDragging(true);
 
     const onMouseMove = (e: MouseEvent) => {
       if (!dragging.current) return;
@@ -52,6 +54,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
 
     const onMouseUp = () => {
       dragging.current = false;
+      setIsDragging(false);
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
       document.body.style.cursor = "";
@@ -107,7 +110,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
       </button>
 
       {/* Left panel — sidebar with vibrancy */}
-      <div className="flex h-full shrink-0 flex-col" style={{ width: sidebarCollapsed ? 0 : panelWidth, backgroundColor: "rgba(30,30,30,0.30)", overflow: "hidden", transition: "width 150ms ease" }}>
+      <div className="flex h-full shrink-0 flex-col" style={{ width: sidebarCollapsed ? 0 : panelWidth, backgroundColor: "rgba(30,30,30,0.30)", overflow: "hidden", transition: isDragging ? "none" : "width 150ms ease" }}>
         <div className="flex flex-1 min-h-0 flex-col" style={{ minWidth: panelWidth }}>
           {leftPanel}
         </div>
