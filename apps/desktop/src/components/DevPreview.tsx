@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { ToolCallBadge } from "./chat/ToolCallBadge";
 import { MessageBubble } from "./chat/MessageBubble";
+import { Shimmer } from "./ai-elements/shimmer";
+import { ThinkingBlock } from "./chat/ThinkingBlock";
 import type { ToolCallInfo } from "@/types/chat";
 import type { ChatMessage } from "@/types/chat";
 
@@ -55,6 +57,25 @@ export function DevPreview() {
           <h1 className="text-lg font-semibold text-text mb-1">Component Preview</h1>
           <p className="text-xs text-text-muted">Live preview of chat components. Tools cycle through states automatically.</p>
         </div>
+
+        {/* Shimmer */}
+        <section>
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-text-muted mb-3">Shimmer</h2>
+          <div className="space-y-3">
+            <Shimmer className="text-sm" duration={1.5}>Thinking...</Shimmer>
+            <Shimmer className="text-base" duration={2}>Analyzing your code and preparing a response</Shimmer>
+            <Shimmer className="text-xs" duration={1}>Loading</Shimmer>
+          </div>
+        </section>
+
+        {/* Thinking Block */}
+        <section>
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-text-muted mb-3">Thinking Block</h2>
+          <div className="space-y-3">
+            <ThinkingBlock thinking="The user wants me to list files in the current directory. I should use the exec tool with the ls command to show them the directory contents. Let me also check if there are any hidden files that might be relevant." />
+            <ThinkingBlock thinking="Analyzing the error... The issue is in the useEffect hook where the dependency array is missing the 'count' variable." isStreaming />
+          </div>
+        </section>
 
         {/* Tool Badges */}
         <section>

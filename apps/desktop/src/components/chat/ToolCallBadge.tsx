@@ -1,16 +1,17 @@
-import { useState } from "react";
 import { cn } from "@/lib/cn";
 import type { ToolCallInfo } from "@/types/chat";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import {
   Terminal, FileText, Search, Globe, Code,
-  FolderOpen, Pencil, Database, Zap, ChevronRight, type LucideIcon,
+  FolderOpen, Pencil, Database, Zap, ChevronDown,
+  type LucideIcon,
 } from "lucide-react";
+import { Shimmer } from "../ai-elements/shimmer";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface ToolCallBadgeProps {
   tool: ToolCallInfo;
-  /** Text that belongs to this tool's response — shown inside the container */
   textContent?: string;
   isTextStreaming?: boolean;
 }
@@ -35,99 +36,93 @@ export function ToolCallBadge({ tool, textContent, isTextStreaming }: ToolCallBa
   const Icon = getToolIcon(tool.name);
   const isRunning = tool.status === "running";
   const isDone = tool.status === "done";
-  const isError = tool.status === "error";
   const hasOutput = !!tool.output?.trim();
   const hasText = !!textContent;
-  const [outputExpanded, setOutputExpanded] = useState(false);
+  const canExpand = hasOutput || hasText || isTextStreaming;
 
   const label = tool.title
     ? tool.title.replace(/^(exec|read|write|edit|search|grep|glob)\s*/i, "").trim() || tool.name
     : tool.name;
 
   return (
-    <div className={cn(
-      "relative overflow-hidden rounded-lg transition-all duration-300",
-      isRunning && "bg-tool-bg",
-      isDone && "bg-[#1a1a1a]",
-      isError && "bg-[#201414]",
-    )}>
-      {/* Shimmer */}
-      {isRunning && (
-        <div className="pointer-events-none absolute inset-0 animate-[shimmer_2s_ease-in-out_infinite]">
-          <div className="h-full w-full bg-linear-to-r from-transparent via-white/6 to-transparent" />
-        </div>
-      )}
+    <Collapsible>
+      <div className="my-1.5 rounded-xl bg-[#1D1D1D] overflow-hidden transition-all">
+        <CollapsibleTrigger
+          className={cn(
+            "relative flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-white/4",
+            !canExpand && "cursor-default",
+          )}
+          disabled={!canExpand}
+        >
+          {/* Tool icon */}
+          <Icon className="h-3.5 w-3.5 shrink-0 text-text-muted" />
 
-      {/* Left accent bar */}
-      <div className={cn(
-        "absolute left-0 top-0 h-full w-[2px] transition-colors duration-500",
-        isRunning && "bg-accent/60",
-        isDone && "bg-[#444]",
-        isError && "bg-red-500/40",
-      )} />
+          {/* Tool name */}
+          {isRunning ? (
+            <Shimmer className="text-[12px] font-mono font-medium" duration={1.5}>{tool.name}</Shimmer>
+          ) : (
+            <code className="text-[12px] font-mono font-medium text-text">{tool.name}</code>
+          )}
 
-      {/* Header */}
-      <button
-        onClick={() => hasOutput && setOutputExpanded(!outputExpanded)}
-        className={cn(
-          "relative z-10 flex w-full items-center gap-2 px-3 py-1.5 text-[11px] text-left",
-          hasOutput ? "cursor-pointer" : "cursor-default",
-          isRunning && "text-[#8b8eff]",
-          isDone && "text-[#666]",
-          isError && "text-red-400/70",
-        )}
-      >
-        {hasOutput && (
-          <ChevronRight className={cn(
-            "h-2.5 w-2.5 shrink-0 transition-transform duration-200",
-            outputExpanded && "rotate-90",
-          )} />
-        )}
+          {/* Label */}
+          {isRunning ? (
+            <span className="flex-1 truncate">
+              <Shimmer className="text-[12px]" duration={2}>{label !== tool.name ? label : ""}</Shimmer>
+            </span>
+          ) : (
+            <span className="flex-1 truncate text-[12px] text-text-muted/70">
+              {label !== tool.name ? label : ""}
+            </span>
+          )}
 
-        {isRunning ? (
-          <Icon className="h-3 w-3 shrink-0 animate-pulse" />
-        ) : (
-          <Icon className="h-3 w-3 shrink-0 opacity-50" />
-        )}
+          {/* Status */}
+          {isRunning ? (
+            <Shimmer className="text-[10px]" duration={1.5}>running...</Shimmer>
+          ) : (
+            <span className="shrink-0 text-[10px] text-text-muted/50">
+              {isDone ? "done" : "error"}
+            </span>
+          )}
 
-        <span className={cn("truncate max-w-[300px]", isRunning && "font-medium")}>
-          {label}
-        </span>
+          {/* Chevron */}
+          {canExpand && (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-text-muted/40 transition-transform group-data-[state=open]:rotate-180" />
+          )}
+        </CollapsibleTrigger>
 
-        {isRunning && (
-          <span className="ml-0.5 flex h-1.5 w-1.5 shrink-0">
-            <span className="absolute inline-flex h-1.5 w-1.5 animate-ping rounded-full bg-accent/50" />
-            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-accent/80" />
-          </span>
-        )}
-      </button>
+        <CollapsibleContent
+          className="overflow-hidden data-[state=closed]:animate-[collapsible-up_250ms_cubic-bezier(0.4,0,0.2,1)] data-[state=open]:animate-[collapsible-down_300ms_cubic-bezier(0.4,0,0.2,1)]"
+        >
+          <div className="mx-3 pb-2.5 pt-1 space-y-2.5">
+            {/* Output */}
+            {hasOutput && (
+              <div>
+                <pre className="max-h-[200px] overflow-auto whitespace-pre-wrap break-all rounded-lg bg-black/20 px-3 py-2.5 font-mono text-[11px] leading-relaxed text-text-muted/80">
+                  {tool.output}
+                </pre>
+              </div>
+            )}
 
-      {/* Command output (collapsible) */}
-      {outputExpanded && hasOutput && (
-        <div className="relative z-10 border-t border-border mx-3 py-2">
-          <pre className="max-h-[200px] overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed text-[#666]">
-            {tool.output}
-          </pre>
-        </div>
-      )}
-
-      {/* Text response inside tool container */}
-      {(hasText || isTextStreaming) && (
-        <div className="relative z-10 border-t border-border mx-3 py-2">
-          {textContent ? (
-            <div className="text-[13px] leading-relaxed text-[#D4D4D4] prose-chat">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {textContent}
-              </ReactMarkdown>
-              {isTextStreaming && (
-                <span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse bg-accent" />
-              )}
-            </div>
-          ) : isTextStreaming ? (
-            <span className="text-text-muted italic text-[12px]">Thinking...</span>
-          ) : null}
-        </div>
-      )}
-    </div>
+            {/* Text response */}
+            {(hasText || isTextStreaming) && (
+              <div>
+                {textContent ? (
+                  <div className="text-[13px] leading-relaxed text-text prose-chat">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {textContent}
+                    </ReactMarkdown>
+                    {isTextStreaming && (
+                      <span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse bg-accent" />
+                    )}
+                  </div>
+                ) : isTextStreaming ? (
+                  <span className="text-text-muted italic text-[12px]">Thinking...</span>
+                ) : null}
+              </div>
+            )}
+          </div>
+        </CollapsibleContent>
+      </div>
+    </Collapsible>
   );
 }

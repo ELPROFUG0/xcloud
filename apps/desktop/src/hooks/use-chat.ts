@@ -64,7 +64,7 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
 
           // First pass: parse all messages, collect toolResult outputs
           const toolOutputs = new Map<string, string>();
-          const parsed: Array<{ role: string; content: string; tools: ToolCallInfo[]; timestamp: number }> = [];
+          const parsed: Array<{ role: string; content: string; thinking?: string; tools: ToolCallInfo[]; timestamp: number }> = [];
 
           // Pre-scan for toolResult outputs (they follow assistant messages with toolCall)
           for (let i = 0; i < history.length; i++) {
@@ -94,16 +94,23 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
             if (m.role !== "user" && m.role !== "assistant") continue;
 
             let content = "";
+            let thinking = "";
             const msgTools: ToolCallInfo[] = [];
 
             if (typeof m.content === "string") {
               content = m.content;
             } else if (Array.isArray(m.content)) {
-              const blocks = m.content as Array<{ type: string; text?: string; name?: string; id?: string; arguments?: Record<string, unknown> }>;
+              const blocks = m.content as Array<{ type: string; text?: string; thinking?: string; name?: string; id?: string; arguments?: Record<string, unknown> }>;
               content = blocks
                 .filter(b => b.type === "text" && b.text)
                 .map(b => b.text)
                 .join("");
+
+              // Extract thinking blocks
+              thinking = blocks
+                .filter(b => b.type === "thinking" && b.thinking)
+                .map(b => b.thinking)
+                .join("\n");
 
               if (m.role === "assistant") {
                 for (const block of blocks) {
@@ -122,7 +129,7 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
               }
             }
 
-            parsed.push({ role: m.role, content, tools: msgTools, timestamp: m.timestamp ?? Date.now() });
+            parsed.push({ role: m.role, content, thinking, tools: msgTools, timestamp: m.timestamp ?? Date.now() });
           }
 
           // Second pass: build interleaved messages (tool messages + text messages)
@@ -156,11 +163,12 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
               pendingTools = [];
 
               // Add text message if has content
-              if (p.content.length > 0) {
+              if (p.content.length > 0 || p.thinking) {
                 loaded.push({
                   id: `history-${i}`,
                   role: "assistant",
                   content: p.content,
+                  thinking: p.thinking || undefined,
                   timestamp: p.timestamp,
                 });
               }

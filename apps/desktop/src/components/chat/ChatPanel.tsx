@@ -5,11 +5,14 @@ import { ToolCallBadge } from "./ToolCallBadge";
 import { Check } from "lucide-react";
 import { ChatInput } from "./ChatInput";
 import { AgentAvatar } from "../ui/AgentAvatar";
+import { Shimmer } from "../ai-elements/shimmer";
+import { ThinkingBlock } from "./ThinkingBlock";
 import type { ChatMessage } from "@/types/chat";
 import type { AgentInfo } from "@/hooks/use-agents";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
+import { CodeBlock, CodeBlockHeader, CodeBlockTitle, CodeBlockFilename, CodeBlockActions, CodeBlockCopyButton } from "../ai/code-block";
+import type { BundledLanguage } from "shiki";
 import { EmojiPicker } from "../ui/EmojiPicker";
 import { updateAgentEmoji } from "@/lib/update-identity";
 
@@ -161,12 +164,15 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
                       onMouseEnter={() => setHoveredMsgId(msg.id)}
                       onMouseLeave={() => setHoveredMsgId(null)}
                     >
+                      {msg.thinking && (
+                        <ThinkingBlock thinking={msg.thinking} isStreaming={msg.isStreaming && !msg.content} />
+                      )}
                       <div className="text-[13px] leading-relaxed text-text prose-chat">
                         {msg.content ? (
                           <MessageBubbleContent content={msg.content} />
-                        ) : (
-                          <span className="text-text-muted italic">Thinking...</span>
-                        )}
+                        ) : msg.isStreaming ? (
+                          <Shimmer className="text-[13px]" duration={1.5}>Thinking...</Shimmer>
+                        ) : null}
                         {msg.isStreaming && msg.content && (
                           <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-accent" />
                         )}
@@ -234,9 +240,35 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const markdownComponents: any = {
+  pre({ children }: { children: React.ReactNode }) {
+    return <>{children}</>;
+  },
+  code({ className, children }: { className?: string; children?: React.ReactNode }) {
+    const match = /language-(\w+)/.exec(className ?? "");
+    const codeStr = String(children).replace(/\n$/, "");
+    if (match) {
+      return (
+        <CodeBlock code={codeStr} language={match[1] as BundledLanguage}>
+          <CodeBlockHeader>
+            <CodeBlockTitle>
+              <CodeBlockFilename>{match[1]}</CodeBlockFilename>
+            </CodeBlockTitle>
+            <CodeBlockActions>
+              <CodeBlockCopyButton />
+            </CodeBlockActions>
+          </CodeBlockHeader>
+        </CodeBlock>
+      );
+    }
+    return <code className={className}>{children}</code>;
+  },
+};
+
 const MessageBubbleContent = memo(function MessageBubbleContent({ content }: { content: string }) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
       {content}
     </ReactMarkdown>
   );
