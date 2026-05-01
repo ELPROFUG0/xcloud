@@ -92,31 +92,31 @@ export function AppLayout({ engine }: AppLayoutProps) {
   );
 
   return (
-    <div className="flex h-full flex-col">
-      <Titlebar
-        onToggleSettings={() => { setShowSettings(!showSettings); setShowPreview(false); }}
-        onTogglePreview={() => { setShowPreview(!showPreview); setShowSettings(false); }}
-        settingsOpen={showSettings}
-        previewOpen={showPreview}
-      />
-      <div className="flex flex-1 min-h-0">
-        {/* Left panel — transparent to show vibrancy */}
-        <div className="h-full shrink-0" style={{ width: panelWidth, backgroundColor: "rgba(30,30,30,0.30)", borderRight: "1px solid rgba(255,255,255,0.06)" }}>
-          {leftPanel}
-        </div>
+    <div className="flex h-full">
+      {/* Left panel — sidebar with vibrancy */}
+      <div className="flex h-full shrink-0 flex-col" style={{ width: panelWidth, backgroundColor: "rgba(30,30,30,0.30)", borderRight: "1px solid rgba(255,255,255,0.06)" }}>
+        {leftPanel}
+      </div>
 
-        {/* Resize handle — overlaps edges, no extra gap */}
-        <div
-          onMouseDown={onMouseDown}
-          className="relative z-10 h-full w-0 shrink-0 cursor-col-resize"
-        >
-          <div className="absolute -left-1.5 top-0 h-full w-3 group">
-            <div className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-border transition-colors group-hover:bg-accent" />
-          </div>
+      {/* Resize handle — overlaps edges, no extra gap */}
+      <div
+        onMouseDown={onMouseDown}
+        className="relative z-10 h-full w-0 shrink-0 cursor-col-resize"
+      >
+        <div className="absolute -left-1.5 top-0 h-full w-3 group">
+          <div className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-border transition-colors group-hover:bg-accent" />
         </div>
+      </div>
 
-        {/* Right panel — solid */}
-        <div className="h-full flex-1 min-w-0 bg-bg">
+      {/* Right panel — solid, with titlebar */}
+      <div className="flex h-full flex-1 min-w-0 flex-col bg-bg">
+        <Titlebar
+          onToggleSettings={() => { setShowSettings(!showSettings); setShowPreview(false); }}
+          onTogglePreview={() => { setShowPreview(!showPreview); setShowSettings(false); }}
+          settingsOpen={showSettings}
+          previewOpen={showPreview}
+        />
+        <div className="flex-1 min-h-0">
           {rightPanel}
         </div>
       </div>
