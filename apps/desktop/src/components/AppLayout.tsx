@@ -215,25 +215,29 @@ export function AppLayout({ engine }: AppLayoutProps) {
           </div>
 
           {/* Canvas / Settings / Preview */}
+          {/* Resize handle — only when panel is open */}
           {showThirdPanel && (
-            <>
-              {/* Resize handle */}
-              <div
-                onMouseDown={onCanvasMouseDown}
-                data-interactive
-                className="relative z-10 h-full w-0 shrink-0 cursor-col-resize"
-              >
-                <div className="absolute -left-1.5 top-0 h-full w-3 group">
-                  <div className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-border/30 transition-colors group-hover:bg-accent" />
-                </div>
+            <div
+              onMouseDown={onCanvasMouseDown}
+              data-interactive
+              className="relative z-10 h-full w-0 shrink-0 cursor-col-resize"
+            >
+              <div className="absolute -left-1.5 top-0 h-full w-3 group">
+                <div className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-border/30 transition-colors group-hover:bg-accent" />
               </div>
-              <div className="flex h-full shrink-0 flex-col" style={{ width: canvasWidth }}>
-                <div className="flex-1 min-h-0">
-                  {thirdPanel}
-                </div>
-              </div>
-            </>
+            </div>
           )}
+          <div
+            className="flex h-full shrink-0 flex-col overflow-hidden"
+            style={{
+              width: showThirdPanel ? canvasWidth : 0,
+              transition: isDragging ? "none" : "width 200ms cubic-bezier(0.4, 0, 0.2, 1)",
+            }}
+          >
+            <div className="flex-1 min-h-0" style={{ minWidth: canvasWidth }}>
+              {thirdPanel}
+            </div>
+          </div>
         </div>
       </div>
 
