@@ -1,4 +1,6 @@
 import { useState, useCallback } from "react";
+import { useTheme, type ThemeName, type ThemeColors } from "@/hooks/use-theme";
+import { RotateCcw } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/cn";
 import type { BrowserEngine } from "@/lib/engine";
@@ -50,7 +52,7 @@ interface SettingsPanelProps {
   onBack?: () => void;
 }
 
-type Section = "models" | "keys" | "channels" | "general";
+type Section = "models" | "keys" | "channels" | "appearance" | "general";
 
 interface KeyState {
   value: string;
@@ -248,6 +250,7 @@ export function SettingsPanel({ engine, section: externalSection }: SettingsPane
   const [internalSection, setSection] = useState<Section>("models");
   const section = externalSection ?? internalSection;
   const { providers, currentModel, loading, setModel } = useModels(engine);
+  const { theme, setTheme, colors: themeColors, setColor, resetColor, isCustomized, contrast, setContrast } = useTheme();
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [keys, setKeys] = useState<Record<string, KeyState>>({});
@@ -670,6 +673,122 @@ export function SettingsPanel({ engine, section: externalSection }: SettingsPane
               </div>
             );
           })()}
+
+          {/* Appearance */}
+          {section === "appearance" && (
+            <div className="space-y-4">
+              {/* Theme */}
+              <div className="rounded-lg bg-container p-4">
+                <h4 className="text-[13px] font-medium mb-1">Theme</h4>
+                <p className="text-xs text-text-muted mb-4">Choose your preferred color scheme</p>
+
+                {/* Code preview */}
+                <div className="grid grid-cols-2 gap-2 mb-4 rounded-lg overflow-hidden">
+                  <div className="bg-[#1D1D1D] p-3 font-mono text-[11px] leading-relaxed">
+                    <div><span className="text-text-muted/40">1</span>  <span className="text-[#d670ff]">const</span> <span className="text-[#61afef]">themePreview</span>: <span className="text-[#e5c07b]">ThemeConfig</span></div>
+                    <div><span className="text-text-muted/40">2</span>    surface: <span className="text-[#98c379]">"sidebar"</span>,</div>
+                    <div><span className="text-text-muted/40">3</span>    accent: <span className="text-[#98c379]">"#6366f1"</span>,</div>
+                    <div><span className="text-text-muted/40">4</span>    contrast: <span className="text-[#d19a66]">42</span>,</div>
+                    <div><span className="text-text-muted/40">5</span>  &#125;;</div>
+                  </div>
+                  <div className="bg-[#1D1D1D] p-3 font-mono text-[11px] leading-relaxed">
+                    <div><span className="text-text-muted/40">1</span>  <span className="text-[#d670ff]">const</span> <span className="text-[#61afef]">themePreview</span>: <span className="text-[#e5c07b]">ThemeConfig</span></div>
+                    <div><span className="text-text-muted/40">2</span>    surface: <span className="text-[#98c379]">"sidebar-elevated"</span>,</div>
+                    <div><span className="text-text-muted/40">3</span>    accent: <span className="text-[#98c379]">"#818cf8"</span>,</div>
+                    <div><span className="text-text-muted/40">4</span>    contrast: <span className="text-[#d19a66]">68</span>,</div>
+                    <div><span className="text-text-muted/40">5</span>  &#125;;</div>
+                  </div>
+                </div>
+
+                {/* Theme buttons */}
+                <div className="flex gap-2">
+                  {([
+                    { id: "neutral" as ThemeName, label: "Neutral" },
+                    { id: "blue" as ThemeName, label: "Blue" },
+                  ]).map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => setTheme(t.id)}
+                      className={cn(
+                        "rounded-xl px-4 py-2 text-xs font-medium transition-all",
+                        theme === t.id
+                          ? "bg-text text-bg"
+                          : "bg-surface text-text-muted hover:text-text",
+                      )}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Colors */}
+              <div className="rounded-lg bg-container p-4">
+                <h4 className="text-[13px] font-medium mb-3">Colors</h4>
+                {([
+                  { label: "Accent", key: "accent" as keyof ThemeColors },
+                  { label: "Chat bubble", key: "userBubble" as keyof ThemeColors },
+                  { label: "Inline code", key: "inlineCodeColor" as keyof ThemeColors },
+                ]).map((item, i, arr) => (
+                  <div key={item.key} className={cn("flex items-center justify-between py-3", i < arr.length - 1 && "border-b border-border/50")}>
+                    <span className="text-sm text-text">{item.label}</span>
+                    <div className="flex items-center gap-2">
+                      {isCustomized(item.key) && (
+                        <button
+                          onClick={() => resetColor(item.key)}
+                          className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition-colors hover:text-text hover:bg-white/8"
+                          title="Reset to default"
+                        >
+                          <RotateCcw className="h-4 w-4" strokeWidth={2.5} />
+                        </button>
+                      )}
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <div className="relative h-5 w-5 rounded-full overflow-hidden" style={{ backgroundColor: themeColors[item.key] }}>
+                          <input
+                            type="color"
+                            value={themeColors[item.key]}
+                            onChange={(e) => setColor(item.key, e.target.value)}
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                          />
+                        </div>
+                        <span className="rounded-lg bg-surface px-3 py-1.5 text-xs font-mono text-text-muted">{themeColors[item.key].toUpperCase()}</span>
+                      </label>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Typography & Display */}
+              <div className="rounded-lg bg-container p-4">
+                <h4 className="text-[13px] font-medium mb-3">Display</h4>
+
+                <div className="flex items-center justify-between py-3 border-b border-border/50">
+                  <span className="text-sm text-text">UI font</span>
+                  <span className="text-xs text-text-muted">Inter</span>
+                </div>
+
+                <div className="flex items-center justify-between py-3 border-b border-border/50">
+                  <span className="text-sm text-text">Code font</span>
+                  <span className="text-xs text-text-muted font-mono">JetBrains Mono</span>
+                </div>
+
+                <div className="flex items-center justify-between py-3">
+                  <span className="text-sm text-text">Contrast</span>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={contrast}
+                      onChange={(e) => setContrast(Number(e.target.value))}
+                      className="w-32 accent-accent appearance-none h-1 rounded-full bg-white/10 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-text [&::-webkit-slider-thumb]:cursor-pointer"
+                    />
+                    <span className="text-xs text-text-muted w-6 text-right">{contrast}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* General */}
           {section === "general" && (
