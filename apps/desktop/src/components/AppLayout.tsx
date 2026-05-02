@@ -355,6 +355,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
                   key={currentAgentId}
                   engine={engine}
                   agentId={currentAgentId}
+                  agentAvatar={agents.find(a => a.id === currentAgentId)?.avatar}
                   savedViewport={canvasViewportRef.current[currentAgentId]}
                   onViewportChange={(vp) => { canvasViewportRef.current[currentAgentId] = vp; }}
                   onNodeDetail={setNodeDetail}

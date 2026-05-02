@@ -16,6 +16,7 @@ export interface DetailPanel {
 interface AgentCanvasProps {
   engine: BrowserEngine;
   agentId: string;
+  agentAvatar?: string;
   savedViewport?: { x: number; y: number; zoom: number };
   onViewportChange?: (vp: { x: number; y: number; zoom: number }) => void;
   onNodeDetail?: (detail: DetailPanel | null) => void;
@@ -68,7 +69,7 @@ function parseSoul(content: string): string[] {
   return traits.slice(0, 6);
 }
 
-export function AgentCanvas({ engine, agentId, onNodeDetail }: AgentCanvasProps) {
+export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail }: AgentCanvasProps) {
   const wsPath = agentId === "main" ? ".openclaw/workspace" : `.openclaw/workspace/${agentId}`;
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<any>(null);
@@ -89,6 +90,17 @@ export function AgentCanvas({ engine, agentId, onNodeDetail }: AgentCanvasProps)
   const labelOffsets = useRef<Record<string, number>>({});
   const animFrameRef = useRef<number>(0);
   const [, forceRender] = useState(0);
+  const avatarImg = useRef<HTMLImageElement | null>(null);
+  const [avatarLoaded, setAvatarLoaded] = useState(false);
+
+  // Load avatar image
+  useEffect(() => {
+    if (!agentAvatar) { avatarImg.current = null; setAvatarLoaded(false); return; }
+    const img = new Image();
+    img.onload = () => { avatarImg.current = img; setAvatarLoaded(true); };
+    img.onerror = () => { avatarImg.current = null; };
+    img.src = agentAvatar;
+  }, [agentAvatar]);
 
   // Animate hover intensity — force repaints during transition
   useEffect(() => {
@@ -223,7 +235,7 @@ export function AgentCanvas({ engine, agentId, onNodeDetail }: AgentCanvasProps)
     const nodes: GraphNode[] = [];
     const links: GraphLink[] = [];
 
-    nodes.push({ id: "agent", label: agentData.identity.name || agentId, color: NODE_COLORS.agent!, size: 10, isCenter: true });
+    nodes.push({ id: "agent", label: agentData.identity.name || agentId, color: NODE_COLORS.agent!, size: 10, isCenter: true, emoji: agentData.identity.emoji || undefined });
     nodes.push({ id: "trigger", label: "Chat", color: NODE_COLORS.trigger!, size: 5 });
     links.push({ source: "agent", target: "trigger" });
 
@@ -312,6 +324,24 @@ export function AgentCanvas({ engine, agentId, onNodeDetail }: AgentCanvasProps)
     ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
     ctx.fillStyle = `rgb(${brightness}, ${brightness}, ${brightness})`;
     ctx.fill();
+
+    // Avatar or emoji on center node
+    if (n.isCenter) {
+      if (avatarLoaded && avatarImg.current) {
+        // Clip to circle and draw image
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, r - 1, 0, 2 * Math.PI);
+        ctx.clip();
+        ctx.drawImage(avatarImg.current, n.x - r + 1, n.y - r + 1, (r - 1) * 2, (r - 1) * 2);
+        ctx.restore();
+      } else if (n.emoji) {
+        ctx.font = `${r * 1.2}px sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(n.emoji, n.x, n.y);
+      }
+    }
 
     // Label — hide when zoomed out
     if (globalScale > 0.4) {
