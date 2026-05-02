@@ -180,10 +180,23 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
         setDetail({ title: "Identity", type: "markdown", content: await readTextFile(`${wsPath}/IDENTITY.md`, { baseDir: BaseDirectory.Home }).catch(() => "No IDENTITY.md") });
       } else if (node.id === "soul") {
         setDetail({ title: "Soul", type: "markdown", content: await readTextFile(`${wsPath}/SOUL.md`, { baseDir: BaseDirectory.Home }).catch(() => "No SOUL.md") });
-      } else if (node.id === "memory") {
-        setDetail({ title: "Memory", type: "list", content: "", items: agentData.memoryFiles.map(f => ({ label: f, file: f })) });
-      } else if (node.id === "skills") {
-        setDetail({ title: "Skills", type: "list", content: "", items: agentData.skills.map(s => ({ label: s.name, description: s.description })) });
+      } else if (node.id === "memory" || node.id.startsWith("memory-")) {
+        const file = node.id.startsWith("memory-") ? node.id.slice(7) : null;
+        if (file) {
+          await loadMemoryFile(file);
+          setDetailLoading(false);
+          return;
+        } else {
+          setDetail({ title: "Memory", type: "list", content: "", items: agentData.memoryFiles.map(f => ({ label: f, file: f })) });
+        }
+      } else if (node.id === "skills" || node.id.startsWith("skill-")) {
+        const skillName = node.id.startsWith("skill-") ? node.id.slice(6) : null;
+        if (skillName) {
+          const skill = agentData.skills.find(s => s.name === skillName);
+          setDetail({ title: skillName, type: "info", content: skill?.description || "No description" });
+        } else {
+          setDetail({ title: "Skills", type: "list", content: "", items: agentData.skills.map(s => ({ label: s.name, description: s.description })) });
+        }
       } else if (node.id === "model") {
         const m = agentData.model;
         setDetail({ title: "Model", type: "info", content: `**Provider:** ${m.provider}\n\n**Model:** ${m.model}\n\n**Context Window:** ${m.contextWindow.toLocaleString()} tokens` });
@@ -217,16 +230,29 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
       links.push({ source: "agent", target: "model" });
     }
     if (agentData.soul.traits.length > 0) {
-      nodes.push({ id: "soul", label: "Soul", color: NODE_COLORS.soul!, size: 5 });
+      nodes.push({ id: "soul", label: "Soul", color: NODE_COLORS.soul!, size: 6 });
       links.push({ source: "agent", target: "soul" });
+      agentData.soul.traits.forEach((trait, i) => {
+        nodes.push({ id: `trait-${i}`, label: trait, color: NODE_COLORS.soul!, size: 3 });
+        links.push({ source: "soul", target: `trait-${i}` });
+      });
     }
     if (agentData.memoryFiles.length > 0) {
-      nodes.push({ id: "memory", label: "Memory", color: NODE_COLORS.memory!, size: 5 });
+      nodes.push({ id: "memory", label: "Memory", color: NODE_COLORS.memory!, size: 6 });
       links.push({ source: "agent", target: "memory" });
+      agentData.memoryFiles.forEach((file) => {
+        const label = file.replace(".md", "");
+        nodes.push({ id: `memory-${file}`, label, color: NODE_COLORS.memory!, size: 3 });
+        links.push({ source: "memory", target: `memory-${file}` });
+      });
     }
     if (agentData.skills.length > 0) {
-      nodes.push({ id: "skills", label: "Skills", color: NODE_COLORS.skills!, size: 5 });
+      nodes.push({ id: "skills", label: "Skills", color: NODE_COLORS.skills!, size: 6 });
       links.push({ source: "agent", target: "skills" });
+      agentData.skills.forEach((skill) => {
+        nodes.push({ id: `skill-${skill.name}`, label: skill.name, color: NODE_COLORS.skills!, size: 3 });
+        links.push({ source: "skills", target: `skill-${skill.name}` });
+      });
     }
     if (agentUI.repoPath) {
       nodes.push({ id: "ui-repo", label: "UI", color: NODE_COLORS["ui-repo"]!, size: 5 });
@@ -239,7 +265,9 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
   // Custom node rendering
   const paintNode = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
     const n = node as GraphNode & { x: number; y: number };
-    const r = n.isCenter ? 14 : 8;
+    const isLeaf = n.size <= 3;
+    const isBranch = n.size >= 5 && n.size <= 6;
+    const r = n.isCenter ? 14 : isBranch ? 9 : isLeaf ? 5 : 8;
     const isHovered = hoveredNode === n.id;
 
     // Glow effect
@@ -253,25 +281,25 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
     // Circle
     ctx.beginPath();
     ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
-    ctx.fillStyle = n.color + "20";
+    ctx.fillStyle = n.color + (isLeaf ? "15" : "20");
     ctx.fill();
-    ctx.strokeStyle = n.color + (isHovered ? "cc" : "80");
-    ctx.lineWidth = 1.5 / globalScale;
+    ctx.strokeStyle = n.color + (isHovered ? "cc" : isLeaf ? "50" : "80");
+    ctx.lineWidth = (isLeaf ? 1 : 1.5) / globalScale;
     ctx.stroke();
 
     // Icon dot
     ctx.beginPath();
-    ctx.arc(n.x, n.y, n.isCenter ? 5 : 3, 0, 2 * Math.PI);
+    ctx.arc(n.x, n.y, n.isCenter ? 5 : isBranch ? 3 : 2, 0, 2 * Math.PI);
     ctx.fillStyle = n.color;
     ctx.fill();
 
     // Label
-    const fontSize = (n.isCenter ? 11 : 9) / globalScale;
-    ctx.font = `500 ${fontSize}px Inter, system-ui, sans-serif`;
+    const fontSize = (n.isCenter ? 11 : isBranch ? 9 : 7) / globalScale;
+    ctx.font = `${isLeaf ? "400" : "500"} ${fontSize}px Inter, system-ui, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
-    ctx.fillStyle = isHovered ? "#e8e8e8" : "#999999";
-    ctx.fillText(n.label, n.x, n.y + r + 4 / globalScale);
+    ctx.fillStyle = isHovered ? "#e8e8e8" : isLeaf ? "#666666" : "#999999";
+    ctx.fillText(n.label, n.x, n.y + r + 3 / globalScale);
   }, [hoveredNode]);
 
   // Center graph after data loads
