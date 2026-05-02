@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Layout, Code, Terminal, FolderOpen, Plus, RefreshCw, ExternalLink, ArrowLeft, X } from "lucide-react";
+import { Code, Terminal, FolderOpen, Plus, RefreshCw, ExternalLink, ArrowLeft, X } from "lucide-react";
+import unicoreLogo from "@/assets/unicore-logo.svg";
 
 /** Scaffold the UI workspace with agent context files */
 async function scaffoldUI(agentId: string, wsPath: string, home: string): Promise<string> {
@@ -55,7 +56,7 @@ The UI should:
 - Work as a standalone web app (will be embedded in an iframe)
 
 ## Technical Notes
-- The UI will be previewed inside Agent Studio (a Tauri desktop app)
+- The UI will be previewed inside xCloud (a Tauri desktop app)
 - It runs in an iframe, so keep it self-contained
 - Use any framework/stack you think fits best
 - Include a \`dev\` script in package.json so the preview can auto-launch
@@ -384,9 +385,7 @@ export function AgentUIContent({
     <div className="flex-1 flex flex-col items-center justify-center gap-6 px-8">
       {repoPath ? (
         <>
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-950/40 border border-blue-800/40">
-            <Layout className="h-8 w-8 text-blue-400" />
-          </div>
+          <img src={unicoreLogo} alt="Unicore" className="h-16 w-16" />
           <div className="text-center max-w-xs">
             <h3 className="text-sm font-medium text-text">{repoPath.split("/").pop()}</h3>
             <p className="mt-1 text-[10px] text-text-muted truncate max-w-[220px]">{repoPath}</p>
@@ -400,7 +399,7 @@ export function AgentUIContent({
                 onClick={launchPreview}
                 className="flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-xs font-medium text-white hover:opacity-90 transition-opacity"
               >
-                <Layout className="h-3.5 w-3.5" />
+                <ExternalLink className="h-3.5 w-3.5" />
                 Launch Preview
               </button>
             ) : (
@@ -439,9 +438,7 @@ export function AgentUIContent({
         </>
       ) : (
         <>
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-surface-hover">
-            <Layout className="h-8 w-8 text-text-muted" />
-          </div>
+          <img src={unicoreLogo} alt="Unicore" className="h-16 w-16" />
           <div className="text-center max-w-xs">
             <h3 className="text-sm font-medium text-text">Agent UI</h3>
             <p className="mt-1.5 text-xs text-text-muted leading-relaxed">

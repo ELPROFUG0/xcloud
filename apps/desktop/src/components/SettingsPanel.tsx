@@ -8,7 +8,7 @@ import { useModels } from "@/hooks/use-models";
 import { PROVIDERS } from "@/types/provider";
 import {
   Key, CheckCircle, AlertCircle,
-  Cpu, ChevronLeft, ChevronDown, Check, Search, X, Settings2, Radio, Server, Copy, Monitor, Cloud,
+  Cpu, ChevronLeft, Check, Search, X, Settings2, Radio, Server, Copy,
 } from "lucide-react";
 import telegramLogo from "@/assets/channels/telegram.svg";
 import whatsappLogo from "@/assets/channels/whatsapp.svg";
@@ -1061,7 +1061,7 @@ export function SettingsPanel({ engine, section: externalSection }: SettingsPane
                 <h4 className="text-[13px] font-medium mb-3">About</h4>
                 <div className="space-y-2.5 text-xs">
                   <div className="flex justify-between">
-                    <span className="text-text-muted">Agent Studio</span>
+                    <span className="text-text-muted">xCloud</span>
                     <span className="text-text">v0.1.0</span>
                   </div>
                   <div className="flex justify-between">

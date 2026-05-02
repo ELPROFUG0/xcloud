@@ -17,7 +17,7 @@ export function ConnectScreen({ onConnect, defaultToken = "", error }: ConnectSc
   return (
     <div className="flex h-full flex-col items-center justify-center gap-6 px-4">
       <div className="text-center">
-        <h1 className="text-2xl font-bold">Agent Studio</h1>
+        <h1 className="text-2xl font-bold">xCloud</h1>
         <p className="mt-2 text-sm text-text-muted">
           Connect to your OpenClaw Gateway
         </p>
