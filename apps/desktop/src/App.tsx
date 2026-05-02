@@ -55,12 +55,27 @@ export default function App() {
 
     async function autoConnect() {
       try {
-        // Ensure OpenClaw gateway is running (starts it if not)
-        const status = await invoke<{ running: boolean; port: number }>("engine_ensure_running");
+        const mode = localStorage.getItem("engineMode") ?? "local";
+
+        let wsUrl: string;
+
+        if (mode === "mac-mini") {
+          const remoteUrl = localStorage.getItem("engineMacMiniUrl");
+          if (!remoteUrl) throw new Error("No Mac Mini URL configured. Go to Settings → Engine.");
+          wsUrl = remoteUrl;
+        } else if (mode === "vps") {
+          const remoteUrl = localStorage.getItem("engineVpsUrl");
+          if (!remoteUrl) throw new Error("No VPS URL configured. Go to Settings → Engine.");
+          wsUrl = remoteUrl;
+        } else {
+          // Local mode: ensure gateway is running, then connect
+          const status = await invoke<{ running: boolean; port: number }>("engine_ensure_running");
+          wsUrl = `ws://127.0.0.1:${status.port}`;
+        }
 
         const identity = await loadOpenClawIdentity();
         const client = new BrowserEngine({
-          url: `ws://127.0.0.1:${status.port}`,
+          url: wsUrl,
           ...identity,
         });
         await client.connect();
