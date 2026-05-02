@@ -1,27 +1,22 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-
-interface IdentityNodeData {
-  name: string;
-  emoji: string;
-  creature: string;
-  vibe: string;
-}
+import { User } from "lucide-react";
 
 export function IdentityNode({ data }: NodeProps) {
-  const d = data as unknown as IdentityNodeData;
+  const d = data as unknown as { name: string; emoji?: string };
   return (
-    <div className="rounded-xl border border-purple-800/60 bg-purple-950/30 px-4 py-3 min-w-[160px] cursor-pointer hover:border-purple-500/60 transition-colors">
-      <Handle type="target" position={Position.Top} className="!bg-purple-400 !border-0 !w-2 !h-2" />
-      <div className="flex items-center gap-2">
-        <span className="text-lg">{d.emoji || "🤖"}</span>
-        <div>
-          <div className="text-xs font-semibold text-text">{d.name || "Unknown"}</div>
-          <div className="text-[10px] text-text-muted">{d.creature || "agent"}</div>
-        </div>
+    <div className="flex flex-col items-center gap-1.5">
+      <Handle type="target" position={Position.Top} id="top" className="opacity-0! w-2! h-2!" />
+      <Handle type="target" position={Position.Bottom} id="bottom" className="opacity-0! w-2! h-2!" />
+      <Handle type="target" position={Position.Left} id="left" className="opacity-0! w-2! h-2!" />
+      <Handle type="target" position={Position.Right} id="right" className="opacity-0! w-2! h-2!" />
+      <div className="flex h-12 w-12 items-center justify-center rounded-full border border-purple-800/60 bg-purple-950/30 cursor-pointer hover:border-purple-500/60 transition-colors">
+        {d.emoji ? (
+          <span className="text-lg">{d.emoji}</span>
+        ) : (
+          <User className="h-5 w-5 text-purple-400" />
+        )}
       </div>
-      {d.vibe && (
-        <div className="mt-1.5 text-[9px] text-purple-300/60 leading-tight truncate max-w-[180px]">{d.vibe}</div>
-      )}
+      <span className="text-[10px] text-text-muted">{d.name || "Identity"}</span>
     </div>
   );
 }

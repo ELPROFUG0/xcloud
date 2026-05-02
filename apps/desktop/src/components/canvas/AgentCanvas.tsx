@@ -1,28 +1,10 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
-import {
-  ReactFlow,
-  Background,
-  type Node,
-  type Edge,
-  type NodeTypes,
-  Position,
-} from "@xyflow/react";
-import "@xyflow/react/dist/style.css";
-import dagre from "@dagrejs/dagre";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import ForceGraph2D from "react-force-graph-2d";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { BrowserEngine } from "@/lib/engine";
 import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
 import { X, ArrowLeft } from "lucide-react";
-import { TriggerNode } from "./nodes/TriggerNode";
-import { ToolNode } from "./nodes/ToolNode";
-import { AgentNode } from "./nodes/AgentNode";
-import { IdentityNode } from "./nodes/IdentityNode";
-import { MemoryNode } from "./nodes/MemoryNode";
-import { SoulNode } from "./nodes/SoulNode";
-import { ModelNode } from "./nodes/ModelNode";
-import { SkillNode } from "./nodes/SkillNode";
-import { UINode } from "./nodes/UINode";
 import { useAgentUI, AgentUIHeaderControls, AgentUIContent } from "./AgentUI";
 
 interface AgentCanvasProps {
@@ -47,33 +29,30 @@ interface DetailPanel {
   items?: Array<{ label: string; file?: string; description?: string }>;
 }
 
-const nodeTypes: NodeTypes = {
-  trigger: TriggerNode,
-  tool: ToolNode,
-  agent: AgentNode,
-  identity: IdentityNode,
-  memory: MemoryNode,
-  soul: SoulNode,
-  model: ModelNode,
-  skill: SkillNode,
-  ui: UINode,
-};
-
-const NODE_WIDTH = 200;
-const NODE_HEIGHT = 80;
-
-function layoutGraph(nodes: Node[], edges: Edge[]): Node[] {
-  const g = new dagre.graphlib.Graph();
-  g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: "TB", ranksep: 70, nodesep: 30 });
-  nodes.forEach((n) => g.setNode(n.id, { width: NODE_WIDTH, height: NODE_HEIGHT }));
-  edges.forEach((e) => g.setEdge(e.source, e.target));
-  dagre.layout(g);
-  return nodes.map((node) => {
-    const pos = g.node(node.id);
-    return { ...node, position: { x: pos.x - NODE_WIDTH / 2, y: pos.y - NODE_HEIGHT / 2 }, sourcePosition: Position.Bottom, targetPosition: Position.Top };
-  });
+interface GraphNode {
+  id: string;
+  label: string;
+  color: string;
+  size: number;
+  isCenter?: boolean;
+  emoji?: string;
 }
+
+interface GraphLink {
+  source: string;
+  target: string;
+}
+
+const NODE_COLORS: Record<string, string> = {
+  agent: "#6366f1",
+  trigger: "#f59e0b",
+  identity: "#a855f7",
+  model: "#10b981",
+  soul: "#f43f5e",
+  memory: "#06b6d4",
+  skills: "#f59e0b",
+  "ui-repo": "#3b82f6",
+};
 
 function parseIdentity(content: string) {
   const get = (key: string) => content.match(new RegExp(`\\*\\*${key}:\\*\\*\\s*(.+)`, "i"))?.[1]?.trim() ?? "";
@@ -89,8 +68,10 @@ function parseSoul(content: string): string[] {
   return traits.slice(0, 6);
 }
 
-export function AgentCanvas({ engine, agentId, savedViewport, onViewportChange }: AgentCanvasProps) {
+export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
   const wsPath = agentId === "main" ? ".openclaw/workspace" : `.openclaw/workspace/${agentId}`;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const graphRef = useRef<any>(null);
 
   const [agentData, setAgentData] = useState<AgentData>({
     identity: { name: "", emoji: "", creature: "", vibe: "" },
@@ -104,9 +85,22 @@ export function AgentCanvas({ engine, agentId, savedViewport, onViewportChange }
   const [detail, setDetail] = useState<DetailPanel | null>(null);
   const [detailHistory, setDetailHistory] = useState<DetailPanel[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [dimensions, setDimensions] = useState({ width: 400, height: 400 });
+  const [hoveredNode, setHoveredNode] = useState<string | null>(null);
 
   // Agent UI state
   const agentUI = useAgentUI(agentId, wsPath);
+
+  // Resize observer
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const obs = new ResizeObserver((entries) => {
+      const { width, height } = entries[0]!.contentRect;
+      setDimensions({ width, height });
+    });
+    obs.observe(containerRef.current);
+    return () => obs.disconnect();
+  }, [tab]);
 
   // Load agent data
   const loadData = useCallback(async () => {
@@ -178,7 +172,7 @@ export function AgentCanvas({ engine, agentId, savedViewport, onViewportChange }
   }, [wsPath, navigateTo]);
 
   // Node click handler
-  const onNodeClick = useCallback(async (_: unknown, node: Node) => {
+  const onNodeClick = useCallback(async (node: GraphNode) => {
     setDetailLoading(true);
     setDetailHistory([]);
     try {
@@ -206,41 +200,88 @@ export function AgentCanvas({ engine, agentId, savedViewport, onViewportChange }
     setDetailLoading(false);
   }, [wsPath, agentData, agentUI]);
 
-  // Build graph
-  const { nodes, edges } = useMemo(() => {
-    const rawNodes: Node[] = [];
-    const rawEdges: Edge[] = [];
+  // Build graph data
+  const graphData = useMemo(() => {
+    const nodes: GraphNode[] = [];
+    const links: GraphLink[] = [];
 
-    rawNodes.push({ id: "trigger", type: "trigger", data: { label: "Chat", triggerType: "conversation" }, position: { x: 0, y: 0 } });
-    rawNodes.push({ id: "agent", type: "agent", data: { label: agentData.identity.name || agentId, status: "active" }, position: { x: 0, y: 0 } });
-    rawEdges.push({ id: "e-trigger-agent", source: "trigger", target: "agent" });
+    nodes.push({ id: "agent", label: agentData.identity.name || agentId, color: NODE_COLORS.agent!, size: 10, isCenter: true });
+    nodes.push({ id: "trigger", label: "Chat", color: NODE_COLORS.trigger!, size: 5 });
+    links.push({ source: "agent", target: "trigger" });
 
-    rawNodes.push({ id: "identity", type: "identity", data: agentData.identity, position: { x: 0, y: 0 } });
-    rawEdges.push({ id: "e-agent-identity", source: "agent", target: "identity" });
+    nodes.push({ id: "identity", label: agentData.identity.name || "Identity", color: NODE_COLORS.identity!, size: 5, emoji: agentData.identity.emoji });
+    links.push({ source: "agent", target: "identity" });
 
     if (agentData.model.model) {
-      rawNodes.push({ id: "model", type: "model", data: agentData.model, position: { x: 0, y: 0 } });
-      rawEdges.push({ id: "e-agent-model", source: "agent", target: "model" });
+      nodes.push({ id: "model", label: agentData.model.model.split("/").pop() ?? "Model", color: NODE_COLORS.model!, size: 5 });
+      links.push({ source: "agent", target: "model" });
     }
     if (agentData.soul.traits.length > 0) {
-      rawNodes.push({ id: "soul", type: "soul", data: { label: "Soul", traits: agentData.soul.traits }, position: { x: 0, y: 0 } });
-      rawEdges.push({ id: "e-agent-soul", source: "agent", target: "soul" });
+      nodes.push({ id: "soul", label: "Soul", color: NODE_COLORS.soul!, size: 5 });
+      links.push({ source: "agent", target: "soul" });
     }
     if (agentData.memoryFiles.length > 0) {
-      rawNodes.push({ id: "memory", type: "memory", data: { label: "Memory", files: agentData.memoryFiles }, position: { x: 0, y: 0 } });
-      rawEdges.push({ id: "e-agent-memory", source: "agent", target: "memory" });
+      nodes.push({ id: "memory", label: "Memory", color: NODE_COLORS.memory!, size: 5 });
+      links.push({ source: "agent", target: "memory" });
     }
     if (agentData.skills.length > 0) {
-      rawNodes.push({ id: "skills", type: "skill", data: { label: "Skills", count: agentData.skills.length, skills: agentData.skills.map(s => s.name) }, position: { x: 0, y: 0 } });
-      rawEdges.push({ id: "e-agent-skills", source: "agent", target: "skills" });
+      nodes.push({ id: "skills", label: "Skills", color: NODE_COLORS.skills!, size: 5 });
+      links.push({ source: "agent", target: "skills" });
     }
     if (agentUI.repoPath) {
-      rawNodes.push({ id: "ui-repo", type: "ui", data: { label: "UI", repoName: agentUI.repoPath.split("/").pop() ?? "repo", status: agentUI.devServerUrl ? "connected" : "disconnected" }, position: { x: 0, y: 0 } });
-      rawEdges.push({ id: "e-agent-ui", source: "agent", target: "ui-repo" });
+      nodes.push({ id: "ui-repo", label: "UI", color: NODE_COLORS["ui-repo"]!, size: 5 });
+      links.push({ source: "agent", target: "ui-repo" });
     }
 
-    return { nodes: layoutGraph(rawNodes, rawEdges), edges: rawEdges };
-  }, [agentId, agentData, agentUI.repoPath, agentUI.devServerUrl]);
+    return { nodes, links };
+  }, [agentId, agentData, agentUI.repoPath]);
+
+  // Custom node rendering
+  const paintNode = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+    const n = node as GraphNode & { x: number; y: number };
+    const r = n.isCenter ? 14 : 8;
+    const isHovered = hoveredNode === n.id;
+
+    // Glow effect
+    if (isHovered || n.isCenter) {
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, r + 4, 0, 2 * Math.PI);
+      ctx.fillStyle = n.color + (isHovered ? "30" : "15");
+      ctx.fill();
+    }
+
+    // Circle
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
+    ctx.fillStyle = n.color + "20";
+    ctx.fill();
+    ctx.strokeStyle = n.color + (isHovered ? "cc" : "80");
+    ctx.lineWidth = 1.5 / globalScale;
+    ctx.stroke();
+
+    // Icon dot
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, n.isCenter ? 5 : 3, 0, 2 * Math.PI);
+    ctx.fillStyle = n.color;
+    ctx.fill();
+
+    // Label
+    const fontSize = (n.isCenter ? 11 : 9) / globalScale;
+    ctx.font = `500 ${fontSize}px Inter, system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = isHovered ? "#e8e8e8" : "#999999";
+    ctx.fillText(n.label, n.x, n.y + r + 4 / globalScale);
+  }, [hoveredNode]);
+
+  // Center graph after data loads
+  useEffect(() => {
+    if (dataLoaded && graphRef.current) {
+      setTimeout(() => {
+        graphRef.current?.zoomToFit(400, 60);
+      }, 500);
+    }
+  }, [dataLoaded]);
 
   return (
     <div className="flex h-full flex-col">
@@ -262,25 +303,33 @@ export function AgentCanvas({ engine, agentId, savedViewport, onViewportChange }
 
       {/* Content */}
       {tab === "canvas" ? (
-        <div className="flex flex-1 min-h-0" style={{ opacity: dataLoaded ? 1 : 0 }}>
-          <div className={detail ? "flex-1" : "w-full"}>
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              nodeTypes={nodeTypes}
-              onNodeClick={onNodeClick}
-              proOptions={{ hideAttribution: true }}
-              defaultEdgeOptions={{ style: { stroke: "#27272a", strokeWidth: 1.5 }, animated: true }}
-              defaultViewport={savedViewport ?? { x: 0, y: 0, zoom: 1 }}
-              onInit={(instance) => {
-                if (!savedViewport) {
-                  instance.fitView();
-                }
+        <div className="flex flex-1 min-h-0" style={{ opacity: dataLoaded ? 1 : 0, transition: "opacity 300ms" }}>
+          <div ref={containerRef} className={detail ? "flex-1" : "w-full"}>
+            <ForceGraph2D
+              ref={graphRef}
+              graphData={graphData}
+              width={dimensions.width}
+              height={dimensions.height}
+              backgroundColor="transparent"
+              nodeCanvasObject={paintNode}
+              nodePointerAreaPaint={(node: any, color: string, ctx: CanvasRenderingContext2D) => {
+                const r = (node as GraphNode).isCenter ? 14 : 8;
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, r + 4, 0, 2 * Math.PI);
+                ctx.fillStyle = color;
+                ctx.fill();
               }}
-              onMoveEnd={(_, viewport) => { onViewportChange?.(viewport); }}
-            >
-              <Background color="#2a2a2e" gap={20} size={1} />
-            </ReactFlow>
+              linkColor={() => "#27272a"}
+              linkWidth={1}
+              linkCurvature={0}
+              onNodeClick={(node: any) => onNodeClick(node as GraphNode)}
+              onNodeHover={(node: any) => setHoveredNode(node ? (node as GraphNode).id : null)}
+              cooldownTicks={100}
+              d3AlphaDecay={0.04}
+              d3VelocityDecay={0.3}
+              enableZoomInteraction={true}
+              enablePanInteraction={true}
+            />
           </div>
 
           {/* Detail panel */}

@@ -1,21 +1,18 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { Zap } from "lucide-react";
-
-interface TriggerNodeData {
-  label: string;
-  triggerType: string;
-}
+import { MessageSquare } from "lucide-react";
 
 export function TriggerNode({ data }: NodeProps) {
-  const d = data as unknown as TriggerNodeData;
+  const d = data as unknown as { label: string };
   return (
-    <div className="flex items-center gap-2 rounded-xl border border-amber-700 bg-amber-950/50 px-4 py-3 cursor-pointer hover:border-amber-500 transition-colors">
-      <Zap className="h-4 w-4 text-amber-400" />
-      <div>
-        <div className="text-xs font-semibold text-text">{d.label}</div>
-        <div className="text-[10px] text-text-muted">{d.triggerType}</div>
+    <div className="flex flex-col items-center gap-1.5">
+      <Handle type="target" position={Position.Top} id="top" className="opacity-0! w-2! h-2!" />
+      <Handle type="target" position={Position.Bottom} id="bottom" className="opacity-0! w-2! h-2!" />
+      <Handle type="target" position={Position.Left} id="left" className="opacity-0! w-2! h-2!" />
+      <Handle type="target" position={Position.Right} id="right" className="opacity-0! w-2! h-2!" />
+      <div className="flex h-12 w-12 items-center justify-center rounded-full border border-amber-800/60 bg-amber-950/30 cursor-pointer hover:border-amber-500/60 transition-colors">
+        <MessageSquare className="h-5 w-5 text-amber-400" />
       </div>
-      <Handle type="source" position={Position.Bottom} className="!bg-amber-400 !border-0 !w-2 !h-2" />
+      <span className="text-[10px] text-text-muted">{d.label || "Chat"}</span>
     </div>
   );
 }
