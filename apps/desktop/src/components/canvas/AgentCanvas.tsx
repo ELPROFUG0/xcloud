@@ -87,6 +87,29 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
   const [detailLoading, setDetailLoading] = useState(false);
   const [dimensions, setDimensions] = useState({ width: 400, height: 400 });
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
+  const hoverIntensity = useRef(0);
+  const animFrameRef = useRef<number>(0);
+  const [, forceRender] = useState(0);
+
+  // Animate hover intensity — force repaints during transition
+  useEffect(() => {
+    let running = true;
+    const animate = () => {
+      if (!running) return;
+      const target = hoveredNode ? 1 : 0;
+      const prev = hoverIntensity.current;
+      hoverIntensity.current += (target - prev) * 0.1;
+      if (Math.abs(hoverIntensity.current - target) > 0.005) {
+        forceRender((c) => c + 1);
+        animFrameRef.current = requestAnimationFrame(animate);
+      } else {
+        hoverIntensity.current = target;
+        forceRender((c) => c + 1);
+      }
+    };
+    animFrameRef.current = requestAnimationFrame(animate);
+    return () => { running = false; cancelAnimationFrame(animFrameRef.current); };
+  }, [hoveredNode]);
 
   // Agent UI state
   const agentUI = useAgentUI(agentId, wsPath);
@@ -270,36 +293,48 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
     const r = n.isCenter ? 14 : isBranch ? 9 : isLeaf ? 5 : 8;
     const isHovered = hoveredNode === n.id;
 
-    // Glow effect
-    if (isHovered || n.isCenter) {
-      ctx.beginPath();
-      ctx.arc(n.x, n.y, r + 4, 0, 2 * Math.PI);
-      ctx.fillStyle = n.color + (isHovered ? "30" : "15");
-      ctx.fill();
+    // Determine brightness based on hover state
+    const t = hoverIntensity.current; // 0 = no hover, 1 = hovering something
+    const isDimmed = hoveredNode && !isHovered;
+
+    let brightness: number;
+    if (isHovered) {
+      brightness = n.isCenter ? 255 : isBranch ? 245 : 236;
+    } else if (isDimmed) {
+      // Lerp from normal to dimmed
+      const normal = n.isCenter ? 240 : isBranch ? 224 : 208;
+      const dimmed = n.isCenter ? 80 : isBranch ? 60 : 45;
+      brightness = Math.round(normal + (dimmed - normal) * t);
+    } else {
+      brightness = n.isCenter ? 240 : isBranch ? 224 : 208;
     }
 
     // Circle
     ctx.beginPath();
     ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
-    ctx.fillStyle = n.color + (isLeaf ? "15" : "20");
-    ctx.fill();
-    ctx.strokeStyle = n.color + (isHovered ? "cc" : isLeaf ? "50" : "80");
-    ctx.lineWidth = (isLeaf ? 1 : 1.5) / globalScale;
-    ctx.stroke();
-
-    // Icon dot
-    ctx.beginPath();
-    ctx.arc(n.x, n.y, n.isCenter ? 5 : isBranch ? 3 : 2, 0, 2 * Math.PI);
-    ctx.fillStyle = n.color;
+    ctx.fillStyle = `rgb(${brightness}, ${brightness}, ${brightness})`;
     ctx.fill();
 
-    // Label
-    const fontSize = (n.isCenter ? 11 : isBranch ? 9 : 7) / globalScale;
-    ctx.font = `${isLeaf ? "400" : "500"} ${fontSize}px Inter, system-ui, sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    ctx.fillStyle = isHovered ? "#e8e8e8" : isLeaf ? "#666666" : "#999999";
-    ctx.fillText(n.label, n.x, n.y + r + 3 / globalScale);
+    // Label — hide when zoomed out
+    if (globalScale > 0.4) {
+      const fontSize = (n.isCenter ? 11 : isBranch ? 9 : 7) / globalScale;
+      ctx.font = `${isLeaf ? "400" : "500"} ${fontSize}px Inter, system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+
+      let labelBrightness: number;
+      if (isHovered) {
+        labelBrightness = 240;
+      } else if (isDimmed) {
+        const normalL = isLeaf ? 136 : 187;
+        const dimmedL = 40;
+        labelBrightness = Math.round(normalL + (dimmedL - normalL) * t);
+      } else {
+        labelBrightness = isLeaf ? 136 : 187;
+      }
+      ctx.fillStyle = `rgb(${labelBrightness}, ${labelBrightness}, ${labelBrightness})`;
+      ctx.fillText(n.label, n.x, n.y + r + 3 / globalScale);
+    }
   }, [hoveredNode]);
 
   // Center graph after data loads
@@ -347,7 +382,13 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
                 ctx.fillStyle = color;
                 ctx.fill();
               }}
-              linkColor={() => "#27272a"}
+              linkColor={(link: any) => {
+                if (!hoveredNode) return "#3a3a3a";
+                const s = typeof link.source === "object" ? link.source.id : link.source;
+                const t = typeof link.target === "object" ? link.target.id : link.target;
+                if (s === hoveredNode || t === hoveredNode) return "#666666";
+                return "#1a1a1a";
+              }}
               linkWidth={1}
               linkCurvature={0}
               onNodeClick={(node: any) => onNodeClick(node as GraphNode)}
