@@ -317,7 +317,7 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
 
     // Label — hide when zoomed out
     if (globalScale > 0.4) {
-      const fontSize = (n.isCenter ? 12 : isBranch ? 10 : 8) / globalScale;
+      const fontSize = n.isCenter ? 4 : isBranch ? 3.5 : 3;
       ctx.font = `${isLeaf ? "400" : "500"} ${fontSize}px Inter, system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
@@ -333,7 +333,7 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
         labelBrightness = isLeaf ? 136 : 187;
       }
       ctx.fillStyle = `rgb(${labelBrightness}, ${labelBrightness}, ${labelBrightness})`;
-      ctx.fillText(n.label, n.x, n.y + r + 3 / globalScale);
+      ctx.fillText(n.label, n.x, n.y + r + 4);
     }
   }, [hoveredNode]);
 
