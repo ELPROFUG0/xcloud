@@ -1,15 +1,17 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
-import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server } from "lucide-react";
+import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, X } from "lucide-react";
 import { HomeScreen } from "./home/HomeScreen";
 import { useSessions } from "@/hooks/use-sessions";
 import { ChatPanel } from "./chat/ChatPanel";
-import { AgentCanvas } from "./canvas/AgentCanvas";
+import { AgentCanvas, type DetailPanel } from "./canvas/AgentCanvas";
 import { SettingsPanel } from "./SettingsPanel";
 import { DevPreview } from "./DevPreview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTheme } from "@/hooks/use-theme";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface AppLayoutProps {
   engine: BrowserEngine;
@@ -29,6 +31,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsSection, setSettingsSection] = useState<"models" | "keys" | "channels" | "appearance" | "engine" | "general">("models");
   const [showPreview, setShowPreview] = useState(false);
+  const [nodeDetail, setNodeDetail] = useState<DetailPanel | null>(null);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [canvasWidth, setCanvasWidth] = useState(() => {
@@ -206,6 +209,35 @@ export function AppLayout({ engine }: AppLayoutProps) {
                 }, [])}
               </div>
             </div>
+          ) : nodeDetail ? (
+            /* Node detail panel */
+            <div className="flex h-full flex-col">
+              <div className={`px-3 pb-3 ${isFullscreen ? "pt-12" : "pt-14"}`}>
+                <button
+                  onClick={() => setNodeDetail(null)}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text-muted transition-colors hover:bg-white/6 hover:text-text"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  <span className="text-[13px] font-medium">{nodeDetail.title}</span>
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto px-4 pb-4">
+                {nodeDetail.type === "markdown" || nodeDetail.type === "info" ? (
+                  <div className="prose-chat text-[12px] leading-relaxed text-[#D4D4D4]">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{nodeDetail.content}</ReactMarkdown>
+                  </div>
+                ) : nodeDetail.type === "list" ? (
+                  <div className="space-y-0.5">
+                    {nodeDetail.items?.map((item) => (
+                      <div key={item.label} className="rounded-lg px-2.5 py-2">
+                        <span className="text-[11px] font-medium text-text truncate block">{item.label}</span>
+                        {item.description && <span className="text-[10px] text-text-muted leading-tight mt-0.5 line-clamp-2 block">{item.description}</span>}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
           ) : (
             <HomeScreen
               agents={agents}
@@ -219,8 +251,8 @@ export function AppLayout({ engine }: AppLayoutProps) {
           )}
         </div>
 
-        {/* Sidebar footer — hidden when settings open */}
-        <div className="shrink-0 px-3 py-1.5" style={{ minWidth: panelWidth, display: showSettings ? "none" : undefined }}>
+        {/* Sidebar footer — hidden when settings open or detail open */}
+        <div className="shrink-0 px-3 py-1.5" style={{ minWidth: panelWidth, display: showSettings || nodeDetail ? "none" : undefined }}>
           <div className="flex items-center justify-between">
             <button
               onClick={() => { setShowSettings(!showSettings); setShowPreview(false); }}
@@ -325,6 +357,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
                   agentId={currentAgentId}
                   savedViewport={canvasViewportRef.current[currentAgentId]}
                   onViewportChange={(vp) => { canvasViewportRef.current[currentAgentId] = vp; }}
+                  onNodeDetail={setNodeDetail}
                 />
               </div>
               {showPreview && <DevPreview />}

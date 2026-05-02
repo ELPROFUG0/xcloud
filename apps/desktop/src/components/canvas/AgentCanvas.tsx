@@ -1,17 +1,24 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import ForceGraph2D from "react-force-graph-2d";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+// ReactMarkdown removed — detail panel moved to sidebar
 import type { BrowserEngine } from "@/lib/engine";
 import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
-import { X, ArrowLeft } from "lucide-react";
+// lucide icons removed — detail panel moved to sidebar
 import { useAgentUI, AgentUIHeaderControls, AgentUIContent } from "./AgentUI";
+
+export interface DetailPanel {
+  title: string;
+  type: "markdown" | "list" | "info";
+  content: string;
+  items?: Array<{ label: string; file?: string; description?: string }>;
+}
 
 interface AgentCanvasProps {
   engine: BrowserEngine;
   agentId: string;
   savedViewport?: { x: number; y: number; zoom: number };
   onViewportChange?: (vp: { x: number; y: number; zoom: number }) => void;
+  onNodeDetail?: (detail: DetailPanel | null) => void;
 }
 
 interface AgentData {
@@ -20,13 +27,6 @@ interface AgentData {
   model: { provider: string; model: string; contextWindow: number };
   skills: Array<{ name: string; description: string }>;
   memoryFiles: string[];
-}
-
-interface DetailPanel {
-  title: string;
-  type: "markdown" | "list" | "info";
-  content: string;
-  items?: Array<{ label: string; file?: string; description?: string }>;
 }
 
 interface GraphNode {
@@ -68,7 +68,7 @@ function parseSoul(content: string): string[] {
   return traits.slice(0, 6);
 }
 
-export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
+export function AgentCanvas({ engine, agentId, onNodeDetail }: AgentCanvasProps) {
   const wsPath = agentId === "main" ? ".openclaw/workspace" : `.openclaw/workspace/${agentId}`;
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<any>(null);
@@ -82,9 +82,6 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
   });
   const [tab, setTab] = useState<"canvas" | "ui">("canvas");
   const [dataLoaded, setDataLoaded] = useState(false);
-  const [detail, setDetail] = useState<DetailPanel | null>(null);
-  const [detailHistory, setDetailHistory] = useState<DetailPanel[]>([]);
-  const [detailLoading, setDetailLoading] = useState(false);
   const [dimensions, setDimensions] = useState({ width: 400, height: 400 });
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const draggingNode = useRef<string | null>(null);
@@ -180,63 +177,46 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
     return unsub;
   }, [engine, loadData]);
 
-  // Detail panel navigation
-  const navigateTo = useCallback((panel: DetailPanel) => {
-    setDetail((prev) => { if (prev) setDetailHistory((h) => [...h, prev]); return panel; });
-  }, []);
-  const goBack = useCallback(() => {
-    setDetailHistory((h) => { if (!h.length) return h; setDetail(h[h.length - 1]!); return h.slice(0, -1); });
-  }, []);
-  const closeDetail = useCallback(() => { setDetail(null); setDetailHistory([]); }, []);
-
-  const loadMemoryFile = useCallback(async (file: string) => {
-    setDetailLoading(true);
-    try { navigateTo({ title: file, type: "markdown", content: await readTextFile(`${wsPath}/${file}`, { baseDir: BaseDirectory.Home }) }); }
-    catch { navigateTo({ title: file, type: "markdown", content: "Failed to load file" }); }
-    setDetailLoading(false);
-  }, [wsPath, navigateTo]);
-
-  // Node click handler
+  // Node click handler — sends detail to sidebar via callback
   const onNodeClick = useCallback(async (node: GraphNode) => {
-    setDetailLoading(true);
-    setDetailHistory([]);
+    if (!onNodeDetail) return;
     try {
       if (node.id === "identity") {
-        setDetail({ title: "Identity", type: "markdown", content: await readTextFile(`${wsPath}/IDENTITY.md`, { baseDir: BaseDirectory.Home }).catch(() => "No IDENTITY.md") });
+        onNodeDetail({ title: "Identity", type: "markdown", content: await readTextFile(`${wsPath}/IDENTITY.md`, { baseDir: BaseDirectory.Home }).catch(() => "No IDENTITY.md") });
       } else if (node.id === "soul") {
-        setDetail({ title: "Soul", type: "markdown", content: await readTextFile(`${wsPath}/SOUL.md`, { baseDir: BaseDirectory.Home }).catch(() => "No SOUL.md") });
+        onNodeDetail({ title: "Soul", type: "markdown", content: await readTextFile(`${wsPath}/SOUL.md`, { baseDir: BaseDirectory.Home }).catch(() => "No SOUL.md") });
       } else if (node.id === "memory" || node.id.startsWith("memory-")) {
         const file = node.id.startsWith("memory-") ? node.id.slice(7) : null;
         if (file) {
-          await loadMemoryFile(file);
-          setDetailLoading(false);
-          return;
+          try {
+            onNodeDetail({ title: file, type: "markdown", content: await readTextFile(`${wsPath}/${file}`, { baseDir: BaseDirectory.Home }) });
+          } catch {
+            onNodeDetail({ title: file, type: "markdown", content: "Failed to load file" });
+          }
         } else {
-          setDetail({ title: "Memory", type: "list", content: "", items: agentData.memoryFiles.map(f => ({ label: f, file: f })) });
+          onNodeDetail({ title: "Memory", type: "list", content: "", items: agentData.memoryFiles.map(f => ({ label: f })) });
         }
       } else if (node.id === "skills" || node.id.startsWith("skill-")) {
         const skillName = node.id.startsWith("skill-") ? node.id.slice(6) : null;
         if (skillName) {
           const skill = agentData.skills.find(s => s.name === skillName);
-          setDetail({ title: skillName, type: "info", content: skill?.description || "No description" });
+          onNodeDetail({ title: skillName, type: "info", content: skill?.description || "No description" });
         } else {
-          setDetail({ title: "Skills", type: "list", content: "", items: agentData.skills.map(s => ({ label: s.name, description: s.description })) });
+          onNodeDetail({ title: "Skills", type: "list", content: "", items: agentData.skills.map(s => ({ label: s.name, description: s.description })) });
         }
       } else if (node.id === "model") {
         const m = agentData.model;
-        setDetail({ title: "Model", type: "info", content: `**Provider:** ${m.provider}\n\n**Model:** ${m.model}\n\n**Context Window:** ${m.contextWindow.toLocaleString()} tokens` });
+        onNodeDetail({ title: "Model", type: "info", content: `**Provider:** ${m.provider}\n\n**Model:** ${m.model}\n\n**Context Window:** ${m.contextWindow.toLocaleString()} tokens` });
       } else if (node.id === "agent") {
-        setDetail({ title: "Agent Config", type: "markdown", content: await readTextFile(`${wsPath}/AGENTS.md`, { baseDir: BaseDirectory.Home }).catch(() => "No AGENTS.md") });
+        onNodeDetail({ title: "Agent Config", type: "markdown", content: await readTextFile(`${wsPath}/AGENTS.md`, { baseDir: BaseDirectory.Home }).catch(() => "No AGENTS.md") });
       } else if (node.id === "ui-repo") {
         setTab("ui");
         agentUI.launchPreview();
-        setDetail(null);
-      } else {
-        setDetail(null);
+      } else if (node.id.startsWith("trait-")) {
+        // traits don't have detail
       }
-    } catch { setDetail(null); }
-    setDetailLoading(false);
-  }, [wsPath, agentData, agentUI]);
+    } catch { /* */ }
+  }, [wsPath, agentData, agentUI, onNodeDetail]);
 
   // Build graph data
   const graphData = useMemo(() => {
@@ -411,7 +391,7 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
       {/* Content */}
       {tab === "canvas" ? (
         <div className="flex flex-1 min-h-0" style={{ opacity: dataLoaded ? 1 : 0, transition: "opacity 300ms" }}>
-          <div ref={containerRef} className={detail ? "flex-1" : "w-full"}>
+          <div ref={containerRef} className="w-full">
             <ForceGraph2D
               ref={graphRef}
               graphData={graphData}
@@ -453,38 +433,6 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
               enablePanInteraction={true}
             />
           </div>
-
-          {/* Detail panel */}
-          {detail && (
-            <div className="w-[280px] shrink-0 border-l border-border bg-bg overflow-hidden flex flex-col">
-              <div className="flex h-9 items-center justify-between border-b border-border px-3">
-                <div className="flex items-center gap-1.5">
-                  {detailHistory.length > 0 && <button onClick={goBack} className="text-text-muted hover:text-text"><ArrowLeft className="h-3.5 w-3.5" /></button>}
-                  <span className="text-[11px] font-medium text-text">{detail.title}</span>
-                </div>
-                <button onClick={closeDetail} className="text-text-muted hover:text-text"><X className="h-3.5 w-3.5" /></button>
-              </div>
-              <div className="flex-1 overflow-y-auto p-3">
-                {detailLoading ? (
-                  <div className="text-xs text-text-muted">Loading...</div>
-                ) : detail.type === "markdown" || detail.type === "info" ? (
-                  <div className="prose-chat text-[12px] leading-relaxed text-[#D4D4D4]">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{detail.content}</ReactMarkdown>
-                  </div>
-                ) : detail.type === "list" ? (
-                  <div className="space-y-0.5">
-                    {detail.items?.map((item) => (
-                      <button key={item.label} onClick={() => item.file && loadMemoryFile(item.file)}
-                        className={`flex w-full flex-col rounded-lg px-2.5 py-2 text-left transition-colors ${item.file ? "hover:bg-surface-hover cursor-pointer" : "hover:bg-surface-hover/50"}`}>
-                        <span className="text-[11px] font-medium text-text truncate">{item.label}</span>
-                        {item.description && <span className="text-[10px] text-text-muted leading-tight mt-0.5 line-clamp-2">{item.description}</span>}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          )}
         </div>
       ) : (
         <AgentUIContent {...agentUI} />
