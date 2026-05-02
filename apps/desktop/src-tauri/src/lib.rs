@@ -1,3 +1,5 @@
+mod engine;
+
 use std::process::Command as StdCommand;
 use tauri::Manager;
 
@@ -41,6 +43,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .manage(engine::EngineProcess::default())
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
 
@@ -51,12 +54,25 @@ pub fn run() {
                 #[allow(deprecated)]
                 apply_vibrancy(&window, NSVisualEffectMaterial::UltraDark, Some(NSVisualEffectState::Active), None)
                     .expect("Failed to apply vibrancy");
-
             }
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet, run_shell, spawn_shell])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                let app = window.app_handle();
+                let state = app.state::<engine::EngineProcess>();
+                engine::cleanup(&state);
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            run_shell,
+            spawn_shell,
+            engine::engine_ensure_running,
+            engine::engine_status,
+            engine::engine_stop,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

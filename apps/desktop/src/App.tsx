@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { BrowserEngine } from "@/lib/engine";
 import { AppLayout } from "@/components/AppLayout";
 import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
+import { invoke } from "@tauri-apps/api/core";
 
 interface OpenClawIdentity {
   deviceId: string;
@@ -54,9 +55,12 @@ export default function App() {
 
     async function autoConnect() {
       try {
+        // Ensure OpenClaw gateway is running (starts it if not)
+        const status = await invoke<{ running: boolean; port: number }>("engine_ensure_running");
+
         const identity = await loadOpenClawIdentity();
         const client = new BrowserEngine({
-          url: "ws://127.0.0.1:18789",
+          url: `ws://127.0.0.1:${status.port}`,
           ...identity,
         });
         await client.connect();

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 
 export type ThemeName = "neutral" | "blue" | "claude" | "cursor" | "emerald" | "rose" | "purple" | "sunset" | "custom";
 
@@ -117,7 +117,7 @@ export function useTheme() {
 
   const [allCustomColors, setAllCustomColors] = useState<Record<string, Partial<ThemeColors>>>(loadCustomColors);
 
-  const customColors = allCustomColors[theme] ?? {};
+  const customColors = useMemo(() => allCustomColors[theme] ?? {}, [allCustomColors, theme]);
 
   const getActiveColors = useCallback((): ThemeColors => {
     const base = theme === "custom" ? THEMES.neutral : THEMES[theme];
@@ -155,7 +155,7 @@ export function useTheme() {
     const colors = getActiveColors();
     setActiveColors(colors);
     applyColors(colors);
-  }, [theme, allCustomColors, getActiveColors]);
+  }, [getActiveColors]);
 
   // Apply contrast
   useEffect(() => {
