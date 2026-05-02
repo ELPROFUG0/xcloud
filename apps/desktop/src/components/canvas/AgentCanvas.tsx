@@ -89,6 +89,7 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const draggingNode = useRef<string | null>(null);
   const hoverIntensity = useRef(0);
+  const labelOffsets = useRef<Record<string, number>>({});
   const animFrameRef = useRef<number>(0);
   const [, forceRender] = useState(0);
 
@@ -334,6 +335,14 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
 
     // Label — hide when zoomed out
     if (globalScale > 0.4) {
+      // Animate label slide: target is 0 when visible (hovered/connected), -1.5 when hidden
+      const targetOffset = (isHovered || (isConnected && hoveredNode)) ? 0 : hoveredNode ? -1.5 : 0;
+      const prev = labelOffsets.current[n.id] ?? 0;
+      const offset = prev + (targetOffset - prev) * 0.15;
+      labelOffsets.current[n.id] = offset;
+
+      const labelAlpha = isHovered ? 1 : (isConnected && hoveredNode) ? 0.85 : isDimmed ? Math.max(0, 1 - t * 0.8) : 1;
+
       const fontSize = n.isCenter ? 4 : isBranch ? 3.5 : 3;
       ctx.font = `${isLeaf ? "400" : "500"} ${fontSize}px Inter, system-ui, sans-serif`;
       ctx.textAlign = "center";
@@ -349,10 +358,12 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
         const dimmedL = 40;
         labelBrightness = Math.round(normalL + (dimmedL - normalL) * t);
       } else {
-        labelBrightness = isLeaf ? 136 : 187;
+        labelBrightness = isLeaf ? 170 : 210;
       }
+      ctx.globalAlpha = labelAlpha;
       ctx.fillStyle = `rgb(${labelBrightness}, ${labelBrightness}, ${labelBrightness})`;
-      ctx.fillText(n.label, n.x, n.y + r + 2);
+      ctx.fillText(n.label, n.x, n.y + r + 2 + offset);
+      ctx.globalAlpha = 1;
     }
   }, [hoveredNode, connectedNodes]);
 
@@ -419,8 +430,8 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
                 if (!hoveredNode) return "#3a3a3a";
                 const s = typeof link.source === "object" ? link.source.id : link.source;
                 const t = typeof link.target === "object" ? link.target.id : link.target;
-                if (s === hoveredNode || t === hoveredNode) return "#666666";
-                return "#1a1a1a";
+                if (s === hoveredNode || t === hoveredNode) return "#888888";
+                return "#2a2a2a";
               }}
               linkWidth={1}
               linkCurvature={0}
