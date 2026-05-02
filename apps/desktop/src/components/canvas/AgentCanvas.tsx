@@ -337,6 +337,20 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
     }
   }, [hoveredNode]);
 
+  // Configure forces when graph ref is ready
+  useEffect(() => {
+    const fg = graphRef.current;
+    if (!fg) return;
+    // Vary link distance so child nodes don't overlap
+    fg.d3Force("link")?.distance((link: any, i: number) => {
+      const t = typeof link.target === "object" ? link.target.id : link.target;
+      const s = typeof link.source === "object" ? link.source.id : link.source;
+      const isLeafLink = t.includes("-") || s.includes("-");
+      return isLeafLink ? 18 + (i % 3) * 6 : 30;
+    });
+    fg.d3Force("charge")?.strength(-60);
+  });
+
   // Center graph after data loads
   useEffect(() => {
     if (dataLoaded && graphRef.current) {
