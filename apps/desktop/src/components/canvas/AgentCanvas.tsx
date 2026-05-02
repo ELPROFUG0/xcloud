@@ -290,7 +290,7 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
     const n = node as GraphNode & { x: number; y: number };
     const isLeaf = n.size <= 3;
     const isBranch = n.size >= 5 && n.size <= 6;
-    const r = n.isCenter ? 14 : isBranch ? 9 : isLeaf ? 5 : 8;
+    const r = n.isCenter ? 10 : isBranch ? 6 : isLeaf ? 3.5 : 6;
     const isHovered = hoveredNode === n.id;
 
     // Determine brightness based on hover state
@@ -317,7 +317,7 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
 
     // Label — hide when zoomed out
     if (globalScale > 0.4) {
-      const fontSize = (n.isCenter ? 11 : isBranch ? 9 : 7) / globalScale;
+      const fontSize = (n.isCenter ? 12 : isBranch ? 10 : 8) / globalScale;
       ctx.font = `${isLeaf ? "400" : "500"} ${fontSize}px Inter, system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
