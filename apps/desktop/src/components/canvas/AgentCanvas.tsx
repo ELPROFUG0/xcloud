@@ -87,6 +87,7 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
   const [detailLoading, setDetailLoading] = useState(false);
   const [dimensions, setDimensions] = useState({ width: 400, height: 400 });
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
+  const draggingNode = useRef<string | null>(null);
   const hoverIntensity = useRef(0);
   const animFrameRef = useRef<number>(0);
   const [, forceRender] = useState(0);
@@ -285,6 +286,20 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
     return { nodes, links };
   }, [agentId, agentData, agentUI.repoPath]);
 
+  // Build neighbor set for hovered node
+  const connectedNodes = useMemo(() => {
+    if (!hoveredNode) return new Set<string>();
+    const set = new Set<string>();
+    set.add(hoveredNode);
+    graphData.links.forEach((link) => {
+      const s = typeof link.source === "object" ? (link.source as any).id : link.source;
+      const t = typeof link.target === "object" ? (link.target as any).id : link.target;
+      if (s === hoveredNode) set.add(t);
+      if (t === hoveredNode) set.add(s);
+    });
+    return set;
+  }, [hoveredNode, graphData.links]);
+
   // Custom node rendering
   const paintNode = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
     const n = node as GraphNode & { x: number; y: number };
@@ -292,16 +307,18 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
     const isBranch = n.size >= 5 && n.size <= 6;
     const r = n.isCenter ? 10 : isBranch ? 6 : isLeaf ? 3.5 : 6;
     const isHovered = hoveredNode === n.id;
+    const isConnected = connectedNodes.has(n.id);
 
     // Determine brightness based on hover state
-    const t = hoverIntensity.current; // 0 = no hover, 1 = hovering something
-    const isDimmed = hoveredNode && !isHovered;
+    const t = hoverIntensity.current;
+    const isDimmed = hoveredNode && !isHovered && !isConnected;
 
     let brightness: number;
     if (isHovered) {
       brightness = n.isCenter ? 255 : isBranch ? 245 : 236;
+    } else if (isConnected && hoveredNode) {
+      brightness = n.isCenter ? 250 : isBranch ? 235 : 225;
     } else if (isDimmed) {
-      // Lerp from normal to dimmed
       const normal = n.isCenter ? 240 : isBranch ? 224 : 208;
       const dimmed = n.isCenter ? 80 : isBranch ? 60 : 45;
       brightness = Math.round(normal + (dimmed - normal) * t);
@@ -325,6 +342,8 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
       let labelBrightness: number;
       if (isHovered) {
         labelBrightness = 240;
+      } else if (isConnected && hoveredNode) {
+        labelBrightness = 210;
       } else if (isDimmed) {
         const normalL = isLeaf ? 136 : 187;
         const dimmedL = 40;
@@ -333,9 +352,9 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
         labelBrightness = isLeaf ? 136 : 187;
       }
       ctx.fillStyle = `rgb(${labelBrightness}, ${labelBrightness}, ${labelBrightness})`;
-      ctx.fillText(n.label, n.x, n.y + r + 4);
+      ctx.fillText(n.label, n.x, n.y + r + 2);
     }
-  }, [hoveredNode]);
+  }, [hoveredNode, connectedNodes]);
 
   // Configure forces when graph ref is ready
   useEffect(() => {
@@ -406,7 +425,16 @@ export function AgentCanvas({ engine, agentId }: AgentCanvasProps) {
               linkWidth={1}
               linkCurvature={0}
               onNodeClick={(node: any) => onNodeClick(node as GraphNode)}
-              onNodeHover={(node: any) => setHoveredNode(node ? (node as GraphNode).id : null)}
+              onNodeHover={(node: any) => {
+                if (!draggingNode.current) setHoveredNode(node ? (node as GraphNode).id : null);
+              }}
+              onNodeDrag={(node: any) => {
+                draggingNode.current = (node as GraphNode).id;
+                setHoveredNode((node as GraphNode).id);
+              }}
+              onNodeDragEnd={() => {
+                draggingNode.current = null;
+              }}
               cooldownTicks={100}
               d3AlphaDecay={0.04}
               d3VelocityDecay={0.3}
