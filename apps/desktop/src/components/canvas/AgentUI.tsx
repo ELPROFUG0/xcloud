@@ -354,14 +354,14 @@ export function AgentUIContent({
         <div className="flex flex-col gap-2 w-full max-w-[220px]">
           <button
             onClick={() => createUI("cursor")}
-            className="flex items-center justify-center gap-2 rounded-lg bg-surface-hover px-4 py-2.5 text-xs font-medium text-text hover:bg-border transition-colors"
+            className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
           >
             <Code className="h-3.5 w-3.5" />
             Open with Cursor
           </button>
           <button
             onClick={() => createUI("claude-code")}
-            className="flex items-center justify-center gap-2 rounded-lg bg-surface-hover px-4 py-2.5 text-xs font-medium text-text hover:bg-border transition-colors"
+            className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
           >
             <Terminal className="h-3.5 w-3.5" />
             Open with Claude Code
@@ -412,7 +412,7 @@ export function AgentUIContent({
             {hasProject ? (
               <button
                 onClick={launchPreview}
-                className="flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-xs font-medium text-white hover:opacity-90 transition-opacity"
+                className="flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-xs font-medium text-black hover:bg-white/90 transition-colors"
               >
                 <ExternalLink className="h-3.5 w-3.5" />
                 Launch Preview
@@ -421,14 +421,14 @@ export function AgentUIContent({
               <>
                 <button
                   onClick={() => invoke("run_shell", { cmd: `open -a "Cursor" "${repoPath}"` }).catch(() => {})}
-                  className="flex items-center justify-center gap-2 rounded-lg bg-surface-hover px-4 py-2.5 text-xs font-medium text-text hover:bg-border transition-colors"
+                  className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
                 >
                   <Code className="h-3.5 w-3.5" />
                   Continue in Cursor
                 </button>
                 <button
                   onClick={() => invoke("run_shell", { cmd: `osascript -e 'tell application "Terminal" to do script "cd \\"${repoPath}\\" && claude"'` }).catch(() => {})}
-                  className="flex items-center justify-center gap-2 rounded-lg bg-surface-hover px-4 py-2.5 text-xs font-medium text-text hover:bg-border transition-colors"
+                  className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
                 >
                   <Terminal className="h-3.5 w-3.5" />
                   Continue in Claude Code
@@ -437,14 +437,14 @@ export function AgentUIContent({
             )}
             <button
               onClick={selectRepo}
-              className="flex items-center justify-center gap-2 rounded-lg bg-surface-hover px-4 py-2.5 text-xs font-medium text-text hover:bg-border transition-colors"
+              className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
             >
               <FolderOpen className="h-3.5 w-3.5" />
               Change Repo
             </button>
             <button
               onClick={disconnectRepo}
-              className="flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-xs font-medium text-red-400/70 hover:text-red-400 transition-colors"
+              className="flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-medium text-red-400/70 hover:text-red-400 transition-colors"
             >
               <X className="h-3.5 w-3.5" />
               Disconnect
@@ -478,14 +478,14 @@ export function AgentUIContent({
           <div className="flex flex-col gap-2 w-full max-w-[220px]">
             <button
               onClick={selectRepo}
-              className="flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-xs font-medium text-white hover:opacity-90 transition-opacity"
+              className="flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-xs font-medium text-black hover:bg-white/90 transition-colors"
             >
               <FolderOpen className="h-3.5 w-3.5" />
               Open Repo
             </button>
             <button
               onClick={() => setUiView("create")}
-              className="flex items-center justify-center gap-2 rounded-lg bg-surface-hover px-4 py-2.5 text-xs font-medium text-text hover:bg-border transition-colors"
+              className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
             >
               <Plus className="h-3.5 w-3.5" />
               Create
