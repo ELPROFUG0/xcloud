@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import type { AgentInfo } from "@/hooks/use-agents";
 import type { SessionInfo } from "@/hooks/use-sessions";
 import { formatRelativeTime } from "@/hooks/use-sessions";
-import { Search, MessageSquarePlus, Download, ChevronRight, MoreHorizontal } from "lucide-react";
+import { Search, MessageSquarePlus, Download, MoreHorizontal, Pin } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { EmojiPicker } from "../ui/EmojiPicker";
 import { AgentAvatar } from "../ui/AgentAvatar";
@@ -26,8 +26,18 @@ const STATUS_COLORS: Record<string, string> = {
 
 export function HomeScreen({ agents, activeAgentId, onSelectAgent, onSelectSession, getAgentSessions, isFullscreen, onRefresh }: HomeScreenProps) {
   const mainAgent = agents.find((a) => a.isDefault) ?? agents[0];
-  const otherAgents = agents.filter((a) => a.id !== mainAgent?.id);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem("pinnedAgents") ?? "[]"); } catch { return []; }
+  });
+  const togglePin = (id: string) => {
+    setPinnedIds(prev => {
+      const next = prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id];
+      localStorage.setItem("pinnedAgents", JSON.stringify(next));
+      return next;
+    });
+  };
+  const pinnedAgents = agents.filter(a => a.id !== mainAgent?.id && pinnedIds.includes(a.id));
+  const otherAgents = agents.filter(a => a.id !== mainAgent?.id && !pinnedIds.includes(a.id));
   const [menuAgentId, setMenuAgentId] = useState<string | null>(null);
   const [showEmojiFor, setShowEmojiFor] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -88,10 +98,19 @@ export function HomeScreen({ agents, activeAgentId, onSelectAgent, onSelectSessi
 
               {/* Agent menu */}
               {menuAgentId === agent.id && (
-                <div ref={menuRef} className="absolute right-0 top-full mt-1 z-30 w-40 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl animate-[slideUp_120ms_ease-out]">
+                <div ref={menuRef} className="absolute right-0 top-full mt-1 z-30 w-40 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl animate-[slideUp_120ms_ease-out] p-1">
+                  {!isMain && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); togglePin(agent.id); setMenuAgentId(null); }}
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-text transition-colors hover:bg-surface-hover"
+                    >
+                      <Pin className="h-3.5 w-3.5" />
+                      {pinnedIds.includes(agent.id) ? "Unpin" : "Pin"}
+                    </button>
+                  )}
                   <button
                     onClick={(e) => { e.stopPropagation(); setShowEmojiFor(agent.id); setMenuAgentId(null); }}
-                    className="flex w-full items-center gap-2 px-3 py-2 text-[12px] text-text transition-colors hover:bg-surface-hover"
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-text transition-colors hover:bg-surface-hover"
                   >
                     Change emoji
                   </button>
@@ -142,7 +161,21 @@ export function HomeScreen({ agents, activeAgentId, onSelectAgent, onSelectSessi
             <div className="px-2.5 pb-1 pt-3">
               <span className="text-[12px] font-medium text-text/90">Main</span>
             </div>
-            {renderAgent(mainAgent, true)}
+            <div className="space-y-0.5">
+              {renderAgent(mainAgent, true)}
+            </div>
+          </>
+        )}
+
+        {/* Pinned agents */}
+        {pinnedAgents.length > 0 && (
+          <>
+            <div className="px-2.5 pb-1 pt-4">
+              <span className="text-[12px] font-medium text-text/90">Pinned</span>
+            </div>
+            <div className="space-y-0.5">
+              {pinnedAgents.map((agent) => renderAgent(agent, false))}
+            </div>
           </>
         )}
 
@@ -152,7 +185,9 @@ export function HomeScreen({ agents, activeAgentId, onSelectAgent, onSelectSessi
             <div className="px-2.5 pb-1 pt-4">
               <span className="text-[12px] font-medium text-text/90">Agents</span>
             </div>
-            {otherAgents.map((agent) => renderAgent(agent, false))}
+            <div className="space-y-0.5">
+              {otherAgents.map((agent) => renderAgent(agent, false))}
+            </div>
           </>
         )}
 

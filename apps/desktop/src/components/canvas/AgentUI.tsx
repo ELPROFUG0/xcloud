@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Code, Terminal, FolderOpen, Plus, RefreshCw, ExternalLink, ArrowLeft, X } from "lucide-react";
-import unicoreLogo from "@/assets/unicore-logo.svg";
+import xcloudLogo from "@/assets/xcloud-logo.svg?url";
 
 /** Scaffold the UI workspace with agent context files */
 async function scaffoldUI(agentId: string, wsPath: string, home: string): Promise<string> {
@@ -385,7 +385,22 @@ export function AgentUIContent({
     <div className="flex-1 flex flex-col items-center justify-center gap-6 px-8">
       {repoPath ? (
         <>
-          <img src={unicoreLogo} alt="Unicore" className="h-16 w-16" />
+          <div
+              className="h-16 w-16"
+              style={{
+                WebkitMaskImage: `url("${xcloudLogo}")`,
+                maskImage: `url("${xcloudLogo}")`,
+                WebkitMaskSize: "contain",
+                maskSize: "contain",
+                WebkitMaskRepeat: "no-repeat",
+                maskRepeat: "no-repeat",
+                WebkitMaskPosition: "center",
+                maskPosition: "center",
+                backgroundImage: "linear-gradient(90deg, #777 0%, #777 35%, #bbb 50%, #777 65%, #777 100%)",
+                backgroundSize: "250% 100%",
+                animation: "shimmerBg 2.7s linear infinite",
+              }}
+            />
           <div className="text-center max-w-xs">
             <h3 className="text-sm font-medium text-text">{repoPath.split("/").pop()}</h3>
             <p className="mt-1 text-[10px] text-text-muted truncate max-w-[220px]">{repoPath}</p>
@@ -438,7 +453,22 @@ export function AgentUIContent({
         </>
       ) : (
         <>
-          <img src={unicoreLogo} alt="Unicore" className="h-16 w-16" />
+          <div
+              className="h-16 w-16"
+              style={{
+                WebkitMaskImage: `url("${xcloudLogo}")`,
+                maskImage: `url("${xcloudLogo}")`,
+                WebkitMaskSize: "contain",
+                maskSize: "contain",
+                WebkitMaskRepeat: "no-repeat",
+                maskRepeat: "no-repeat",
+                WebkitMaskPosition: "center",
+                maskPosition: "center",
+                backgroundImage: "linear-gradient(90deg, #777 0%, #777 35%, #bbb 50%, #777 65%, #777 100%)",
+                backgroundSize: "250% 100%",
+                animation: "shimmerBg 2.7s linear infinite",
+              }}
+            />
           <div className="text-center max-w-xs">
             <h3 className="text-sm font-medium text-text">Agent UI</h3>
             <p className="mt-1.5 text-xs text-text-muted leading-relaxed">
