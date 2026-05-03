@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
-import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, X } from "lucide-react";
+import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, X, Sparkles } from "lucide-react";
 import { HomeScreen } from "./home/HomeScreen";
 import { useSessions } from "@/hooks/use-sessions";
 import { ChatPanel } from "./chat/ChatPanel";
@@ -29,7 +29,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
   const [activeSessionKey, setActiveSessionKey] = useState<string | null>(null);
   const [showCanvas, setShowCanvas] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
-  const [settingsSection, setSettingsSection] = useState<"models" | "keys" | "channels" | "appearance" | "engine" | "general">("models");
+  const [settingsSection, setSettingsSection] = useState<"models" | "keys" | "channels" | "skills" | "appearance" | "engine" | "general">("models");
   const [showPreview, setShowPreview] = useState(false);
   const [nodeDetail, setNodeDetail] = useState<DetailPanel | null>(null);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
@@ -185,6 +185,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
                   { id: "models" as const, label: "Models", icon: Layers },
                   { id: "keys" as const, label: "API Keys", icon: KeyRound },
                   { id: "channels" as const, label: "Channels", icon: Globe },
+                  { id: "skills" as const, label: "Skills", icon: Sparkles },
                   { id: "engine" as const, label: "Engine", icon: Server },
                   { id: "appearance" as const, label: "Appearance", icon: Palette },
                   { id: "general" as const, label: "General", icon: SlidersHorizontal },

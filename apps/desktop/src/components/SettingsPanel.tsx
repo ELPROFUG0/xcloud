@@ -8,7 +8,7 @@ import { useModels } from "@/hooks/use-models";
 import { PROVIDERS } from "@/types/provider";
 import {
   Key, CheckCircle, AlertCircle,
-  Cpu, ChevronLeft, Check, Search, X, Settings2, Radio, Server, Copy,
+  Cpu, ChevronLeft, Check, Search, X, Settings2, Radio, Server, Copy, Sparkles,
 } from "lucide-react";
 import telegramLogo from "@/assets/channels/telegram.svg";
 import whatsappLogo from "@/assets/channels/whatsapp.svg";
@@ -56,8 +56,17 @@ interface SettingsPanelProps {
   onBack?: () => void;
 }
 
-type Section = "models" | "keys" | "channels" | "engine" | "appearance" | "general";
+type Section = "models" | "keys" | "channels" | "skills" | "engine" | "appearance" | "general";
 type EngineMode = "local" | "mac-mini" | "vps";
+
+interface SkillInfo {
+  name: string;
+  description: string;
+  emoji?: string;
+  author?: string;
+  version?: string;
+  installed?: boolean;
+}
 
 interface KeyState {
   value: string;
@@ -81,6 +90,7 @@ const SECTIONS: { id: Section; label: string; icon: typeof Cpu }[] = [
   { id: "models", label: "Models", icon: Cpu },
   { id: "keys", label: "API Keys", icon: Key },
   { id: "channels", label: "Channels", icon: Radio },
+  { id: "skills", label: "Skills", icon: Sparkles },
   { id: "engine", label: "Engine", icon: Server },
   { id: "general", label: "General", icon: Settings2 },
 ];
@@ -252,6 +262,8 @@ function renderChannelFields(
   ));
 }
 
+let skillsCache: SkillInfo[] = [];
+
 export function SettingsPanel({ engine, section: externalSection }: SettingsPanelProps) {
   const [internalSection, setSection] = useState<Section>("models");
   const section = externalSection ?? internalSection;
@@ -285,6 +297,72 @@ export function SettingsPanel({ engine, section: externalSection }: SettingsPane
   const [engineStatus, setEngineStatus] = useState<{ running: boolean; port: number; pid: number | null; managed: boolean } | null>(null);
   const [copiedScript, setCopiedScript] = useState(false);
   const [selectedEngineView, setSelectedEngineView] = useState<EngineMode | null>(null);
+
+  // Skills
+  const [skills, setSkills] = useState<SkillInfo[]>(skillsCache);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillsFilter, setSkillsFilter] = useState<"all" | "ready" | "setup">("all");
+
+  // Load skills when skills section opened, cached after first load
+  useEffect(() => {
+    if (section !== "skills") return;
+    if (skillsCache.length > 0) return;
+    setSkillsLoading(true);
+
+    invoke<string>("run_shell", {
+      cmd: `export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && openclaw skills list --json 2>/dev/null || openclaw skills list 2>/dev/null || echo "[]"`,
+    }).then((output) => {
+      const parsed: SkillInfo[] = [];
+
+      // Try JSON parse first
+      try {
+        const json = JSON.parse(output);
+        const list = Array.isArray(json) ? json : json.skills ?? [];
+        for (const s of list) {
+          parsed.push({
+            name: s.name ?? "",
+            description: (s.description ?? "").slice(0, 120),
+            emoji: s.emoji ?? "",
+            author: s.author ?? "",
+            version: s.version ?? "",
+            installed: s.eligible === true || s.source === "workspace",
+          });
+        }
+      } catch {
+        // Parse CLI table output
+        const lines = output.split("\n");
+        for (const line of lines) {
+          // Match lines like: │ status │ emoji name │ description │ source │
+          const match = line.match(/│\s*([\S\s]*?)\s*│\s*([\S\s]*?)\s*│\s*([\S\s]*?)\s*│\s*([\S\s]*?)\s*│/);
+          if (match) {
+            const status = match[1]!.trim();
+            const nameField = match[2]!.trim();
+            const desc = match[3]!.trim();
+            const source = match[4]!.trim();
+            if (status === "Status" || !nameField) continue;
+
+            // Extract emoji and name
+            const emojiMatch = nameField.match(/^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F?)\s*(.+)/u);
+            const emoji = emojiMatch?.[1] ?? "";
+            const name = (emojiMatch?.[2] ?? nameField).trim();
+
+            if (name) {
+              parsed.push({
+                name,
+                description: desc.slice(0, 120),
+                emoji,
+                installed: status.includes("ready"),
+              });
+            }
+          }
+        }
+      }
+
+      skillsCache = parsed;
+      setSkills(parsed);
+      setSkillsLoading(false);
+    }).catch(() => setSkillsLoading(false));
+  }, [section]);
 
   useEffect(() => {
     if (section !== "engine") return;
@@ -719,6 +797,66 @@ export function SettingsPanel({ engine, section: externalSection }: SettingsPane
                     <AlertCircle className="h-3 w-3" />{error}
                   </div>
                 )}
+              </div>
+            );
+          })()}
+
+          {/* Skills */}
+          {section === "skills" && (() => {
+            const readyCount = skills.filter(s => s.installed).length;
+            const setupCount = skills.filter(s => !s.installed).length;
+            const filtered = skillsFilter === "all" ? skills : skillsFilter === "ready" ? skills.filter(s => s.installed) : skills.filter(s => !s.installed);
+
+            return (
+              <div>
+                {/* Filter tabs */}
+                <div className="flex gap-1 mb-3 items-center">
+                  {([
+                    { id: "all" as const, label: `All`, count: skills.length },
+                    { id: "ready" as const, label: `Ready`, count: readyCount },
+                    { id: "setup" as const, label: `Needs setup`, count: setupCount },
+                  ]).map((f) => (
+                    <button
+                      key={f.id}
+                      onClick={() => setSkillsFilter(f.id)}
+                      className={`flex-1 rounded-xl px-3 py-2 text-xs font-medium transition-colors ${skillsFilter === f.id ? "bg-white text-black" : "bg-container text-text-muted hover:text-text"}`}
+                    >
+                      {f.label} <span className={skillsFilter === f.id ? "text-black/50" : "text-text-muted/40"}>{f.count}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="space-y-1">
+                  {skillsLoading ? (
+                    <div className="py-8 text-center text-xs text-text-muted">Loading skills...</div>
+                  ) : filtered.length === 0 ? (
+                    <div className="py-8 text-center">
+                      <Sparkles className="h-8 w-8 text-text-muted/30 mx-auto mb-3" />
+                      <p className="text-xs text-text-muted">No skills found</p>
+                    </div>
+                  ) : (
+                    filtered.map((skill) => (
+                      <div
+                        key={skill.name}
+                        className="rounded-lg bg-container px-4 py-3 transition-colors hover:bg-surface-hover"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface text-lg">
+                            {skill.emoji || "⚡"}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-text">{skill.name}</span>
+                              {skill.version && <span className="text-[9px] text-text-muted/40">{skill.version}</span>}
+                            </div>
+                            <p className="text-[11px] text-text-muted leading-tight mt-0.5 truncate">{skill.description}</p>
+                          </div>
+                          <div className={`h-2 w-2 shrink-0 rounded-full ${skill.installed ? "bg-emerald-400" : "bg-amber-400"}`} />
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             );
           })()}
