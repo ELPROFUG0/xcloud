@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback, mem
 import type { BrowserEngine } from "@/lib/engine";
 import { useChat } from "@/hooks/use-chat";
 import { ToolCallBadge } from "./ToolCallBadge";
-import { Check } from "lucide-react";
+import { Check, Clock, Plus } from "lucide-react";
 import { ChatInput } from "./ChatInput";
 import { AgentAvatar } from "../ui/AgentAvatar";
 import { Shimmer } from "../ai-elements/shimmer";
@@ -61,6 +61,48 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const prevMsgCount = useRef(0);
+  const [showSessions, setShowSessions] = useState(false);
+  const [sessionList, setSessionList] = useState<Array<{ key: string; preview: string; updatedAt: number }>>([]);
+  const sessionsRef = useRef<HTMLDivElement>(null);
+
+  // Load sessions for this agent
+  useEffect(() => {
+    if (!showSessions) return;
+    (async () => {
+      try {
+        const result = await engine.rpc("sessions.list", {}) as Record<string, unknown>;
+        const raw = result.sessions as Array<Record<string, unknown>> | Record<string, Record<string, unknown>> | undefined;
+        const list: Array<{ key: string; preview: string; updatedAt: number }> = [];
+        if (Array.isArray(raw)) {
+          for (const s of raw) {
+            const key = s.key as string;
+            if (!key) continue;
+            const sAgentId = key === "main" ? "main" : key.startsWith("agent:") ? key.split(":")[1] : "main";
+            if (sAgentId !== agentId) continue;
+            list.push({ key, preview: (s.preview as string) ?? (s.title as string) ?? key.split(":").pop() ?? key, updatedAt: (s.updatedAt as number) ?? 0 });
+          }
+        } else if (raw && typeof raw === "object") {
+          for (const [key, s] of Object.entries(raw)) {
+            const sAgentId = key === "main" ? "main" : key.startsWith("agent:") ? key.split(":")[1] : "main";
+            if (sAgentId !== agentId) continue;
+            list.push({ key, preview: (s.preview as string) ?? (s.title as string) ?? key.split(":").pop() ?? key, updatedAt: (s.updatedAt as number) ?? 0 });
+          }
+        }
+        list.sort((a, b) => b.updatedAt - a.updatedAt);
+        setSessionList(list);
+      } catch { /* */ }
+    })();
+  }, [showSessions, engine, agentId]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!showSessions) return;
+    const handler = (e: MouseEvent) => {
+      if (sessionsRef.current && !sessionsRef.current.contains(e.target as Node)) setShowSessions(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showSessions]);
 
   // Scroll to bottom instantly on mount, smoothly on new messages
   useLayoutEffect(() => {
@@ -106,6 +148,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
             <AgentAvatar emoji={currentAgent?.emoji} avatar={currentAgent?.avatar} isMain={currentAgent?.isDefault} />
           </button>
           <span className="text-[13px] font-medium text-text">{displayName}</span>
+          <span className="text-[13px] font-semibold" style={{ color: "#ffffff" }}>/ {activeSession === "main" ? "Main" : activeSession.split(":").pop() ?? activeSession}</span>
           {isStreaming && <span className="text-[10px] text-text-muted ml-1">typing...</span>}
 
           {showEmojiPicker && (
@@ -116,6 +159,66 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
                 onSelectImage={() => { setShowEmojiPicker(false); onRefresh?.(); }}
                 onClose={() => setShowEmojiPicker(false)}
               />
+            </div>
+          )}
+        </div>
+
+        {/* Sessions button */}
+        <div className="relative ml-auto" ref={sessionsRef}>
+          <button
+            onClick={() => setShowSessions(!showSessions)}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-white/8 hover:text-text"
+            title="Conversations"
+          >
+            <Clock className="h-3.5 w-3.5" />
+          </button>
+
+          {showSessions && (
+            <div className="absolute right-0 top-full mt-2 z-30 w-60 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl animate-[slideUp_120ms_ease-out]">
+              <div className="max-h-56 overflow-y-auto overscroll-contain p-1.5">
+                <button
+                  onClick={() => {
+                    const id = crypto.randomUUID().slice(0, 8);
+                    const newKey = agentId === "main" ? `main:${id}` : `agent:${agentId}:${id}`;
+                    setActiveSession(newKey);
+                    setShowSessions(false);
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-white/6 mb-0.5"
+                >
+                  <Plus className="h-3.5 w-3.5 text-text-muted" />
+                  <span className="text-[11px] font-medium text-text">New conversation</span>
+                </button>
+                {sessionList.length === 0 ? (
+                  <div className="px-3 py-2 text-center text-[10px] text-text-muted/40">No previous conversations</div>
+                ) : (
+                  sessionList.map((s) => {
+                    const label = s.key === "main" ? "Main" : s.key.split(":").pop() ?? s.key;
+                    return (
+                      <button
+                        key={s.key}
+                        onClick={() => { setActiveSession(s.key); setShowSessions(false); }}
+                        className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-white/6 ${activeSession === s.key ? "bg-white/8" : ""}`}
+                      >
+                        <div className={`h-1.5 w-1.5 shrink-0 rounded-full ${activeSession === s.key ? "bg-emerald-400" : "bg-text-muted/40"}`} />
+                        <span className="flex-1 truncate text-[11px] font-medium text-text">{label}</span>
+                        {s.updatedAt > 0 && (
+                          <span className="shrink-0 text-[9px] text-text-muted/30">
+                            {(() => {
+                              const diff = Date.now() - s.updatedAt;
+                              const mins = Math.floor(diff / 60000);
+                              if (mins < 1) return "now";
+                              if (mins < 60) return `${mins}m`;
+                              const hours = Math.floor(mins / 60);
+                              if (hours < 24) return `${hours}h`;
+                              return `${Math.floor(hours / 24)}d`;
+                            })()}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
             </div>
           )}
         </div>

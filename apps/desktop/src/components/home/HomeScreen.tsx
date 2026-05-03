@@ -56,29 +56,14 @@ export function HomeScreen({ agents, activeAgentId, onSelectAgent, onSelectSessi
   }, [onRefresh]);
 
   const renderAgent = (agent: AgentInfo, isMain: boolean) => {
-    const sessions = getAgentSessions?.(agent.id) ?? [];
-    const hasSessions = sessions.length > 0;
-    const isExpanded = expanded[agent.id] ?? true;
-
     return (
       <div key={agent.id}>
         <div className="flex items-center">
-          {/* Chevron toggle */}
-          <button
-            onClick={() => hasSessions && toggleExpand(agent.id)}
-            className={cn(
-              "flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-muted transition-transform",
-              hasSessions ? "hover:text-text cursor-pointer" : "opacity-0 cursor-default",
-            )}
-          >
-            <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", isExpanded && "rotate-90")} strokeWidth={2.5} />
-          </button>
-
           {/* Agent row */}
           <button
             onClick={() => onSelectAgent(agent.id)}
             className={cn(
-              "group flex flex-1 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors",
+              "group flex flex-1 items-center gap-2.5 rounded-lg px-2 py-1.5 ml-1 text-left transition-colors",
               activeAgentId === agent.id ? "bg-white/8" : "hover:bg-white/6 active:bg-white/8",
             )}
           >
@@ -127,23 +112,6 @@ export function HomeScreen({ agents, activeAgentId, onSelectAgent, onSelectSessi
             </div>
           </button>
         </div>
-
-        {/* Sessions */}
-        {hasSessions && isExpanded && (
-          <div className="ml-[22px] border-l border-white/15 pl-1 mt-0.5 mb-1">
-            {sessions.map((session) => (
-              <button
-                key={session.key}
-                onClick={() => onSelectSession?.(agent.id, session.key)}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/6"
-              >
-                <div className={cn("h-1.5 w-1.5 shrink-0 rounded-full", STATUS_COLORS[session.status] ?? STATUS_COLORS.idle)} />
-                <span className="flex-1 truncate text-[11px] text-text-muted">{session.preview}</span>
-                <span className="shrink-0 text-[10px] text-text-muted/40">{formatRelativeTime(session.updatedAt)}</span>
-              </button>
-            ))}
-          </div>
-        )}
       </div>
     );
   };
