@@ -27,6 +27,10 @@
     {
       "identifier": "fs:allow-read-file",
       "allow": [{ "path": "$HOME/.openclaw/**" }, { "path": "$HOME/**" }]
+    },
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [{ "path": "$HOME/.openclaw/**" }]
     }
   ]
 }

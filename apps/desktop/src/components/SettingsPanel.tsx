@@ -54,6 +54,7 @@ interface SettingsPanelProps {
   engine: BrowserEngine;
   section?: Section;
   onBack?: () => void;
+  onPreviewOnboarding?: () => void;
 }
 
 type Section = "models" | "keys" | "channels" | "skills" | "engine" | "appearance" | "general";
@@ -264,7 +265,7 @@ function renderChannelFields(
 
 let skillsCache: SkillInfo[] = [];
 
-export function SettingsPanel({ engine, section: externalSection }: SettingsPanelProps) {
+export function SettingsPanel({ engine, section: externalSection, onPreviewOnboarding }: SettingsPanelProps) {
   const [internalSection, setSection] = useState<Section>("models");
   const section = externalSection ?? internalSection;
   const { providers, currentModel, loading, setModel } = useModels(engine);
@@ -1209,6 +1210,18 @@ export function SettingsPanel({ engine, section: externalSection }: SettingsPane
                   </div>
                 </div>
               </div>
+
+              {onPreviewOnboarding && (
+                <div className="rounded-lg bg-container p-4">
+                  <h4 className="text-[13px] font-medium mb-3">Developer</h4>
+                  <button
+                    onClick={onPreviewOnboarding}
+                    className="w-full rounded-xl bg-white/10 px-4 py-2.5 text-xs text-text hover:bg-white/15 transition-colors"
+                  >
+                    Preview Onboarding
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>

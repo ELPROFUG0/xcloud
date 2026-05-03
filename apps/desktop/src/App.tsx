@@ -4,6 +4,7 @@ import { AppLayout } from "@/components/AppLayout";
 import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import xcloudLogo from "@/assets/xcloud-logo.svg?url";
+import { OnboardingScreen, checkOpenClawSetup } from "@/components/OnboardingScreen";
 
 interface OpenClawIdentity {
   deviceId: string;
@@ -50,52 +51,97 @@ export default function App() {
   const [engine, setEngine] = useState<BrowserEngine | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null);
 
+  // Check if onboarding is needed
+  // DEV: set localStorage.setItem("forceOnboarding", "true") to test onboarding
   useEffect(() => {
-    let cancelled = false;
-
-    async function autoConnect() {
-      try {
-        const mode = localStorage.getItem("engineMode") ?? "local";
-
-        let wsUrl: string;
-
-        if (mode === "mac-mini") {
-          const remoteUrl = localStorage.getItem("engineMacMiniUrl");
-          if (!remoteUrl) throw new Error("No Mac Mini URL configured. Go to Settings → Engine.");
-          wsUrl = remoteUrl;
-        } else if (mode === "vps") {
-          const remoteUrl = localStorage.getItem("engineVpsUrl");
-          if (!remoteUrl) throw new Error("No VPS URL configured. Go to Settings → Engine.");
-          wsUrl = remoteUrl;
-        } else {
-          // Local mode: ensure gateway is running, then connect
-          const status = await invoke<{ running: boolean; port: number }>("engine_ensure_running");
-          wsUrl = `ws://127.0.0.1:${status.port}`;
-        }
-
-        const identity = await loadOpenClawIdentity();
-        const client = new BrowserEngine({
-          url: wsUrl,
-          ...identity,
-        });
-        await client.connect();
-        if (!cancelled) {
-          setEngine(client);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to connect");
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+    const forceOnboarding = localStorage.getItem("forceOnboarding") === "true";
+    if (forceOnboarding) {
+      setNeedsOnboarding(true);
+      setLoading(false);
+      return;
     }
-
-    autoConnect();
-    return () => { cancelled = true; };
+    checkOpenClawSetup().then((isSetup) => {
+      setNeedsOnboarding(!isSetup);
+      if (isSetup) {
+        connectToEngine();
+      }
+    });
   }, []);
 
+  async function connectToEngine() {
+    try {
+      const mode = localStorage.getItem("engineMode") ?? "local";
+
+      let wsUrl: string;
+
+      if (mode === "mac-mini") {
+        const remoteUrl = localStorage.getItem("engineMacMiniUrl");
+        if (!remoteUrl) throw new Error("No Mac Mini URL configured. Go to Settings → Engine.");
+        wsUrl = remoteUrl;
+      } else if (mode === "vps") {
+        const remoteUrl = localStorage.getItem("engineVpsUrl");
+        if (!remoteUrl) throw new Error("No VPS URL configured. Go to Settings → Engine.");
+        wsUrl = remoteUrl;
+      } else {
+        // Local mode: ensure gateway is running, then connect
+        const status = await invoke<{ running: boolean; port: number }>("engine_ensure_running");
+        wsUrl = `ws://127.0.0.1:${status.port}`;
+      }
+
+      const identity = await loadOpenClawIdentity();
+      const client = new BrowserEngine({
+        url: wsUrl,
+        ...identity,
+      });
+      await client.connect();
+      setEngine(client);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to connect");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Called when onboarding completes
+  function handleOnboardingComplete() {
+    setNeedsOnboarding(false);
+    setLoading(true);
+    setError(null);
+    connectToEngine();
+  }
+
+  // Still checking if onboarding is needed
+  if (needsOnboarding === null) {
+    return (
+      <div className="flex h-full items-center justify-center bg-bg">
+        <div
+          className="h-20 w-20"
+          style={{
+            WebkitMaskImage: `url("${xcloudLogo}")`,
+            maskImage: `url("${xcloudLogo}")`,
+            WebkitMaskSize: "contain",
+            maskSize: "contain",
+            WebkitMaskRepeat: "no-repeat",
+            maskRepeat: "no-repeat",
+            WebkitMaskPosition: "center",
+            maskPosition: "center",
+            backgroundImage: "linear-gradient(90deg, #777 0%, #777 35%, #bbb 50%, #777 65%, #777 100%)",
+            backgroundSize: "250% 100%",
+            animation: "shimmerBg 2.7s linear infinite",
+          }}
+        />
+      </div>
+    );
+  }
+
+  // Show onboarding
+  if (needsOnboarding) {
+    return <OnboardingScreen onComplete={handleOnboardingComplete} />;
+  }
+
+  // Loading after onboarding / on return visit
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center bg-bg">

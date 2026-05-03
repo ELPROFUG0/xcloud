@@ -8,6 +8,7 @@ import { ChatPanel } from "./chat/ChatPanel";
 import { AgentCanvas, type DetailPanel } from "./canvas/AgentCanvas";
 import { SettingsPanel } from "./SettingsPanel";
 import { DevPreview } from "./DevPreview";
+import { OnboardingScreen } from "./OnboardingScreen";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTheme } from "@/hooks/use-theme";
 import ReactMarkdown from "react-markdown";
@@ -40,6 +41,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
   });
   const [isDragging, setIsDragging] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showOnboardingPreview, setShowOnboardingPreview] = useState(false);
   const canvasViewportRef = useRef<Record<string, { x: number; y: number; zoom: number }>>({});
   const dragging = useRef(false);
   const draggingCanvas = useRef(false);
@@ -301,7 +303,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
             /* Settings — fills entire card */
             <div className="flex flex-1 min-w-0 justify-center overflow-y-auto">
               <div className="w-full max-w-2xl px-6 py-6">
-                <SettingsPanel engine={engine} section={settingsSection} />
+                <SettingsPanel engine={engine} section={settingsSection} onPreviewOnboarding={() => setShowOnboardingPreview(true)} />
               </div>
             </div>
           ) : (
@@ -386,6 +388,19 @@ export function AppLayout({ engine }: AppLayoutProps) {
             }
           </svg>
         </button>
+      )}
+
+      {/* Onboarding Preview Overlay */}
+      {showOnboardingPreview && (
+        <div className="fixed inset-0 z-50 bg-bg">
+          <button
+            onClick={() => setShowOnboardingPreview(false)}
+            className="fixed top-4 right-4 z-60 rounded-lg bg-white/10 px-3 py-1.5 text-xs text-text hover:bg-white/15 transition-colors"
+          >
+            Close Preview
+          </button>
+          <OnboardingScreen onComplete={() => setShowOnboardingPreview(false)} preview />
+        </div>
       )}
     </div>
   );
