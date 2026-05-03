@@ -392,6 +392,12 @@ export function AgentUIContent({
                 <p className="mt-1 text-[10px] text-text-muted">
                   Add a <code className="text-accent">dev</code> script to package.json or include an index.html
                 </p>
+                <button
+                  onClick={disconnectRepo}
+                  className="mt-4 text-[11px] text-red-400/70 hover:text-red-400 transition-colors"
+                >
+                  Disconnect
+                </button>
               </div>
             </div>
           )}
