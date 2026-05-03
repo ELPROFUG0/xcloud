@@ -5,6 +5,16 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Code, Terminal, FolderOpen, Plus, RefreshCw, ExternalLink, ArrowLeft, X } from "lucide-react";
 import xcloudLogo from "@/assets/xcloud-logo.svg?url";
 
+import cursorLogo from "@/assets/editors/cursor.svg";
+import vscodeLogo from "@/assets/editors/vscode.svg";
+import windsurfLogo from "@/assets/editors/windsurf.svg";
+import claudeCodeLogo from "@/assets/editors/claude-code.svg";
+import itermLogo from "@/assets/editors/iterm.png";
+import zedLogo from "@/assets/editors/zed.svg";
+import terminalLogo from "@/assets/editors/terminal.svg";
+import codexLogo from "@/assets/editors/codex.svg";
+import opencodeLogo from "@/assets/editors/opencode.svg";
+
 /** Scaffold the UI workspace with agent context files */
 async function scaffoldUI(agentId: string, wsPath: string, home: string): Promise<string> {
   const uiPath = `${home}/${wsPath}/ui`;
@@ -340,10 +350,32 @@ export function AgentUIContent({
 
   // Create
   if (uiView === "create") {
+    const editors = [
+      { logo: codexLogo, name: "Codex", rotate: -18 },
+      { logo: cursorLogo, name: "Cursor", rotate: -12 },
+      { logo: vscodeLogo, name: "VS Code", rotate: -6 },
+      { logo: windsurfLogo, name: "Windsurf", rotate: 0 },
+      { logo: zedLogo, name: "Zed", rotate: 6 },
+      { logo: opencodeLogo, name: "OpenCode", rotate: 12, smallPad: true },
+      { logo: claudeCodeLogo, name: "Claude Code", rotate: 18 },
+      { logo: itermLogo, name: "iTerm", rotate: -6, noPad: true },
+    ];
+
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-6 px-8">
-        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-hover">
-          <Plus className="h-7 w-7 text-text-muted" />
+        {/* Stacked editor logos */}
+        <div className="flex items-center justify-center h-20">
+          <div className="flex items-center -space-x-3">
+            {editors.map((e, i) => (
+              <div
+                key={e.name}
+                className={`h-12 w-12 rounded-xl bg-surface-hover shadow-lg border border-white/10 transition-transform hover:scale-110 hover:z-10 ${(e as any).noPad ? "p-0 overflow-hidden" : (e as any).smallPad ? "p-0.5" : "p-1.5"}`}
+                style={{ transform: `rotate(${e.rotate}deg)`, zIndex: i }}
+              >
+                <img src={e.logo} alt={e.name} className="h-full w-full object-contain" />
+              </div>
+            ))}
+          </div>
         </div>
         <div className="text-center max-w-xs">
           <h3 className="text-sm font-medium text-text">Create UI</h3>
@@ -356,14 +388,14 @@ export function AgentUIContent({
             onClick={() => createUI("cursor")}
             className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
           >
-            <Code className="h-3.5 w-3.5" />
+            <img src={cursorLogo} alt="Cursor" className="h-4 w-4" />
             Open with Cursor
           </button>
           <button
             onClick={() => createUI("claude-code")}
             className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
           >
-            <Terminal className="h-3.5 w-3.5" />
+            <img src={claudeCodeLogo} alt="Claude Code" className="h-4 w-4" />
             Open with Claude Code
           </button>
         </div>
