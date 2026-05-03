@@ -500,7 +500,7 @@ export function AgentUIContent({
             )}
           </div>
           <div className="flex flex-col gap-2 w-full max-w-[220px]">
-            {hasProject ? (
+            {hasProject && (
               <button
                 onClick={launchPreview}
                 className="flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-xs font-medium text-black hover:bg-white/90 transition-colors"
@@ -508,23 +508,6 @@ export function AgentUIContent({
                 <ExternalLink className="h-3.5 w-3.5" />
                 Launch Preview
               </button>
-            ) : (
-              <>
-                <button
-                  onClick={() => invoke("run_shell", { cmd: `open -a "Cursor" "${repoPath}"` }).catch(() => {})}
-                  className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
-                >
-                  <Code className="h-3.5 w-3.5" />
-                  Continue in Cursor
-                </button>
-                <button
-                  onClick={() => invoke("run_shell", { cmd: `osascript -e 'tell application "Terminal" to do script "cd \\"${repoPath}\\" && claude"'` }).catch(() => {})}
-                  className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
-                >
-                  <Terminal className="h-3.5 w-3.5" />
-                  Continue in Claude Code
-                </button>
-              </>
             )}
             <button
               onClick={selectRepo}

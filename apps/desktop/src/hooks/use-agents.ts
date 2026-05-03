@@ -22,15 +22,26 @@ interface UseAgentsReturn {
   loading: boolean;
 }
 
+/** Check if a value is a placeholder (not real content) */
+function isPlaceholder(value: string): boolean {
+  const v = value.trim();
+  if (!v) return true;
+  if (v.startsWith("_(") && v.endsWith(")_")) return true;
+  if (v.startsWith("_(")) return true;
+  if (v.includes("pick something") || v.includes("pick one") || v.includes("fill this")) return true;
+  if (v.includes("workspace-relative") || v.includes("data URI")) return true;
+  return false;
+}
+
 /** Parse IDENTITY.md frontmatter-style fields */
 function parseIdentity(content: string): { name?: string; emoji?: string; avatar?: string } {
   const result: { name?: string; emoji?: string; avatar?: string } = {};
   const nameMatch = content.match(/\*\*Name:\*\*\s*(.+)/i) ?? content.match(/^-\s*\*\*Name:\*\*\s*(.+)/mi);
-  if (nameMatch) result.name = nameMatch[1]!.trim();
+  if (nameMatch && !isPlaceholder(nameMatch[1]!)) result.name = nameMatch[1]!.trim();
   const emojiMatch = content.match(/\*\*Emoji:\*\*\s*(.+)/i) ?? content.match(/^-\s*\*\*Emoji:\*\*\s*(.+)/mi);
-  if (emojiMatch) result.emoji = emojiMatch[1]!.trim();
+  if (emojiMatch && !isPlaceholder(emojiMatch[1]!)) result.emoji = emojiMatch[1]!.trim();
   const avatarMatch = content.match(/\*\*Avatar:\*\*\s*(.+)/i) ?? content.match(/^-\s*\*\*Avatar:\*\*\s*(.+)/mi);
-  if (avatarMatch && avatarMatch[1]!.trim()) result.avatar = avatarMatch[1]!.trim();
+  if (avatarMatch && avatarMatch[1]!.trim() && !isPlaceholder(avatarMatch[1]!)) result.avatar = avatarMatch[1]!.trim();
   return result;
 }
 
