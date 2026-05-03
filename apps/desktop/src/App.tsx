@@ -3,6 +3,7 @@ import { BrowserEngine } from "@/lib/engine";
 import { AppLayout } from "@/components/AppLayout";
 import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
+import xcloudLogo from "@/assets/xcloud-logo.svg?url";
 
 interface OpenClawIdentity {
   deviceId: string;
@@ -98,10 +99,22 @@ export default function App() {
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center bg-bg">
-        <div className="text-center">
-          <div className="text-lg font-medium text-text">Connecting...</div>
-          <div className="mt-1 text-xs text-text-muted">Reading OpenClaw configuration</div>
-        </div>
+        <div
+          className="h-20 w-20"
+          style={{
+            WebkitMaskImage: `url("${xcloudLogo}")`,
+            maskImage: `url("${xcloudLogo}")`,
+            WebkitMaskSize: "contain",
+            maskSize: "contain",
+            WebkitMaskRepeat: "no-repeat",
+            maskRepeat: "no-repeat",
+            WebkitMaskPosition: "center",
+            maskPosition: "center",
+            backgroundImage: "linear-gradient(90deg, #777 0%, #777 35%, #bbb 50%, #777 65%, #777 100%)",
+            backgroundSize: "250% 100%",
+            animation: "shimmerBg 2.7s linear infinite",
+          }}
+        />
       </div>
     );
   }
