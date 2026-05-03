@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Code, Terminal, FolderOpen, Plus, RefreshCw, ExternalLink, ArrowLeft, X } from "lucide-react";
+import { Code, Terminal, FolderOpen, Plus, RefreshCw, ExternalLink, ArrowLeft, X, ChevronDown } from "lucide-react";
 import xcloudLogo from "@/assets/xcloud-logo.svg?url";
 
 import cursorLogo from "@/assets/editors/cursor.svg";
@@ -14,6 +14,7 @@ import zedLogo from "@/assets/editors/zed.svg";
 import terminalLogo from "@/assets/editors/terminal.svg";
 import codexLogo from "@/assets/editors/codex.svg";
 import opencodeLogo from "@/assets/editors/opencode.svg";
+import antigravityLogo from "@/assets/editors/antigravity.png";
 
 /** Scaffold the UI workspace with agent context files */
 async function scaffoldUI(agentId: string, wsPath: string, home: string): Promise<string> {
@@ -250,20 +251,26 @@ export function useAgentUI(_agentId: string, wsPath: string) {
   }, [repoPath, devServerUrl, startDevServer]);
 
   // Create UI — scaffold and open editor
-  const createUI = useCallback(async (editor: "cursor" | "claude-code") => {
+  const createUI = useCallback(async (editor: string) => {
     const uiPath = await scaffoldUI(_agentId, wsPath, home);
     setRepoPath(uiPath);
     await saveConfig(uiPath);
 
-    if (editor === "cursor") {
-      await invoke("run_shell", { cmd: `open -a "Cursor" "${uiPath}"` }).catch(() => {
-        // Fallback: try cursor CLI
-        invoke("run_shell", { cmd: `cursor "${uiPath}"` }).catch(() => {});
-      });
-    } else {
-      // Create a temp script that opens claude in the project dir
-      await invoke("run_shell", { cmd: `echo '#!/bin/bash\ncd "${uiPath}"\nclaude' > /tmp/open-claude.sh && chmod +x /tmp/open-claude.sh && open -a Terminal /tmp/open-claude.sh` }).catch(() => {});
-    }
+    const cmds: Record<string, string> = {
+      cursor: `open -a "Cursor" "${uiPath}" || cursor "${uiPath}"`,
+      vscode: `open -a "Visual Studio Code" "${uiPath}" || code "${uiPath}"`,
+      windsurf: `open -a "Windsurf" "${uiPath}" || windsurf "${uiPath}"`,
+      zed: `open -a "Zed" "${uiPath}" || zed "${uiPath}"`,
+      codex: `open -a "Codex" "${uiPath}" || codex "${uiPath}"`,
+      antigravity: `open -a "Antigravity" "${uiPath}" || antigravity "${uiPath}"`,
+      "claude-code": `echo '#!/bin/bash\\ncd "${uiPath}"\\nclaude' > /tmp/open-claude.sh && chmod +x /tmp/open-claude.sh && open -a Terminal /tmp/open-claude.sh`,
+      opencode: `echo '#!/bin/bash\\ncd "${uiPath}"\\nopencode' > /tmp/open-opencode.sh && chmod +x /tmp/open-opencode.sh && open -a Terminal /tmp/open-opencode.sh`,
+      iterm: `osascript -e 'tell application "iTerm" to create window with default profile command "cd \\"${uiPath}\\""'`,
+      terminal: `open -a Terminal "${uiPath}"`,
+    };
+
+    const cmd = cmds[editor];
+    if (cmd) await invoke("run_shell", { cmd }).catch(() => {});
   }, [_agentId, wsPath, home, saveConfig]);
 
   return {
@@ -304,6 +311,51 @@ export function AgentUIHeaderControls({
       <button onClick={() => { setUiView("menu"); }} className="text-text-muted hover:text-text" title="Back">
         <ArrowLeft className="h-3 w-3" />
       </button>
+    </div>
+  );
+}
+
+/** Dropdown button for IDE/Terminal selection */
+function CreateDropdown({ label, options, onSelect }: {
+  label: string;
+  options: Array<{ id: string; name: string; logo: string; isPng?: boolean }>;
+  onSelect: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
+      >
+        {label}
+        <ChevronDown className={`h-3 w-3 text-text-muted transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="absolute left-0 right-0 top-full mt-1 z-30 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl animate-[slideUp_120ms_ease-out] p-1">
+          {options.map((opt) => (
+            <button
+              key={opt.id}
+              onClick={() => { onSelect(opt.id); setOpen(false); }}
+              className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] text-text transition-colors hover:bg-white/6"
+            >
+              <img src={opt.logo} alt={opt.name} className={`${opt.isPng ? "h-5 w-5" : "h-4 w-4"} object-contain`} />
+              {opt.name}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -357,8 +409,9 @@ export function AgentUIContent({
       { logo: windsurfLogo, name: "Windsurf", rotate: 0 },
       { logo: zedLogo, name: "Zed", rotate: 6 },
       { logo: opencodeLogo, name: "OpenCode", rotate: 12, smallPad: true },
+      { logo: antigravityLogo, name: "Antigravity", rotate: -15, noPad: true },
       { logo: claudeCodeLogo, name: "Claude Code", rotate: 18 },
-      { logo: itermLogo, name: "iTerm", rotate: -6, noPad: true },
+      { logo: itermLogo, name: "iTerm", rotate: 8, noPad: true },
     ];
 
     return (
@@ -377,36 +430,36 @@ export function AgentUIContent({
             ))}
           </div>
         </div>
-        <div className="text-center max-w-xs">
-          <h3 className="text-sm font-medium text-text">Create UI</h3>
-          <p className="mt-1.5 text-xs text-text-muted leading-relaxed">
-            Choose an editor to build this agent's interface. The editor will receive full context about the agent.
-          </p>
-        </div>
-        <div className="flex flex-col gap-2 w-full max-w-[220px]">
+        <p className="text-xs text-text-muted">Pick an editor — it will get full agent context.</p>
+        <div className="flex flex-col gap-2 w-full max-w-[240px]">
+          <CreateDropdown
+            label="Open with IDE"
+            options={[
+              { id: "cursor", name: "Cursor", logo: cursorLogo },
+              { id: "vscode", name: "VS Code", logo: vscodeLogo },
+              { id: "windsurf", name: "Windsurf", logo: windsurfLogo },
+              { id: "zed", name: "Zed", logo: zedLogo },
+              { id: "codex", name: "Codex", logo: codexLogo },
+              { id: "antigravity", name: "Antigravity", logo: antigravityLogo, isPng: true },
+            ]}
+            onSelect={createUI}
+          />
+          <CreateDropdown
+            label="Open with Terminal"
+            options={[
+              { id: "claude-code", name: "Claude Code", logo: claudeCodeLogo },
+              { id: "opencode", name: "OpenCode", logo: opencodeLogo },
+              { id: "iterm", name: "iTerm", logo: itermLogo, isPng: true },
+              { id: "terminal", name: "Terminal", logo: terminalLogo },
+            ]}
+            onSelect={createUI}
+          />
           <button
-            onClick={() => createUI("cursor")}
-            className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
+            onClick={() => setUiView("menu")}
+            className="mt-1 text-[11px] text-text-muted/50 hover:text-text-muted transition-colors"
           >
-            <img src={cursorLogo} alt="Cursor" className="h-4 w-4" />
-            Open with Cursor
+            Back
           </button>
-          <button
-            onClick={() => createUI("claude-code")}
-            className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
-          >
-            <img src={claudeCodeLogo} alt="Claude Code" className="h-4 w-4" />
-            Open with Claude Code
-          </button>
-        </div>
-        <div className="text-center max-w-[260px] space-y-1.5">
-          <p className="text-[10px] text-text-muted leading-relaxed">
-            A project folder will be created with the agent's context.
-            Just tell the editor "build the UI" and it will know what to do.
-          </p>
-          <p className="text-[10px] text-text-muted/60 leading-relaxed">
-            No tokens spent on this chat — uses your editor's AI instead.
-          </p>
         </div>
       </div>
     );
