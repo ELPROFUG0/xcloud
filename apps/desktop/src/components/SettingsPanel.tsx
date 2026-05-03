@@ -303,64 +303,65 @@ export function SettingsPanel({ engine, section: externalSection }: SettingsPane
   const [skillsLoading, setSkillsLoading] = useState(false);
   const [skillsFilter, setSkillsFilter] = useState<"all" | "ready" | "setup">("all");
 
-  // Load skills when skills section opened, cached after first load
+  // Load skills by reading SKILL.md files directly (instant, no CLI overhead)
   useEffect(() => {
     if (section !== "skills") return;
-    if (skillsCache.length > 0) return;
+    if (skillsCache.length > 0) { setSkills(skillsCache); return; }
     setSkillsLoading(true);
 
+    // Read bundled + workspace skills directly from disk
     invoke<string>("run_shell", {
-      cmd: `export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && openclaw skills list --json 2>/dev/null || openclaw skills list 2>/dev/null || echo "[]"`,
+      cmd: `for d in $(find ~/.nvm/versions/node/*/lib/node_modules/openclaw/skills/ ~/.openclaw/workspace/skills/ ~/.openclaw/skills/ -maxdepth 1 -mindepth 1 -type d 2>/dev/null); do [ -f "$d/SKILL.md" ] && echo "===DIR:$(basename $d)===" && head -12 "$d/SKILL.md"; done`,
     }).then((output) => {
       const parsed: SkillInfo[] = [];
+      const seen = new Set<string>();
+      const blocks = output.split(/===DIR:([^=]+)===/);
 
-      // Try JSON parse first
-      try {
-        const json = JSON.parse(output);
-        const list = Array.isArray(json) ? json : json.skills ?? [];
-        for (const s of list) {
-          parsed.push({
-            name: s.name ?? "",
-            description: (s.description ?? "").slice(0, 120),
-            emoji: s.emoji ?? "",
-            author: s.author ?? "",
-            version: s.version ?? "",
-            installed: s.eligible === true || s.source === "workspace",
-          });
-        }
-      } catch {
-        // Parse CLI table output
-        const lines = output.split("\n");
-        for (const line of lines) {
-          // Match lines like: │ status │ emoji name │ description │ source │
-          const match = line.match(/│\s*([\S\s]*?)\s*│\s*([\S\s]*?)\s*│\s*([\S\s]*?)\s*│\s*([\S\s]*?)\s*│/);
-          if (match) {
-            const status = match[1]!.trim();
-            const nameField = match[2]!.trim();
-            const desc = match[3]!.trim();
-            const source = match[4]!.trim();
-            if (status === "Status" || !nameField) continue;
+      for (let i = 1; i < blocks.length; i += 2) {
+        const dirName = blocks[i]!.trim();
+        const content = blocks[i + 1] ?? "";
+        const name = content.match(/^name:\s*(.+)/m)?.[1]?.trim().replace(/["']/g, "") ?? dirName;
+        const desc = content.match(/description:\s*["']?([^"'\n|]+)/m)?.[1]?.trim() ?? "";
+        const emoji = content.match(/emoji.*?["']([^"']+)["']/)?.[1] ?? content.match(/"emoji":\s*"([^"]+)"/)?.[1] ?? "";
+        const author = content.match(/^author:\s*(.+)/m)?.[1]?.trim() ?? "";
+        const version = content.match(/^version:\s*(.+)/m)?.[1]?.trim() ?? "";
+        const isWorkspace = content.includes("workspace") || !output.includes("node_modules");
 
-            // Extract emoji and name
-            const emojiMatch = nameField.match(/^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F?)\s*(.+)/u);
-            const emoji = emojiMatch?.[1] ?? "";
-            const name = (emojiMatch?.[2] ?? nameField).trim();
-
-            if (name) {
-              parsed.push({
-                name,
-                description: desc.slice(0, 120),
-                emoji,
-                installed: status.includes("ready"),
-              });
-            }
-          }
+        if (!seen.has(name)) {
+          seen.add(name);
+          parsed.push({ name, description: desc.slice(0, 120), emoji, author, version, installed: false });
         }
       }
 
+      // Show skills immediately, then check eligibility in background
       skillsCache = parsed;
-      setSkills(parsed);
+      setSkills([...parsed]);
       setSkillsLoading(false);
+
+      // Check eligibility via openclaw CLI in background
+      invoke<string>("run_shell", {
+        cmd: `export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && openclaw skills list --json 2>/dev/null || echo "{}"`,
+      }).then((jsonOutput) => {
+        try {
+          const json = JSON.parse(jsonOutput);
+          const list = json.skills ?? [];
+          const eligibleSet = new Set<string>();
+          const emojiMap = new Map<string, string>();
+          const descMap = new Map<string, string>();
+          for (const s of list as Array<{ name: string; eligible?: boolean; emoji?: string; description?: string }>) {
+            if (s.eligible) eligibleSet.add(s.name);
+            if (s.emoji) emojiMap.set(s.name, s.emoji);
+            if (s.description) descMap.set(s.name, s.description);
+          }
+          for (const s of parsed) {
+            s.installed = eligibleSet.has(s.name);
+            if (emojiMap.has(s.name)) s.emoji = emojiMap.get(s.name);
+            if (!s.description && descMap.has(s.name)) s.description = descMap.get(s.name)!.slice(0, 120);
+          }
+          skillsCache = [...parsed];
+          setSkills([...parsed]);
+        } catch { /* keep as-is */ }
+      }).catch(() => {});
     }).catch(() => setSkillsLoading(false));
   }, [section]);
 
