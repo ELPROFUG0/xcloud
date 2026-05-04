@@ -4,28 +4,21 @@ use std::process::Command as StdCommand;
 use tauri::Manager;
 
 #[tauri::command]
-async fn run_shell(cmd: String) -> Result<String, String> {
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let output = StdCommand::new("sh")
-            .arg("-c")
-            .arg(&cmd)
-            .output()
-            .map_err(|e| format!("spawn failed: {}", e))?;
+fn run_shell(cmd: String) -> Result<String, String> {
+    let output = StdCommand::new("sh")
+        .arg("-c")
+        .arg(&cmd)
+        .output()
+        .map_err(|e| format!("spawn failed: {}", e))?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        if !stdout.is_empty() {
-            Ok(stdout)
-        } else if output.status.success() {
-            Ok(String::new())
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(format!("exit {}: {}", output.status.code().unwrap_or(-1), stderr))
-        }
-    }).await;
-
-    match result {
-        Ok(inner) => inner,
-        Err(e) => Err(format!("task join error: {}", e)),
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    if !stdout.is_empty() {
+        Ok(stdout)
+    } else if output.status.success() {
+        Ok(String::new())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("exit {}: {}", output.status.code().unwrap_or(-1), stderr))
     }
 }
 
@@ -54,6 +47,12 @@ pub fn run() {
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
 
+            // Resolve bundled resource directory and store it
+            if let Ok(resource_dir) = app.path().resource_dir() {
+                let state = app.state::<engine::EngineProcess>();
+                *state.resource_dir.lock().unwrap() = Some(resource_dir);
+            }
+
             #[cfg(target_os = "macos")]
             {
                 use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
@@ -79,6 +78,9 @@ pub fn run() {
             engine::engine_ensure_running,
             engine::engine_status,
             engine::engine_stop,
+            engine::engine_init_check,
+            engine::engine_setup,
+            engine::engine_auto_pair,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

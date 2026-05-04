@@ -1,10 +1,9 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { exists, BaseDirectory } from "@tauri-apps/plugin-fs";
+import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/cn";
 import xcloudLogo from "@/assets/xcloud-logo.svg?url";
-import { ChevronRight, ArrowRight, Loader2 } from "lucide-react";
-import openclawLogo from "@/assets/openclaw-logo.svg";
+import { ArrowRight, Loader2 } from "lucide-react";
 
 // Provider logos
 import anthropicLogo from "@/assets/providers/anthropic.svg";
@@ -22,7 +21,6 @@ import githubLogo from "@/assets/providers/github.svg";
 
 interface OnboardingScreenProps {
   onComplete: () => void;
-  /** Preview mode — skips all real commands, just shows the UI */
   preview?: boolean;
 }
 
@@ -60,65 +58,40 @@ const TIMEZONES = [
   "Asia/Kolkata", "Asia/Dubai", "Australia/Sydney", "Pacific/Auckland",
 ];
 
-/** Check if OpenClaw is already set up */
-export async function checkOpenClawSetup(): Promise<boolean> {
-  try {
-    const hasIdentity = await exists(".openclaw/identity/device.json", { baseDir: BaseDirectory.Home });
-    if (!hasIdentity) return false;
-    const hasConfig = await exists(".openclaw/openclaw.json", { baseDir: BaseDirectory.Home });
-    return hasIdentity && hasConfig;
-  } catch {
-    return false;
-  }
-}
-
-/** Check if OpenClaw CLI is installed */
-async function checkOpenClawInstalled(): Promise<boolean> {
-  try {
-    await invoke<string>("run_shell", { cmd: "sh -lc 'which openclaw'" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function OnboardingScreen({ onComplete, preview }: OnboardingScreenProps) {
   const [step, setStep] = useState<Step>("welcome");
   const [provider, setProvider] = useState<ProviderOption | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [agentName, setAgentName] = useState("");
-  const [agentEmoji, setAgentEmoji] = useState("");
   const [userName, setUserName] = useState("");
   const [timezone, setTimezone] = useState("America/Mexico_City");
   const [error, setError] = useState<string | null>(null);
-  const [installing, setInstalling] = useState(false);
-  const [cliInstalled, setCliInstalled] = useState<boolean | null>(null);
   const [progress, setProgress] = useState("");
   const [progressPct, setProgressPct] = useState(0);
   const [runningMode, setRunningMode] = useState<"idle" | "preview" | "real">("idle");
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
-  // Animated progress — runs when step becomes "running"
+  // Animated progress bar
   useEffect(() => {
     if (runningMode === "idle") return;
 
     let cancelled = false;
     const steps = runningMode === "preview"
       ? [
-          { msg: "Generating device keys...", pct: 10, delay: 600 },
+          { msg: "Initializing...", pct: 10, delay: 600 },
           { msg: "Configuring gateway...", pct: 25, delay: 800 },
           { msg: "Setting up authentication...", pct: 40, delay: 700 },
-          { msg: "Installing daemon service...", pct: 55, delay: 900 },
+          { msg: "Installing services...", pct: 55, delay: 900 },
           { msg: "Creating workspace...", pct: 70, delay: 700 },
           { msg: "Almost done...", pct: 85, delay: 600 },
           { msg: "Done!", pct: 100, delay: 400 },
         ]
       : [
-          { msg: "Generating device keys...", pct: 15, delay: 500 },
+          { msg: "Initializing...", pct: 15, delay: 500 },
           { msg: "Configuring gateway...", pct: 30, delay: 700 },
           { msg: "Setting up authentication...", pct: 45, delay: 700 },
-          { msg: "Installing daemon service...", pct: 55, delay: 800 },
+          { msg: "Installing services...", pct: 55, delay: 800 },
           { msg: "Creating workspace...", pct: 65, delay: 800 },
           { msg: "Configuring agent...", pct: 75, delay: 700 },
           { msg: "Almost done...", pct: 80, delay: 600 },
@@ -131,13 +104,12 @@ export function OnboardingScreen({ onComplete, preview }: OnboardingScreenProps)
         setProgress(s.msg);
         setProgressPct(s.pct);
       }
-      // In preview, go to done after animation
       if (runningMode === "preview" && !cancelled) {
         setStep("done");
         setRunningMode("idle");
         return;
       }
-      // In real mode, keep creeping from 80→95% slowly while waiting
+      // Real mode: creep slowly from 80→95% while waiting
       let creep = 80;
       while (!cancelled && creep < 95) {
         await new Promise((r) => setTimeout(r, 1500));
@@ -150,93 +122,50 @@ export function OnboardingScreen({ onComplete, preview }: OnboardingScreenProps)
     return () => { cancelled = true; };
   }, [runningMode]);
 
-  // Check CLI on welcome step
-  const checkCli = useCallback(async () => {
-    if (preview) { setCliInstalled(true); return; }
-    const installed = await checkOpenClawInstalled();
-    setCliInstalled(installed);
-  }, [preview]);
-
-  // Import existing OpenClaw setup
-  const handleImport = useCallback(async () => {
-    if (preview) { onComplete(); return; }
-    const isSetup = await checkOpenClawSetup();
-    if (isSetup) {
-      onComplete();
-    } else {
-      setError("No existing OpenClaw setup found. Complete the setup first.");
-    }
-  }, [onComplete, preview]);
-
-  // Install OpenClaw CLI
-  const handleInstallCli = useCallback(async () => {
-    setInstalling(true);
-    setError(null);
-    try {
-      await invoke<string>("run_shell", { cmd: "sh -lc 'npm install -g openclaw@latest'" });
-      setCliInstalled(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to install OpenClaw CLI");
-    } finally {
-      setInstalling(false);
-    }
-  }, []);
-
-  // Run the full onboarding
+  // Run the full onboarding via Tauri commands (no shell scripts)
   function handleFinish() {
     setStep("running");
     setError(null);
-    setProgress("Setting up OpenClaw...");
+    setProgress("Setting up...");
     setProgressPct(0);
 
-    // Preview mode — just animate, useEffect handles the rest
     if (preview) {
       setRunningMode("preview");
       return;
     }
 
-    // Real mode — spawn + poll
     setRunningMode("real");
 
-    const parts = ["openclaw onboard --non-interactive --accept-risk --install-daemon --mode local --gateway-auth token --flow quickstart"];
-    if (provider) {
-      parts.push(`--auth-choice ${provider.authChoice}`);
-      if (provider.keyFlag && apiKey.trim()) {
-        parts.push(`${provider.keyFlag} "${apiKey.trim()}"`);
-      }
-    }
-    parts.push("--skip-channels --skip-skills --skip-search");
-    const cmd = parts.join(" ");
-
-    // Use run_shell (now async) — it won't block the UI anymore
-    invoke<string>("run_shell", { cmd: `sh -lc '${cmd}'` })
-      .then(async () => {
-        // Wait for the gateway daemon to start and be reachable
-        await new Promise((r) => setTimeout(r, 4000));
-        // Auto-approve all pending device pairing requests
-        // This runs a loop: get pending request IDs, approve each one with the gateway token
-        const approveScript = `
-TOKEN=$(grep -o '"token": *"[^"]*"' ~/.openclaw/openclaw.json | head -1 | sed 's/.*"\\([^"]*\\)"$/\\1/')
-for REQ in $(cat ~/.openclaw/devices/pending.json 2>/dev/null | grep -o '"requestId": *"[^"]*"' | sed 's/.*"\\([^"]*\\)"$/\\1/'); do
-  openclaw devices approve "$REQ" --token "$TOKEN" 2>/dev/null || true
-done
-true`.trim().replace(/\n/g, "; ");
-        await invoke<string>("run_shell", { cmd: `sh -lc '${approveScript}'` }).catch(() => {});
-        // Also try connecting once to trigger + approve any new pairing request
-        await new Promise((r) => setTimeout(r, 1000));
-        await invoke<string>("run_shell", { cmd: `sh -lc '${approveScript}'` }).catch(() => {});
-        setStep("done");
-      })
-      .catch((e) => {
-        setError(String(e));
-        setStep("user");
-      })
-      .finally(() => {
-        setRunningMode("idle");
+    // Register event listener and launch setup
+    const setupAndListen = async () => {
+      // Register listener FIRST
+      const unlisten = await listen<boolean>("engine-setup-complete", () => {
+        window.__onboardDone = true;
       });
+
+      // Launch setup (fire and forget)
+      invoke("engine_setup", {
+        params: {
+          auth_choice: provider?.authChoice ?? "skip",
+          key_flag: provider?.keyFlag ?? "",
+          api_key: apiKey.trim(),
+        },
+      }).catch(() => {});
+
+      // Poll the flag with simple setInterval (no invoke, no Tauri calls)
+      const timer = setInterval(() => {
+        if ((window as any).__onboardDone) {
+          clearInterval(timer);
+          unlisten();
+          delete (window as any).__onboardDone;
+          setStep("done");
+        }
+      }, 500);
+    };
+    setupAndListen();
   }
 
-  // Step order for skip navigation
+  // Skip to next step
   const STEP_ORDER: Step[] = ["welcome", "provider", "apikey", "identity", "user"];
   function skipStep() {
     setError(null);
@@ -246,7 +175,6 @@ true`.trim().replace(/\n/g, "; ");
       return;
     }
     const next = STEP_ORDER[idx + 1]!;
-    // Provider without key flag → skip apikey
     if (next === "apikey" && (!provider || !provider.keyFlag)) {
       setStep("identity");
     } else {
@@ -254,9 +182,8 @@ true`.trim().replace(/\n/g, "; ");
     }
   }
 
-  // --- RENDER ---
+  // --- RENDER HELPERS ---
 
-  // Shimmer logo used across steps
   const logoEl = (
     <div
       className="h-16 w-16 mx-auto mb-6"
@@ -295,8 +222,6 @@ true`.trim().replace(/\n/g, "; ");
 
   // Step: Welcome
   if (step === "welcome") {
-    if (cliInstalled === null) checkCli();
-
     return (
       <div className="flex h-full flex-col items-center justify-center bg-bg px-4">
         <div className="w-full max-w-md text-center">
@@ -306,76 +231,16 @@ true`.trim().replace(/\n/g, "; ");
             Your AI agents, everywhere. Let's get you set up.
           </p>
 
-          <div className="mt-8 space-y-3">
-            {/* Import existing */}
+          <div className="mt-8">
             <button
-              onClick={handleImport}
-              className="w-full flex items-center gap-4 rounded-2xl bg-white/10 px-5 py-4 text-left hover:bg-white/15 transition-colors"
+              onClick={() => setStep("provider")}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl bg-white text-black px-5 py-4 text-sm font-medium hover:bg-white/90 transition-colors"
             >
-              <img src={openclawLogo} alt="" className="h-8 w-8 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-text">Import from OpenClaw</div>
-                <div className="text-xs text-text-muted mt-0.5">Use your existing setup</div>
-              </div>
-              <ChevronRight size={18} className="text-text-muted shrink-0" />
-            </button>
-
-            {/* Fresh setup */}
-            <button
-              onClick={() => {
-                setError(null);
-                if (cliInstalled === false) {
-                  setStep("welcome"); // Stay, show install
-                } else {
-                  setStep("provider");
-                }
-              }}
-              className="w-full flex items-center gap-4 rounded-2xl bg-white/10 px-5 py-4 text-left hover:bg-white/15 transition-colors"
-            >
-              <div className="h-8 w-8 shrink-0 flex items-center justify-center text-lg">+</div>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-text">New Setup</div>
-                <div className="text-xs text-text-muted mt-0.5">Configure your first agent</div>
-              </div>
-              <ChevronRight size={18} className="text-text-muted shrink-0" />
+              Get Started <ArrowRight size={16} />
             </button>
           </div>
 
-          {/* CLI Install needed */}
-          {cliInstalled === false && (
-            <div className="mt-6 rounded-2xl border border-border bg-surface p-4 text-left">
-              <div className="text-sm text-text">OpenClaw CLI not found</div>
-              <div className="text-xs text-text-muted mt-1">
-                Install it to continue with the setup.
-              </div>
-              <button
-                onClick={handleInstallCli}
-                disabled={installing}
-                className={cn(
-                  "mt-3 w-full rounded-xl py-2.5 text-sm font-medium transition-colors",
-                  installing
-                    ? "bg-white/5 text-text-muted cursor-wait"
-                    : "bg-white/10 text-text hover:bg-white/15"
-                )}
-              >
-                {installing ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <Loader2 size={14} className="animate-spin" />
-                    Installing...
-                  </span>
-                ) : (
-                  "Install OpenClaw CLI"
-                )}
-              </button>
-              <div className="mt-2 text-[10px] text-text-muted font-mono text-center">
-                npm install -g openclaw@latest
-              </div>
-            </div>
-          )}
-
-          {error && (
-            <p className="mt-4 text-xs text-red-400">{error}</p>
-          )}
+          {error && <p className="mt-4 text-xs text-red-400">{error}</p>}
 
           <div className="mt-6 flex justify-center">
             {btnSkip}
@@ -403,7 +268,6 @@ true`.trim().replace(/\n/g, "; ");
                 onClick={() => {
                   setProvider(p);
                   setError(null);
-                  // Providers without API key (Ollama, GitHub Copilot) skip apikey step
                   if (!p.keyFlag) {
                     setStep("identity");
                   } else {
@@ -466,7 +330,7 @@ true`.trim().replace(/\n/g, "; ");
               autoFocus
             />
             <p className="mt-2 text-[10px] text-text-muted text-center">
-              Your key is stored locally in ~/.openclaw/openclaw.json
+              Your key is stored locally and never leaves your device.
             </p>
           </div>
 
@@ -495,7 +359,7 @@ true`.trim().replace(/\n/g, "; ");
           {logoEl}
           <h2 className="text-lg font-semibold text-text text-center">Name your agent</h2>
           <p className="mt-1 text-xs text-text-muted text-center">
-            Give your main agent a name and emoji. You can change this later.
+            Give your main agent a name. You can change this later.
           </p>
 
           <div className="mt-6">
