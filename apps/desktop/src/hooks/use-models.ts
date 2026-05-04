@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 import type { BrowserEngine, ModelInfo } from "@/lib/engine";
+import allModelsData from "@/data/all-models.json";
+
+// Full catalog of all OpenClaw models (hardcoded)
+const ALL_MODELS: ModelInfo[] = (allModelsData as Array<{ id: string; name: string; provider: string; contextWindow?: number; input?: string[] }>).map((m) => ({
+  id: m.id,
+  name: m.name,
+  provider: m.provider,
+  contextWindow: m.contextWindow,
+  input: m.input,
+}));
 
 interface ProviderGroup {
   provider: string;
@@ -36,7 +46,16 @@ export function useModels(engine: BrowserEngine): UseModelsReturn {
 
         if (cancelled) return;
 
-        setModels(modelList);
+        // Merge: gateway models + full catalog (deduplicated by id)
+        const seen = new Set(modelList.map((m) => m.id));
+        const merged = [...modelList];
+        for (const m of ALL_MODELS) {
+          if (!seen.has(m.id)) {
+            merged.push(m);
+            seen.add(m.id);
+          }
+        }
+        setModels(merged);
 
         const config = (configResult as { config?: Record<string, unknown>; hash?: string });
         setConfigHash((config.hash as string) ?? "");

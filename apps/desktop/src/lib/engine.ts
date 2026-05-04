@@ -115,7 +115,7 @@ export class BrowserEngine {
               params: {
                 minProtocol: 3,
                 maxProtocol: 3,
-                client: { id: "cli", version: "0.1.0", platform: "macos", mode: "cli" },
+                client: { id: "cli", version: "0.1.0", platform: "darwin", mode: "cli" },
                 role: "operator",
                 scopes,
                 auth: { token: this.config.token },

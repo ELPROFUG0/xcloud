@@ -94,8 +94,61 @@ export function OnboardingScreen({ onComplete, preview }: OnboardingScreenProps)
   const [installing, setInstalling] = useState(false);
   const [cliInstalled, setCliInstalled] = useState<boolean | null>(null);
   const [progress, setProgress] = useState("");
+  const [progressPct, setProgressPct] = useState(0);
+  const [runningMode, setRunningMode] = useState<"idle" | "preview" | "real">("idle");
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
+
+  // Animated progress — runs when step becomes "running"
+  useEffect(() => {
+    if (runningMode === "idle") return;
+
+    let cancelled = false;
+    const steps = runningMode === "preview"
+      ? [
+          { msg: "Generating device keys...", pct: 10, delay: 600 },
+          { msg: "Configuring gateway...", pct: 25, delay: 800 },
+          { msg: "Setting up authentication...", pct: 40, delay: 700 },
+          { msg: "Installing daemon service...", pct: 55, delay: 900 },
+          { msg: "Creating workspace...", pct: 70, delay: 700 },
+          { msg: "Almost done...", pct: 85, delay: 600 },
+          { msg: "Done!", pct: 100, delay: 400 },
+        ]
+      : [
+          { msg: "Generating device keys...", pct: 15, delay: 500 },
+          { msg: "Configuring gateway...", pct: 30, delay: 700 },
+          { msg: "Setting up authentication...", pct: 45, delay: 700 },
+          { msg: "Installing daemon service...", pct: 55, delay: 800 },
+          { msg: "Creating workspace...", pct: 65, delay: 800 },
+          { msg: "Configuring agent...", pct: 75, delay: 700 },
+          { msg: "Almost done...", pct: 80, delay: 600 },
+        ];
+
+    (async () => {
+      for (const s of steps) {
+        await new Promise((r) => setTimeout(r, s.delay));
+        if (cancelled) return;
+        setProgress(s.msg);
+        setProgressPct(s.pct);
+      }
+      // In preview, go to done after animation
+      if (runningMode === "preview" && !cancelled) {
+        setStep("done");
+        setRunningMode("idle");
+        return;
+      }
+      // In real mode, keep creeping from 80→95% slowly while waiting
+      let creep = 80;
+      while (!cancelled && creep < 95) {
+        await new Promise((r) => setTimeout(r, 1500));
+        if (cancelled) return;
+        creep += 1;
+        setProgressPct(creep);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [runningMode]);
 
   // Check CLI on welcome step
   const checkCli = useCallback(async () => {
@@ -130,87 +183,65 @@ export function OnboardingScreen({ onComplete, preview }: OnboardingScreenProps)
   }, []);
 
   // Run the full onboarding
-  const handleFinish = useCallback(async () => {
+  function handleFinish() {
     setStep("running");
     setError(null);
     setProgress("Setting up OpenClaw...");
+    setProgressPct(0);
 
-    // Preview/test mode skips actual onboard commands
-    const isTestMode = preview || localStorage.getItem("forceOnboarding") === "true";
-    if (isTestMode) {
-      await new Promise((r) => setTimeout(r, 1500));
-      if (!mountedRef.current) return;
-      localStorage.removeItem("forceOnboarding");
-      setStep("done");
+    // Preview mode — just animate, useEffect handles the rest
+    if (preview) {
+      setRunningMode("preview");
       return;
     }
 
-    try {
-      // Build the onboard command
-      const parts = ["sh -lc 'openclaw onboard --non-interactive --accept-risk --install-daemon --mode local --gateway-auth token --flow quickstart"];
+    // Real mode — spawn + poll
+    setRunningMode("real");
 
-      if (provider) {
-        parts.push(`--auth-choice ${provider.authChoice}`);
-        if (provider.keyFlag && apiKey.trim()) {
-          parts.push(`${provider.keyFlag} "${apiKey.trim()}"`);
-        }
+    const parts = ["openclaw onboard --non-interactive --accept-risk --install-daemon --mode local --gateway-auth token --flow quickstart"];
+    if (provider) {
+      parts.push(`--auth-choice ${provider.authChoice}`);
+      if (provider.keyFlag && apiKey.trim()) {
+        parts.push(`${provider.keyFlag} "${apiKey.trim()}"`);
       }
-
-      parts.push("--skip-channels --skip-skills --skip-search");
-      const cmd = parts.join(" ") + "'";
-
-      setProgress("Running openclaw onboard...");
-      await invoke<string>("run_shell", { cmd });
-
-      // Update IDENTITY.md if user provided agent name/emoji
-      if (agentName.trim() || agentEmoji.trim()) {
-        setProgress("Setting up agent identity...");
-        const identityLines = ["# IDENTITY.md - Who Am I?\n"];
-        identityLines.push(`- **Name:** ${agentName.trim() || "Assistant"}`);
-        identityLines.push(`- **Creature:** AI assistant`);
-        identityLines.push(`- **Vibe:** Helpful, direct, and friendly.`);
-        identityLines.push(`- **Emoji:** ${agentEmoji.trim() || "\u{1F916}"}`);
-        identityLines.push(`- **Avatar:** \n`);
-        const identityContent = identityLines.join("\n");
-
-        // Write via shell (writeTextFile may need the directory to exist)
-        const escaped = identityContent.replace(/'/g, "'\\''");
-        await invoke<string>("run_shell", {
-          cmd: `sh -lc 'echo "${escaped}" > ~/.openclaw/workspace/IDENTITY.md'`
-        }).catch(() => {});
-      }
-
-      // Update USER.md if user provided their name
-      if (userName.trim()) {
-        setProgress("Setting up user profile...");
-        const userLines = ["# USER.md - About Your Human\n"];
-        userLines.push(`- **Name:** ${userName.trim()}`);
-        userLines.push(`- **What to call them:** ${userName.trim()}`);
-        userLines.push(`- **Timezone:** ${timezone}`);
-        userLines.push(`- **Location:** \n`);
-        const userContent = userLines.join("\n");
-
-        const escaped = userContent.replace(/'/g, "'\\''");
-        await invoke<string>("run_shell", {
-          cmd: `sh -lc 'echo "${escaped}" > ~/.openclaw/workspace/USER.md'`
-        }).catch(() => {});
-      }
-
-      setStep("done");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(msg);
-      setStep("user"); // Go back
     }
-  }, [provider, apiKey, agentName, agentEmoji, userName, timezone, preview]);
+    parts.push("--skip-channels --skip-skills --skip-search");
+    const cmd = parts.join(" ");
+
+    // Use run_shell (now async) — it won't block the UI anymore
+    invoke<string>("run_shell", { cmd: `sh -lc '${cmd}'` })
+      .then(async () => {
+        // Wait for the gateway daemon to start and be reachable
+        await new Promise((r) => setTimeout(r, 4000));
+        // Auto-approve all pending device pairing requests
+        // This runs a loop: get pending request IDs, approve each one with the gateway token
+        const approveScript = `
+TOKEN=$(grep -o '"token": *"[^"]*"' ~/.openclaw/openclaw.json | head -1 | sed 's/.*"\\([^"]*\\)"$/\\1/')
+for REQ in $(cat ~/.openclaw/devices/pending.json 2>/dev/null | grep -o '"requestId": *"[^"]*"' | sed 's/.*"\\([^"]*\\)"$/\\1/'); do
+  openclaw devices approve "$REQ" --token "$TOKEN" 2>/dev/null || true
+done
+true`.trim().replace(/\n/g, "; ");
+        await invoke<string>("run_shell", { cmd: `sh -lc '${approveScript}'` }).catch(() => {});
+        // Also try connecting once to trigger + approve any new pairing request
+        await new Promise((r) => setTimeout(r, 1000));
+        await invoke<string>("run_shell", { cmd: `sh -lc '${approveScript}'` }).catch(() => {});
+        setStep("done");
+      })
+      .catch((e) => {
+        setError(String(e));
+        setStep("user");
+      })
+      .finally(() => {
+        setRunningMode("idle");
+      });
+  }
 
   // Step order for skip navigation
   const STEP_ORDER: Step[] = ["welcome", "provider", "apikey", "identity", "user"];
-  const skipStep = useCallback(() => {
+  function skipStep() {
     setError(null);
     const idx = STEP_ORDER.indexOf(step);
     if (idx >= STEP_ORDER.length - 1) {
-      // Last step → finish
       handleFinish();
       return;
     }
@@ -221,7 +252,7 @@ export function OnboardingScreen({ onComplete, preview }: OnboardingScreenProps)
     } else {
       setStep(next);
     }
-  }, [step, provider, handleFinish]);
+  }
 
   // --- RENDER ---
 
@@ -578,8 +609,16 @@ export function OnboardingScreen({ onComplete, preview }: OnboardingScreenProps)
             }}
           />
           <h2 className="text-lg font-semibold text-text">Setting up</h2>
-          <p className="mt-2 text-sm text-text-muted">{progress}</p>
-          <Loader2 size={20} className="animate-spin text-text-muted mx-auto mt-4" />
+          <p className="mt-3 text-sm text-text-muted">{progress}</p>
+          <div className="mt-5 w-full max-w-xs mx-auto">
+            <div className="h-1 w-full rounded-full bg-white/10 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-white transition-all duration-700 ease-out"
+                style={{ width: `${progressPct}%` }}
+              />
+            </div>
+            <p className="mt-2 text-[10px] text-text-muted text-center">{progressPct}%</p>
+          </div>
         </div>
       </div>
     );

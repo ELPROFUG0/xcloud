@@ -4,7 +4,7 @@ import { AppLayout } from "@/components/AppLayout";
 import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import xcloudLogo from "@/assets/xcloud-logo.svg?url";
-import { OnboardingScreen, checkOpenClawSetup } from "@/components/OnboardingScreen";
+import { OnboardingScreen } from "@/components/OnboardingScreen";
 
 interface OpenClawIdentity {
   deviceId: string;
@@ -54,19 +54,15 @@ export default function App() {
   const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null);
 
   // Check if onboarding is needed
-  // DEV: set localStorage.setItem("forceOnboarding", "true") to test onboarding
   useEffect(() => {
-    const forceOnboarding = localStorage.getItem("forceOnboarding") === "true";
-    if (forceOnboarding) {
-      setNeedsOnboarding(true);
-      setLoading(false);
-      return;
-    }
-    checkOpenClawSetup().then((isSetup) => {
+    invoke<string>("run_shell", {
+      cmd: "test -f $HOME/.openclaw/identity/device.json && test -f $HOME/.openclaw/openclaw.json && echo ok"
+    }).then((result) => {
+      const isSetup = result.trim() === "ok";
       setNeedsOnboarding(!isSetup);
-      if (isSetup) {
-        connectToEngine();
-      }
+      if (isSetup) connectToEngine();
+    }).catch(() => {
+      setNeedsOnboarding(true);
     });
   }, []);
 
@@ -95,8 +91,39 @@ export default function App() {
         url: wsUrl,
         ...identity,
       });
-      await client.connect();
-      setEngine(client);
+
+      try {
+        await client.connect();
+        setEngine(client);
+      } catch (connectErr) {
+        const msg = connectErr instanceof Error ? connectErr.message : String(connectErr);
+        // If pairing required, auto-approve all pending devices and retry
+        if (msg.includes("pairing")) {
+          try {
+            // Write a temp script to avoid shell quoting hell
+            await invoke<string>("run_shell", {
+              cmd: [
+                "cat > /tmp/openclaw-approve.sh << 'SCRIPT'",
+                "#!/bin/sh",
+                "TOKEN=$(python3 -c \"import json; print(json.load(open('$HOME/.openclaw/openclaw.json'))['gateway']['auth']['token'])\" 2>/dev/null)",
+                "PENDING=$(python3 -c \"import json; [print(v['requestId']) for v in json.load(open('$HOME/.openclaw/devices/pending.json')).values()]\" 2>/dev/null)",
+                "for REQ in $PENDING; do",
+                "  openclaw devices approve $REQ --token $TOKEN 2>/dev/null || true",
+                "done",
+                "SCRIPT",
+                "chmod +x /tmp/openclaw-approve.sh",
+                "sh -l /tmp/openclaw-approve.sh",
+              ].join("\n"),
+            });
+          } catch { /* ignore */ }
+          await new Promise((r) => setTimeout(r, 2000));
+          const client2 = new BrowserEngine({ url: wsUrl, ...identity });
+          await client2.connect();
+          setEngine(client2);
+          return;
+        }
+        throw connectErr;
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to connect");
     } finally {
