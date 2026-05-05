@@ -8,26 +8,26 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { LigaturesAddon } from "@xterm/addon-ligatures";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Terminal, X, Plus, Search, AlertTriangle, ChevronDown, ArrowDown, ChevronUp } from "lucide-react";
+import { Terminal, X, Plus, Search, AlertTriangle, ArrowDown, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/cn";
 import "@xterm/xterm/css/xterm.css";
 
-// ── Superset Ember theme ────────────────────────────────────────────────────
+// ── Theme matching app background (#141414) ─────────────────────────────────
 const TERMINAL_THEME = {
-  background: "#151110",
-  foreground: "#eae8e6",
-  cursor: "#e07850",
-  cursorAccent: "#151110",
-  selectionBackground: "rgba(224, 120, 80, 0.25)",
+  background: "#141414",
+  foreground: "#e8e8e8",
+  cursor: "#6366f1",
+  cursorAccent: "#141414",
+  selectionBackground: "rgba(99, 102, 241, 0.25)",
   selectionForeground: undefined,
-  black: "#151110",
+  black: "#141414",
   red: "#dc6b6b",
   green: "#7ec699",
   yellow: "#e5c07b",
   blue: "#61afef",
   magenta: "#c678dd",
   cyan: "#56b6c2",
-  white: "#eae8e6",
+  white: "#e8e8e8",
   brightBlack: "#5c5856",
   brightRed: "#e88888",
   brightGreen: "#98d1a8",
@@ -37,6 +37,8 @@ const TERMINAL_THEME = {
   brightCyan: "#73c7d3",
   brightWhite: "#ffffff",
 };
+
+const BG = TERMINAL_THEME.background;
 
 const SEARCH_DECORATIONS = {
   matchBackground: "#515c6a",
@@ -62,13 +64,12 @@ class TerminalErrorBoundary extends Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex h-full flex-col items-center justify-center gap-2" style={{ background: TERMINAL_THEME.background, color: "#a8a5a3" }}>
+        <div className="flex h-full flex-col items-center justify-center gap-2 bg-bg text-text-muted">
           <AlertTriangle className="h-5 w-5 text-red-400" />
           <p className="text-xs">Terminal crashed: {this.state.error}</p>
           <button
             onClick={() => this.props.onClose?.()}
-            className="mt-1 rounded-md px-3 py-1 text-xs transition-colors"
-            style={{ background: "#2a2827" }}
+            className="mt-1 rounded-md bg-white/10 px-3 py-1 text-xs hover:bg-white/15"
           >
             Close
           </button>
@@ -92,7 +93,7 @@ interface TerminalPanelProps {
   initialCommand?: string;
 }
 
-// ── Exported component with error boundary ──────────────────────────────────
+// ── Exported component ──────────────────────────────────────────────────────
 export function TerminalPanel(props: TerminalPanelProps) {
   return (
     <TerminalErrorBoundary onClose={props.onClose}>
@@ -101,7 +102,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
   );
 }
 
-// ── Main terminal component ─────────────────────────────────────────────────
+// ── Main component ──────────────────────────────────────────────────────────
 function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
@@ -113,8 +114,9 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
   const [searchQuery, setSearchQuery] = useState("");
   const [isAtBottom, setIsAtBottom] = useState(true);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const initRef = useRef(false);
 
-  // Parking map: tabId -> { xterm, wrapper, fitAddon, searchAddon }
+  // Parking map
   const parkedRef = useRef<Map<number, { xterm: XTerm; wrapper: HTMLDivElement; fitAddon: FitAddon; searchAddon: SearchAddon }>>(new Map());
   const unlistenersRef = useRef<Map<number, () => void>>(new Map());
 
@@ -122,21 +124,17 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
   const createTab = useCallback(async (command?: string) => {
     try {
       const ptyId: number = await invoke("pty_spawn", {
-        cols: 120,
-        rows: 32,
+        cols: 80,
+        rows: 24,
         cwd: null,
       });
 
-      const tab: TerminalTab = { id: ptyId, ptyId, title: `zsh` };
+      const tab: TerminalTab = { id: ptyId, ptyId, title: "zsh" };
 
-      // Superset-identical xterm config
       const xterm = new XTerm({
         cursorBlink: true,
         fontFamily: '"JetBrains Mono", "JetBrainsMono Nerd Font", "MesloLGM Nerd Font", "MesloLGM NF", "MesloLGS NF", "MesloLGS Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", "CaskaydiaCove Nerd Font", "Menlo", "Monaco", "Courier New", monospace',
         fontSize: 14,
-        // fontWeight, fontWeightBold, letterSpacing, lineHeight — NOT SET (xterm defaults)
-        // drawBoldTextInBrightColors — NOT SET (default: true)
-        // minimumContrastRatio — NOT SET (default: 1)
         theme: TERMINAL_THEME,
         allowProposedApi: true,
         scrollback: 5000,
@@ -145,29 +143,21 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
         cursorInactiveStyle: "outline",
       });
 
-      // Load addons in Superset order
       const fitAddon = new FitAddon();
       const searchAddon = new SearchAddon();
       xterm.loadAddon(fitAddon);
       xterm.loadAddon(searchAddon);
-
-      // Unicode11 — must be activated BEFORE buffer restore (CJK/emoji width)
       const unicode11 = new Unicode11Addon();
       xterm.loadAddon(unicode11);
       xterm.unicode.activeVersion = "11";
-
       xterm.loadAddon(new WebLinksAddon());
-
-      // Ligatures — font ligature support (try/catch for unsupported fonts)
       try { xterm.loadAddon(new LigaturesAddon()); } catch {}
 
-      // Wrapper div (parking pattern)
       const wrapper = document.createElement("div");
       wrapper.style.width = "100%";
       wrapper.style.height = "100%";
       xterm.open(wrapper);
 
-      // Track scroll position for "scroll to bottom" button
       xterm.onScroll(() => {
         const buf = xterm.buffer.active;
         setIsAtBottom(buf.viewportY >= buf.baseY);
@@ -177,23 +167,15 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
         setIsAtBottom(buf.viewportY >= buf.baseY);
       });
 
-      // User input → PTY
       xterm.onData((data) => {
         invoke("pty_write", { id: ptyId, data }).catch(() => {});
       });
 
-      // PTY output → xterm
       const unlisten = await listen<{ id: number; data: string }>("pty-output", (event) => {
-        if (event.payload.id === ptyId) {
-          xterm.write(event.payload.data);
-        }
+        if (event.payload.id === ptyId) xterm.write(event.payload.data);
       });
-
-      // PTY exit
       const unlistenExit = await listen<{ id: number; code: number | null }>("pty-exit", (event) => {
-        if (event.payload.id === ptyId) {
-          xterm.write("\r\n\x1b[38;5;241m[Process exited]\x1b[0m\r\n");
-        }
+        if (event.payload.id === ptyId) xterm.write("\r\n\x1b[38;5;241m[Process exited]\x1b[0m\r\n");
       });
 
       unlistenersRef.current.set(ptyId, () => { unlisten(); unlistenExit(); });
@@ -222,16 +204,20 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
     const parked = parkedRef.current.get(activeTab);
     if (!parked) return;
 
-    container.innerHTML = "";
+    // Clear and attach
+    while (container.firstChild) container.removeChild(container.firstChild);
     container.appendChild(parked.wrapper);
 
-    requestAnimationFrame(() => {
-      try {
-        parked.fitAddon.fit();
-        const dims = parked.fitAddon.proposeDimensions();
-        if (dims) invoke("pty_resize", { id: activeTab, cols: dims.cols, rows: dims.rows }).catch(() => {});
-      } catch {}
-      parked.xterm.focus();
+    // Delay fit to ensure DOM is laid out
+    const rafId = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try {
+          parked.fitAddon.fit();
+          const dims = parked.fitAddon.proposeDimensions();
+          if (dims) invoke("pty_resize", { id: activeTab, cols: dims.cols, rows: dims.rows }).catch(() => {});
+        } catch {}
+        parked.xterm.focus();
+      });
     });
 
     xtermRef.current = parked.xterm;
@@ -239,39 +225,52 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
     searchAddonRef.current = parked.searchAddon;
 
     return () => {
+      cancelAnimationFrame(rafId);
       if (container.contains(parked.wrapper)) container.removeChild(parked.wrapper);
     };
   }, [activeTab]);
 
-  // ── Resize observer ───────────────────────────────────────────────────────
+  // ── Resize observer (debounced) ───────────────────────────────────────────
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+
     let timeout: ReturnType<typeof setTimeout>;
-    const observer = new ResizeObserver(() => {
+    let lastCols = 0;
+    let lastRows = 0;
+
+    const observer = new ResizeObserver((entries) => {
+      // Skip zero-size entries (happens during collapse/expand)
+      const entry = entries[0];
+      if (!entry || entry.contentRect.width < 10 || entry.contentRect.height < 10) return;
+
       clearTimeout(timeout);
       timeout = setTimeout(() => {
-        if (fitAddonRef.current && activeTab !== null) {
-          try {
-            fitAddonRef.current.fit();
-            const dims = fitAddonRef.current.proposeDimensions();
-            if (dims) invoke("pty_resize", { id: activeTab, cols: dims.cols, rows: dims.rows }).catch(() => {});
-          } catch {}
-        }
-      }, 75);
+        if (!fitAddonRef.current || activeTab === null) return;
+        try {
+          fitAddonRef.current.fit();
+          const dims = fitAddonRef.current.proposeDimensions();
+          if (dims && (dims.cols !== lastCols || dims.rows !== lastRows)) {
+            lastCols = dims.cols;
+            lastRows = dims.rows;
+            invoke("pty_resize", { id: activeTab, cols: dims.cols, rows: dims.rows }).catch(() => {});
+          }
+        } catch {}
+      }, 100);
     });
+
     observer.observe(container);
     return () => { clearTimeout(timeout); observer.disconnect(); };
   }, [activeTab]);
 
-  // ── Init ──────────────────────────────────────────────────────────────────
+  // ── Init (only once) ─────────────────────────────────────────────────────
   useEffect(() => {
-    let mounted = true;
+    if (initRef.current) return;
+    initRef.current = true;
     createTab(initialCommand).catch((err) => {
       console.error("Terminal init failed:", err);
-      if (mounted && onClose) onClose();
+      if (onClose) onClose();
     });
-    return () => { mounted = false; };
   }, []);
 
   // ── Close tab ─────────────────────────────────────────────────────────────
@@ -293,7 +292,10 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
   // ── Cleanup on unmount ────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
-      for (const [id, parked] of parkedRef.current) { parked.xterm.dispose(); invoke("pty_kill", { id }).catch(() => {}); }
+      for (const [id, parked] of parkedRef.current) {
+        parked.xterm.dispose();
+        invoke("pty_kill", { id }).catch(() => {});
+      }
       for (const fn of unlistenersRef.current.values()) fn();
       parkedRef.current.clear();
       unlistenersRef.current.clear();
@@ -318,119 +320,71 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
 
-  const scrollToBottom = useCallback(() => {
-    xtermRef.current?.scrollToBottom();
-  }, []);
+  const scrollToBottom = useCallback(() => { xtermRef.current?.scrollToBottom(); }, []);
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className={cn("flex h-full flex-col", className)} style={{ background: TERMINAL_THEME.background }}>
-
-      {/* ── Tab bar (Superset style: h-10, border-b, bg-background) ── */}
-      <div className="flex h-10 shrink-0 items-center" style={{ borderBottom: "1px solid #2a2827", background: TERMINAL_THEME.background }}>
-        {/* Tabs */}
+    <div className={cn("flex h-full flex-col bg-bg", className)}>
+      {/* Tab bar */}
+      <div className="flex h-9 shrink-0 items-center border-b border-border" style={{ background: BG }}>
         <div className="flex flex-1 items-center overflow-x-auto hide-scrollbar">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className="group relative flex items-center shrink-0"
-              style={{
-                width: 160,
-                height: 40,
-                borderRight: "1px solid #2a2827",
-                padding: "0 4px 0 12px",
-                background: activeTab === tab.id ? "rgba(42, 40, 39, 0.3)" : "transparent",
-                color: activeTab === tab.id ? "#eae8e6" : "rgba(168, 165, 163, 0.7)",
-                transition: "background 150ms, color 150ms",
-              }}
-              onMouseEnter={(e) => { if (activeTab !== tab.id) e.currentTarget.style.background = "rgba(26, 23, 22, 0.2)"; }}
-              onMouseLeave={(e) => { if (activeTab !== tab.id) e.currentTarget.style.background = "transparent"; }}
+              className={cn(
+                "group flex items-center gap-2 shrink-0 h-9 px-3 text-xs border-r border-border transition-colors",
+                activeTab === tab.id
+                  ? "bg-white/[0.06] text-text"
+                  : "text-text-muted hover:bg-white/[0.03] hover:text-text/80"
+              )}
+              style={{ minWidth: 120, maxWidth: 160 }}
             >
-              <Terminal className="h-3.5 w-3.5 shrink-0" style={{ marginRight: 8 }} />
-              <span className="truncate text-xs flex-1 text-left">{tab.title}</span>
-              <button
+              <Terminal className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate flex-1 text-left">{tab.title}</span>
+              <span
                 onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
-                className="flex h-5 w-5 items-center justify-center rounded opacity-0 group-hover:opacity-100 transition-opacity"
-                style={{ color: "rgba(168, 165, 163, 0.6)" }}
-                onMouseEnter={(e) => { e.currentTarget.style.color = "#eae8e6"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.color = "rgba(168, 165, 163, 0.6)"; }}
+                className="flex h-4 w-4 items-center justify-center rounded opacity-0 group-hover:opacity-100 transition-opacity text-text-muted hover:text-text hover:bg-white/10 cursor-pointer"
               >
-                <X className="h-3.5 w-3.5" />
-              </button>
+                <X className="h-3 w-3" />
+              </span>
             </button>
           ))}
         </div>
 
-        {/* Add tab button (Superset style: size-7, rounded-md, border) */}
+        {/* Actions */}
         <div className="flex items-center gap-1 px-2">
           <button
             onClick={() => createTab()}
-            className="flex h-7 w-7 items-center justify-center rounded-md transition-colors"
-            style={{ border: "1px solid rgba(42, 40, 39, 0.6)", background: "rgba(42, 40, 39, 0.3)", color: "#a8a5a3" }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(42, 40, 39, 0.6)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(42, 40, 39, 0.3)"; }}
+            className="flex h-6 w-6 items-center justify-center rounded-md border border-border text-text-muted hover:bg-white/[0.06] hover:text-text transition-colors"
             title="New terminal"
           >
-            <Plus className="h-3.5 w-3.5" />
+            <Plus className="h-3 w-3" />
           </button>
-        </div>
-      </div>
-
-      {/* ── Pane header (Superset style: h-7, bg-muted when active) ── */}
-      <div
-        className="flex h-7 shrink-0 items-center gap-2 px-3"
-        style={{ background: "#2a2827" }}
-      >
-        {/* Terminal session dropdown trigger */}
-        <button
-          className="flex min-w-32 max-w-96 items-center gap-1.5 rounded px-1.5 py-0.5 text-xs transition-colors"
-          style={{ color: "#a8a5a3" }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = "#2a2827"; e.currentTarget.style.color = "#eae8e6"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#a8a5a3"; }}
-        >
-          <Terminal className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate">{tabs.find(t => t.id === activeTab)?.title ?? "Terminal"}</span>
-          <ChevronDown className="h-3 w-3 shrink-0 opacity-60" />
-        </button>
-
-        <div className="flex-1" />
-
-        {/* Header actions */}
-        <div className="flex items-center gap-0.5">
           <button
             onClick={() => setShowSearch(!showSearch)}
-            className="rounded p-0.5 transition-colors"
-            style={{ color: "rgba(168, 165, 163, 0.6)" }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = "#a8a5a3"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = "rgba(168, 165, 163, 0.6)"; }}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-text-muted hover:bg-white/[0.06] hover:text-text transition-colors"
             title="Search (⌘F)"
           >
-            <Search className="h-3.5 w-3.5" />
+            <Search className="h-3 w-3" />
           </button>
           {onClose && (
             <button
               onClick={onClose}
-              className="rounded p-0.5 transition-colors"
-              style={{ color: "rgba(168, 165, 163, 0.6)" }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = "#a8a5a3"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = "rgba(168, 165, 163, 0.6)"; }}
+              className="flex h-6 w-6 items-center justify-center rounded-md text-text-muted hover:bg-white/[0.06] hover:text-text transition-colors"
               title="Close terminal"
             >
-              <X className="h-3.5 w-3.5" />
+              <X className="h-3 w-3" />
             </button>
           )}
         </div>
       </div>
 
-      {/* ── Terminal content area ── */}
-      <div className="relative flex-1 min-h-0 overflow-hidden p-2" style={{ background: TERMINAL_THEME.background }}>
-        {/* Search overlay (Superset style: absolute top-right, backdrop-blur) */}
+      {/* Terminal content */}
+      <div className="relative flex-1 min-h-0 overflow-hidden p-1" style={{ background: BG }}>
+        {/* Search overlay */}
         {showSearch && (
-          <div
-            className="absolute top-1 right-1 z-10 flex items-center gap-0.5 rounded shadow-lg backdrop-blur"
-            style={{ background: "rgba(32, 30, 28, 0.95)", padding: "0 2px 0 8px", border: "1px solid rgba(42, 40, 39, 0.4)" }}
-          >
+          <div className="absolute top-1 right-1 z-10 flex items-center gap-0.5 rounded-lg border border-border bg-surface/95 shadow-lg backdrop-blur px-2">
             <input
               ref={searchInputRef}
               value={searchQuery}
@@ -445,57 +399,30 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
                 if (e.key === "Escape") { setShowSearch(false); xtermRef.current?.focus(); }
               }}
               placeholder="Search..."
-              className="h-6 w-28 bg-transparent text-sm outline-none"
-              style={{ color: "#eae8e6" }}
+              className="h-7 w-28 bg-transparent text-xs text-text placeholder-text-muted outline-none"
             />
-            <button
-              onClick={() => handleSearch("prev")}
-              className="rounded p-1 transition-colors"
-              style={{ color: "#a8a5a3" }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(168, 165, 163, 0.2)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-            >
-              <ChevronUp className="h-3.5 w-3.5" />
+            <button onClick={() => handleSearch("prev")} className="rounded p-1 text-text-muted hover:text-text hover:bg-white/[0.06]">
+              <ChevronUp className="h-3 w-3" />
             </button>
-            <button
-              onClick={() => handleSearch("next")}
-              className="rounded p-1 transition-colors"
-              style={{ color: "#a8a5a3" }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(168, 165, 163, 0.2)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-            >
-              <ChevronDown className="h-3.5 w-3.5" />
+            <button onClick={() => handleSearch("next")} className="rounded p-1 text-text-muted hover:text-text hover:bg-white/[0.06]">
+              <ChevronDown className="h-3 w-3" />
             </button>
-            <button
-              onClick={() => { setShowSearch(false); searchAddonRef.current?.clearDecorations(); xtermRef.current?.focus(); }}
-              className="rounded p-1 transition-colors"
-              style={{ color: "#a8a5a3" }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(168, 165, 163, 0.2)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-            >
-              <X className="h-3.5 w-3.5" />
+            <button onClick={() => { setShowSearch(false); searchAddonRef.current?.clearDecorations(); xtermRef.current?.focus(); }} className="rounded p-1 text-text-muted hover:text-text hover:bg-white/[0.06]">
+              <X className="h-3 w-3" />
             </button>
           </div>
         )}
 
-        {/* xterm.js container */}
-        <div ref={containerRef} className="h-full w-full" style={{ background: TERMINAL_THEME.background }} />
+        {/* xterm container */}
+        <div ref={containerRef} className="h-full w-full" style={{ background: BG }} />
 
-        {/* Scroll-to-bottom button (Superset style: bottom center, size-8, rounded-full) */}
+        {/* Scroll to bottom */}
         {!isAtBottom && (
           <button
             onClick={scrollToBottom}
-            className="absolute left-1/2 -translate-x-1/2 flex h-8 w-8 items-center justify-center rounded-full transition-all"
-            style={{
-              bottom: 16,
-              border: "1px solid #2a2827",
-              background: TERMINAL_THEME.background,
-              color: "#a8a5a3",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "#2a2827"; e.currentTarget.style.color = "#eae8e6"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = TERMINAL_THEME.background; e.currentTarget.style.color = "#a8a5a3"; }}
+            className="absolute left-1/2 -translate-x-1/2 bottom-4 flex h-7 w-7 items-center justify-center rounded-full border border-border bg-bg text-text-muted hover:bg-surface hover:text-text transition-all"
           >
-            <ArrowDown className="h-4 w-4" />
+            <ArrowDown className="h-3.5 w-3.5" />
           </button>
         )}
       </div>
