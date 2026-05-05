@@ -221,3 +221,10 @@ html, body {
   75% { transform: translateY(1px) scale(0.99); }
   100% { transform: translateY(0) scale(1); opacity: 1; }
 }
+
+@keyframes rollIn {
+  0% { transform: translateX(40px) rotate(360deg) scale(0.5); opacity: 0; }
+  60% { transform: translateX(-3px) rotate(-10deg) scale(1.05); opacity: 1; }
+  80% { transform: translateX(1px) rotate(3deg) scale(0.98); }
+  100% { transform: translateX(0) rotate(0deg) scale(1); opacity: 1; }
+}

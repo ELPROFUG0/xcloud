@@ -52,22 +52,22 @@ function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { main
     <div className="shrink-0 px-3 pb-3">
       <button
         onClick={() => setViewIdx((viewIdx + 1) % 3)}
-        className="group relative w-full rounded-2xl border border-white/[0.08] bg-white/[0.03] px-5 py-3.5 text-left transition-all hover:bg-white/[0.05]"
+        className="group relative w-full rounded-2xl border border-white/[0.08] bg-white/[0.03] px-5 py-4 text-left transition-all hover:bg-white/[0.05]"
         style={{ transform: "rotate(-1deg)" }}
       >
         {/* Icon */}
-        <div className="mb-3">
+        <div className="mb-2">
           {viewIdx === 0 ? (
-            <Letters key="letters-name" text="name me" autoPlay loop loopPauseMs={1000} color="white" strokeWidth={1.5} className="h-6 w-auto" />
+            <Letters key="letters-name" text="name me" autoPlay loop loopPauseMs={1000} color="white" strokeWidth={1.5} className="h-8 w-auto" />
           ) : viewIdx === 1 ? (
             <div key={`apps-${viewIdx}`} className="flex items-center -space-x-1">
               {[gmailIcon, slackIcon, notionIcon].map((icon, i) => (
-                <img key={i} src={icon} alt="" className="h-6 w-6 rounded"
+                <img key={i} src={icon} alt="" className="h-8 w-8 rounded-lg"
                   style={{ animation: `bounceIn${i + 1} 0.4s ${i * 0.1}s ease-out both` }} />
               ))}
             </div>
           ) : (
-            <div className="h-8 w-8 rounded-full overflow-hidden border-2 border-white">
+            <div key={`orb-${viewIdx}`} className="h-8 w-8 rounded-full overflow-hidden border-2 border-white" style={{ animation: "rollIn 0.6s ease-out both" }}>
               <video src={orbVideo} autoPlay loop muted playsInline className="h-full w-full object-cover" />
             </div>
           )}
@@ -94,14 +94,12 @@ function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { main
       </button>
 
       {/* Action */}
-      {!step.done && (
-        <button
-          onClick={step.action}
-          className="w-full mt-2 rounded-xl bg-white/[0.06] py-2 text-[11px] text-white/60 font-medium hover:bg-white/[0.1] hover:text-white/80 transition-colors"
-        >
-          {viewIdx === 1 ? "Open Settings" : "Open chat"}
-        </button>
-      )}
+      <button
+        onClick={step.action}
+        className="w-full mt-2 rounded-xl bg-white/[0.06] py-2 text-[11px] text-white/60 font-medium hover:bg-white/[0.1] hover:text-white/80 transition-colors"
+      >
+        {viewIdx === 1 ? "Open Settings" : "Open chat"}
+      </button>
     </div>
   );
 }
