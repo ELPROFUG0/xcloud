@@ -28,6 +28,7 @@ interface AgentData {
   model: { provider: string; model: string; contextWindow: number };
   skills: Array<{ name: string; description: string }>;
   memoryFiles: string[];
+  integrations: string[];
 }
 
 interface GraphNode {
@@ -52,6 +53,7 @@ const NODE_COLORS: Record<string, string> = {
   soul: "#f43f5e",
   memory: "#06b6d4",
   skills: "#f59e0b",
+  integrations: "#4EDD44",
   "ui-repo": "#3b82f6",
 };
 
@@ -92,6 +94,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail }: Agen
     model: { provider: "", model: "", contextWindow: 0 },
     skills: [],
     memoryFiles: [],
+    integrations: (() => { try { return JSON.parse(localStorage.getItem("composioConnected") ?? "[]"); } catch { return []; } })(),
   });
   const [tab, setTab] = useState<"canvas" | "ui">("canvas");
   const [dataLoaded, setDataLoaded] = useState(false);
@@ -156,6 +159,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail }: Agen
       model: { provider: "", model: "", contextWindow: 0 },
       skills: [],
       memoryFiles: [],
+      integrations: JSON.parse(localStorage.getItem("composioConnected") ?? "[]"),
     };
 
     try { data.identity = parseIdentity(await readTextFile(`${wsPath}/IDENTITY.md`, { baseDir: BaseDirectory.Home })); } catch { /* */ }
@@ -213,8 +217,19 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail }: Agen
         model: { ...prev.model, model: modelId, provider: modelId.split("/")[0] ?? "" },
       }));
     };
+    const onIntegrationChanged = () => {
+      setAgentData((prev) => ({
+        ...prev,
+        integrations: JSON.parse(localStorage.getItem("composioConnected") ?? "[]"),
+      }));
+    };
     window.addEventListener("xcloud-model-changed", onModelChanged);
-    return () => { unsubEvent(); unsubState(); window.removeEventListener("xcloud-model-changed", onModelChanged); };
+    window.addEventListener("xcloud-integration-changed", onIntegrationChanged);
+    return () => {
+      unsubEvent(); unsubState();
+      window.removeEventListener("xcloud-model-changed", onModelChanged);
+      window.removeEventListener("xcloud-integration-changed", onIntegrationChanged);
+    };
   }, [engine, loadData]);
 
   // Node click handler — sends detail to sidebar via callback
@@ -299,6 +314,11 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail }: Agen
         links.push({ source: "skills", target: `skill-${skill.name}` });
       });
     }
+    agentData.integrations.forEach((slug) => {
+      const label = slug.charAt(0).toUpperCase() + slug.slice(1).replace(/_/g, " ");
+      nodes.push({ id: `int-${slug}`, label, color: NODE_COLORS.integrations!, size: 5 });
+      links.push({ source: "agent", target: `int-${slug}` });
+    });
     if (agentUI.repoPath) {
       nodes.push({ id: "ui-repo", label: "UI", color: NODE_COLORS["ui-repo"]!, size: 5 });
       links.push({ source: "agent", target: "ui-repo" });

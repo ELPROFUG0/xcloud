@@ -394,6 +394,8 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
           setComposioApps((prev) =>
             prev.map((a) => connectedSlugs.has(a.slug) ? { ...a, connected: true } : a)
           );
+          // Save to localStorage for canvas
+          localStorage.setItem("composioConnected", JSON.stringify(Array.from(connectedSlugs)));
         }
       } catch { /* ignore — just won't show connected status */ }
     })();
@@ -456,6 +458,13 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
                 setComposioApps((prev) =>
                   prev.map((a) => a.slug === slug ? { ...a, connected: true, connecting: false } : a)
                 );
+                // Save to localStorage for canvas
+                const saved = JSON.parse(localStorage.getItem("composioConnected") ?? "[]") as string[];
+                if (!saved.includes(slug)) {
+                  saved.push(slug);
+                  localStorage.setItem("composioConnected", JSON.stringify(saved));
+                }
+                window.dispatchEvent(new CustomEvent("xcloud-integration-changed"));
                 return;
               }
             }
