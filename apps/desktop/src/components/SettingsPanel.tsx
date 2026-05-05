@@ -312,7 +312,7 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
 
     // Read bundled + workspace skills directly from disk
     invoke<string>("run_shell", {
-      cmd: `for d in $(find ~/.nvm/versions/node/*/lib/node_modules/openclaw/skills/ ~/.openclaw/workspace/skills/ ~/.openclaw/skills/ -maxdepth 1 -mindepth 1 -type d 2>/dev/null); do [ -f "$d/SKILL.md" ] && echo "===DIR:$(basename $d)===" && head -12 "$d/SKILL.md"; done`,
+      cmd: `for d in $(find ~/.openclaw/workspace/skills/ ~/.openclaw/skills/ -maxdepth 1 -mindepth 1 -type d 2>/dev/null); do [ -f "$d/SKILL.md" ] && echo "===DIR:$(basename $d)===" && head -12 "$d/SKILL.md"; done`,
     }).then((output) => {
       const parsed: SkillInfo[] = [];
       const seen = new Set<string>();
@@ -339,10 +339,8 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
       setSkills([...parsed]);
       setSkillsLoading(false);
 
-      // Check eligibility via openclaw CLI in background
-      invoke<string>("run_shell", {
-        cmd: `export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && openclaw skills list --json 2>/dev/null || echo "{}"`,
-      }).then((jsonOutput) => {
+      // Check eligibility via bundled openclaw in background
+      invoke<string>("xcloud_run", { args: ["skills", "list", "--json"] }).catch(() => "{}").then((jsonOutput) => {
         try {
           const json = JSON.parse(jsonOutput);
           const list = json.skills ?? [];
@@ -595,8 +593,8 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
               <div className="mb-6">
                 <p className="text-xs text-text-muted mb-3 uppercase tracking-wider font-semibold">Subscriptions</p>
                 {[
-                  { id: "github-copilot-login", name: "GitHub Copilot", logo: githubLogo, cmd: "openclaw models auth login-github-copilot", disconnectCmd: "openclaw models auth paste-token --provider github-copilot --token ''", description: "Use your Copilot subscription" },
-                  { id: "codex-login", name: "OpenAI Codex", logo: openaiLogo, cmd: "openclaw models auth login --provider openai-codex", disconnectCmd: "openclaw models auth paste-token --provider openai-codex --token ''", description: "Use your Codex subscription" },
+                  { id: "github-copilot-login", name: "GitHub Copilot", logo: githubLogo, cmdArgs: ["models", "auth", "login-github-copilot"], disconnectArgs: ["models", "auth", "paste-token", "--provider", "github-copilot", "--token", ""], description: "Use your Copilot subscription" },
+                  { id: "codex-login", name: "OpenAI Codex", logo: openaiLogo, cmdArgs: ["models", "auth", "login", "--provider", "openai-codex"], disconnectArgs: ["models", "auth", "paste-token", "--provider", "openai-codex", "--token", ""], description: "Use your Codex subscription" },
                 ].map((item) => (
                   <div key={item.id} className="flex items-center justify-between border-b border-border/50 py-3.5 last:border-0">
                     <div className="flex items-center gap-3 min-w-0 mr-4">
@@ -612,7 +610,7 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
                           onClick={async () => {
                             setAuthLoading(p => ({ ...p, [item.id]: true }));
                             try {
-                              await invoke("run_shell", { cmd: `export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use 24 2>/dev/null && ${item.disconnectCmd}` });
+                              await invoke<string>("xcloud_run", { args: item.disconnectArgs });
                             } catch { /* */ }
                             setAuthStatus(p => ({ ...p, [item.id]: "" }));
                             setAuthLoading(p => ({ ...p, [item.id]: false }));
@@ -627,7 +625,7 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
                           onClick={async () => {
                             setAuthLoading(p => ({ ...p, [item.id]: true }));
                             try {
-                              await invoke<string>("run_shell", { cmd: `export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use 24 2>/dev/null && openclaw models status --probe 2>&1 | grep -i "${item.name.split(" ")[0]}"` });
+                              await invoke<string>("xcloud_run", { args: ["models", "status", "--probe"] });
                               setAuthStatus(p => ({ ...p, [item.id]: "connected" }));
                             } catch {
                               setAuthStatus(p => ({ ...p, [item.id]: "failed" }));
@@ -644,7 +642,8 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
                           onClick={async () => {
                             setAuthLoading(p => ({ ...p, [item.id]: true }));
                             // Open terminal for TTY-based login
-                            await invoke("run_shell", { cmd: `osascript -e 'tell application "Terminal" to do script "nvm use 24 && ${item.cmd}"'` }).catch(() => {});
+                            // TTY-based login needs a terminal window
+                            await invoke<string>("xcloud_run", { args: item.cmdArgs }).catch(() => {});
                             setAuthStatus(p => ({ ...p, [item.id]: "check-terminal" }));
                             setAuthLoading(p => ({ ...p, [item.id]: false }));
                           }}

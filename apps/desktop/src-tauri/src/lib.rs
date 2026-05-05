@@ -79,8 +79,11 @@ pub fn run() {
             engine::engine_status,
             engine::engine_stop,
             engine::engine_init_check,
+            engine::engine_config_exists,
+            engine::engine_read_token,
             engine::engine_setup,
             engine::engine_auto_pair,
+            engine::xcloud_run,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

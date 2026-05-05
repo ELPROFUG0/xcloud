@@ -2,7 +2,7 @@
  * Browser-compatible WebSocket client for OpenClaw Gateway.
  *
  * Uses Web Crypto API for ed25519 device signing (supported in modern browsers).
- * Loads device identity from a hardcoded config (in dev) or from Tauri fs (later).
+ * Supports auto-reconnection with exponential backoff.
  */
 
 export interface SlashCommand {
@@ -29,6 +29,7 @@ export interface EngineConfig {
   privateKeyPkcs8Base64: string;
 }
 
+export type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
 export type FrameHandler = (frame: Record<string, unknown>) => void;
 
 function base64UrlEncode(buf: ArrayBuffer): string {
@@ -55,10 +56,41 @@ export class BrowserEngine {
   private _connected = false;
   private signingKey: CryptoKey | null = null;
 
+  // Reconnection state
+  private _state: ConnectionState = "disconnected";
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
+  private maxReconnectAttempts = 20;
+  private stateChangeHandlers = new Set<(state: ConnectionState) => void>();
+  private fatalHandlers = new Set<(error: string) => void>();
+  private wasConnected = false;
+
   constructor(private config: EngineConfig) {}
 
-  get connected(): boolean {
-    return this._connected;
+  get connected(): boolean { return this._connected; }
+  get state(): ConnectionState { return this._state; }
+
+  /** Update config (e.g. after token change) and reset reconnect backoff */
+  updateConfig(partial: Partial<EngineConfig>) {
+    Object.assign(this.config, partial);
+    this.reconnectAttempt = 0;
+  }
+
+  /** Subscribe to connection state changes */
+  onStateChange(handler: (state: ConnectionState) => void): () => void {
+    this.stateChangeHandlers.add(handler);
+    return () => this.stateChangeHandlers.delete(handler);
+  }
+
+  /** Subscribe to fatal errors (max reconnects exceeded) */
+  onFatal(handler: (error: string) => void): () => void {
+    this.fatalHandlers.add(handler);
+    return () => this.fatalHandlers.delete(handler);
+  }
+
+  private setState(s: ConnectionState) {
+    this._state = s;
+    for (const h of this.stateChangeHandlers) h(s);
   }
 
   private async getSigningKey(): Promise<CryptoKey> {
@@ -83,6 +115,8 @@ export class BrowserEngine {
   }
 
   async connect(): Promise<{ scopes: string[]; serverVersion: string }> {
+    this.setState("connecting");
+
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(this.config.url);
       this.ws = ws;
@@ -131,6 +165,7 @@ export class BrowserEngine {
           }).catch((err) => {
             if (!settled) {
               settled = true;
+              this.setState("disconnected");
               reject(new Error("Signing failed: " + (err instanceof Error ? err.message : String(err))));
             }
           });
@@ -141,6 +176,9 @@ export class BrowserEngine {
         if (frame.type === "res" && frame.id === "__handshake") {
           if (frame.ok) {
             this._connected = true;
+            this.wasConnected = true;
+            this.reconnectAttempt = 0;
+            this.setState("connected");
             if (!settled) {
               settled = true;
               resolve({
@@ -149,17 +187,13 @@ export class BrowserEngine {
               });
             }
           } else {
+            this.setState("disconnected");
             if (!settled) {
               settled = true;
               reject(new Error(frame.error?.message ?? "Handshake failed"));
             }
           }
           return;
-        }
-
-        // RPC error logging
-        if (frame.type === "res" && !frame.ok) {
-          console.error("[RPC ERROR]", frame.id, frame.error?.message);
         }
 
         // RPC responses
@@ -177,26 +211,62 @@ export class BrowserEngine {
         if (frame.type === "event") {
           for (const handler of this.eventHandlers) handler(frame);
         }
-
       };
 
       ws.onclose = () => {
+        const wasActive = this._connected;
         this._connected = false;
         for (const [, p] of this.pending) p.reject(new Error("Connection closed"));
         this.pending.clear();
+
+        if (wasActive && this.wasConnected) {
+          // Was connected, lost connection — auto-reconnect
+          this.scheduleReconnect();
+        }
+
         if (!settled) { settled = true; reject(new Error("Connection closed")); }
       };
 
       ws.onerror = () => {
-        if (!settled) { settled = true; reject(new Error("WebSocket failed")); }
+        if (!settled) {
+          settled = true;
+          this.setState("disconnected");
+          reject(new Error("WebSocket failed"));
+        }
       };
     });
   }
 
+  private scheduleReconnect() {
+    if (this.reconnectAttempt >= this.maxReconnectAttempts) {
+      this.setState("disconnected");
+      for (const h of this.fatalHandlers) h("Max reconnect attempts exceeded");
+      return;
+    }
+
+    this.setState("reconnecting");
+    const delay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempt), 30000);
+    this.reconnectAttempt++;
+
+    this.reconnectTimer = setTimeout(async () => {
+      try {
+        await this.connect();
+      } catch {
+        // connect() failed, onclose will trigger another scheduleReconnect
+      }
+    }, delay);
+  }
+
   disconnect(): void {
+    this.wasConnected = false; // Prevent auto-reconnect
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.ws?.close();
     this.ws = null;
     this._connected = false;
+    this.setState("disconnected");
   }
 
   onEvent(handler: FrameHandler): () => void {

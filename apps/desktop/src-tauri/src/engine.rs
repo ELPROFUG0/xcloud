@@ -4,8 +4,8 @@ use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use tauri::Emitter;
 use std::time::Duration;
+use tauri::{Emitter, Manager};
 
 const DEFAULT_PORT: u16 = 18789;
 
@@ -31,6 +31,28 @@ pub struct EngineStatus {
     pub port: u16,
     pub pid: Option<u32>,
     pub managed: bool,
+    pub identity: Option<IdentityInfo>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct IdentityInfo {
+    pub device_id: String,
+    pub public_key_pem: String,
+    pub private_key_pem: String,
+    pub token: String,
+}
+
+fn load_identity() -> Option<IdentityInfo> {
+    let state_dir = openclaw_state_dir().ok()?;
+    let device_str = fs::read_to_string(state_dir.join("identity/device.json")).ok()?;
+    let device: serde_json::Value = serde_json::from_str(&device_str).ok()?;
+    let config_str = fs::read_to_string(state_dir.join("openclaw.json")).ok()?;
+    Some(IdentityInfo {
+        device_id: device["deviceId"].as_str()?.to_string(),
+        public_key_pem: device["publicKeyPem"].as_str()?.to_string(),
+        private_key_pem: device["privateKeyPem"].as_str()?.to_string(),
+        token: json_get_string(&config_str, "/gateway/auth/token")?,
+    })
 }
 
 #[derive(Deserialize)]
@@ -39,6 +61,8 @@ pub struct SetupParams {
     pub key_flag: String,
     pub api_key: String,
 }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 fn is_port_open(port: u16) -> bool {
     TcpStream::connect_timeout(
@@ -58,20 +82,60 @@ fn openclaw_state_dir() -> Result<PathBuf, String> {
     Ok(home_dir()?.join(".openclaw"))
 }
 
+/// Extract a string value from a JSON string by key path using serde_json
+fn json_get_string(json_str: &str, pointer: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    value.pointer(pointer)?.as_str().map(String::from)
+}
+
+/// Extract all values for a key from a JSON object (searches recursively)
+fn json_collect_strings(json_str: &str, key: &str) -> Vec<String> {
+    let value: serde_json::Value = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(_) => return vec![],
+    };
+    let mut results = Vec::new();
+    fn collect(value: &serde_json::Value, key: &str, results: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(v) = map.get(key) {
+                    if let Some(s) = v.as_str() {
+                        results.push(s.to_string());
+                    }
+                }
+                for v in map.values() {
+                    collect(v, key, results);
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for v in arr {
+                    collect(v, key, results);
+                }
+            }
+            _ => {}
+        }
+    }
+    collect(&value, key, &mut results);
+    results
+}
+
+// ─── Path Resolution ──────────────────────────────────────────────────────────
+
 /// Resolve the bundled Node.js binary and OpenClaw entry point.
-/// Falls back to system-installed openclaw if bundled resources not found.
+/// In production: from Tauri resource_dir (app bundle).
+/// In dev: from src-tauri/resources/.
+/// NO system fallback — the app is self-contained.
 fn resolve_paths(resource_dir: &Option<PathBuf>) -> Result<(PathBuf, PathBuf), String> {
-    // Check bundled resources (production)
+    // Production: Tauri resource_dir
     if let Some(res) = resource_dir {
         let node_bin = res.join("node-aarch64-apple-darwin");
         let openclaw_mjs = res.join("openclaw").join("openclaw.mjs");
-
         if node_bin.exists() && openclaw_mjs.exists() {
             return Ok((node_bin, openclaw_mjs));
         }
     }
 
-    // Dev mode: check src-tauri/resources/ directly
+    // Dev mode: CARGO_MANIFEST_DIR/resources/
     let dev_resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
     let dev_node = dev_resources.join("node-aarch64-apple-darwin");
     let dev_openclaw = dev_resources.join("openclaw").join("openclaw.mjs");
@@ -79,46 +143,45 @@ fn resolve_paths(resource_dir: &Option<PathBuf>) -> Result<(PathBuf, PathBuf), S
         return Ok((dev_node, dev_openclaw));
     }
 
-    // Fallback: try system-installed openclaw
-    let output = Command::new("sh")
-        .arg("-lc")
-        .arg("which node && echo '---' && npm root -g")
-        .output()
-        .map_err(|e| format!("Failed to find system Node: {}", e))?;
-
-    if output.status.success() {
-        let text = String::from_utf8_lossy(&output.stdout);
-        let parts: Vec<&str> = text.trim().split("---").collect();
-        if parts.len() == 2 {
-            let node = PathBuf::from(parts[0].trim());
-            let openclaw = PathBuf::from(format!("{}/openclaw/openclaw.mjs", parts[1].trim()));
-            if node.exists() && openclaw.exists() {
-                return Ok((node, openclaw));
+    // Last resort fallback: find system node + openclaw via NVM
+    let home = std::env::var("HOME").unwrap_or_default();
+    let nvm_node = format!("{home}/.nvm/versions/node");
+    if let Ok(entries) = fs::read_dir(&nvm_node) {
+        for entry in entries.flatten() {
+            let node_bin = entry.path().join("bin/node");
+            let openclaw_mjs = entry.path().join("lib/node_modules/openclaw/openclaw.mjs");
+            if node_bin.exists() && openclaw_mjs.exists() {
+                return Ok((node_bin, openclaw_mjs));
             }
         }
     }
 
-    Err("OpenClaw not found. Neither bundled resources nor system install available.".to_string())
+    Err("Bundled OpenClaw not found. The app may need to be reinstalled.".to_string())
 }
 
-/// Run a bundled openclaw command and return stdout
-fn run_openclaw_cmd(resource_dir: &Option<PathBuf>, args: &[&str]) -> Result<String, String> {
+/// Run an openclaw command using the bundled node + openclaw.mjs
+fn run_openclaw(resource_dir: &Option<PathBuf>, args: &[&str]) -> Result<String, String> {
     let (node_bin, openclaw_mjs) = resolve_paths(resource_dir)?;
 
     let output = Command::new(&node_bin)
         .arg(&openclaw_mjs)
         .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .output()
         .map_err(|e| format!("Failed to run openclaw: {}", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
     if output.status.success() || !stdout.is_empty() {
         Ok(stdout)
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         Err(format!("openclaw exited {}: {}", output.status.code().unwrap_or(-1), stderr))
     }
 }
+
+// ─── Commands: Init & Setup ───────────────────────────────────────────────────
 
 /// Check if OpenClaw is initialized (device.json + openclaw.json exist)
 #[tauri::command]
@@ -129,63 +192,81 @@ pub fn engine_init_check() -> Result<bool, String> {
     Ok(has_identity && has_config)
 }
 
+/// Check if the config file exists (for detecting deletion)
+#[tauri::command]
+pub fn engine_config_exists() -> Result<bool, String> {
+    let state_dir = openclaw_state_dir()?;
+    Ok(state_dir.join("openclaw.json").exists())
+}
+
+/// Read the current gateway token from config
+#[tauri::command]
+pub fn engine_read_token() -> Result<String, String> {
+    let state_dir = openclaw_state_dir()?;
+    let config_str = fs::read_to_string(state_dir.join("openclaw.json"))
+        .map_err(|e| format!("Failed to read config: {}", e))?;
+    json_get_string(&config_str, "/gateway/auth/token")
+        .ok_or_else(|| "No gateway token found in config".to_string())
+}
+
 /// Run openclaw onboard — spawns in background thread and emits event when done
 #[tauri::command]
 pub fn engine_setup(
     app: tauri::AppHandle,
+    state: tauri::State<'_, EngineProcess>,
     params: SetupParams,
 ) {
+    let resource_dir = state.resource_dir.lock().unwrap().clone();
+
     std::thread::spawn(move || {
-        let mut cmd_str = String::from(
-            "openclaw onboard --non-interactive --accept-risk --install-daemon --mode local --gateway-auth token --flow quickstart --skip-channels --skip-skills --skip-search"
-        );
+        let mut args: Vec<String> = vec![
+            "onboard".into(),
+            "--non-interactive".into(),
+            "--accept-risk".into(),
+            "--skip-daemon".into(),
+            "--skip-health".into(),
+            "--mode".into(), "local".into(),
+            "--gateway-auth".into(), "token".into(),
+            "--flow".into(), "quickstart".into(),
+            "--skip-channels".into(),
+            "--skip-skills".into(),
+            "--skip-search".into(),
+        ];
 
         if !params.auth_choice.is_empty() {
-            cmd_str.push_str(&format!(" --auth-choice {}", params.auth_choice));
+            args.push("--auth-choice".into());
+            args.push(params.auth_choice.clone());
         }
 
         if !params.key_flag.is_empty() && !params.api_key.is_empty() {
-            cmd_str.push_str(&format!(" {} \"{}\"", params.key_flag, params.api_key));
+            args.push(params.key_flag.clone());
+            args.push(params.api_key.clone());
         }
 
-        let _ = Command::new("sh")
-            .arg("-lc")
-            .arg(&cmd_str)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output();
+        let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let _ = run_openclaw(&resource_dir, &str_args);
 
-        // Check if setup succeeded
-        let success = home_dir()
-            .map(|h| h.join(".openclaw/identity/device.json").exists())
-            .unwrap_or(false);
+        // Check workspace was created (more reliable than exit code)
+        let home = home_dir().unwrap_or_default();
+        let has_identity = home.join(".openclaw/identity/device.json").exists();
+        let has_workspace = home.join(".openclaw/workspace/IDENTITY.md").exists();
 
-        // Emit event to frontend — this bypasses the invoke handler
-        let _ = app.emit("engine-setup-complete", success);
+        let _ = app.emit("engine-setup-complete", has_identity || has_workspace);
     });
 }
 
 /// Auto-approve all pending device pairing requests
 #[tauri::command]
-pub fn engine_auto_pair() -> Result<(), String> {
+pub fn engine_auto_pair(
+    state: tauri::State<'_, EngineProcess>,
+) -> Result<(), String> {
     let state_dir = openclaw_state_dir()?;
+    let resource_dir = state.resource_dir.lock().unwrap().clone();
 
     // Read the gateway token
     let config_str = fs::read_to_string(state_dir.join("openclaw.json"))
         .map_err(|e| format!("Failed to read config: {}", e))?;
-
-    // Extract token value
-    let token = config_str
-        .find("\"token\"")
-        .and_then(|i| {
-            let rest = &config_str[i..];
-            let colon = rest.find(':')?;
-            let after = &rest[colon + 1..];
-            let q1 = after.find('"')?;
-            let after_q1 = &after[q1 + 1..];
-            let q2 = after_q1.find('"')?;
-            Some(after_q1[..q2].to_string())
-        })
+    let token = json_get_string(&config_str, "/gateway/auth/token")
         .ok_or("Failed to extract gateway token")?;
 
     // Read pending devices
@@ -194,49 +275,54 @@ pub fn engine_auto_pair() -> Result<(), String> {
         return Ok(());
     }
     let pending_str = fs::read_to_string(&pending_path).unwrap_or_default();
+    let request_ids = json_collect_strings(&pending_str, "requestId");
 
-    // Extract all requestId values
-    let mut pos = 0;
-    let mut request_ids: Vec<String> = Vec::new();
-    while let Some(idx) = pending_str[pos..].find("\"requestId\"") {
-        let rest = &pending_str[pos + idx..];
-        if let Some(colon) = rest.find(':') {
-            let after = &rest[colon + 1..];
-            if let Some(q1) = after.find('"') {
-                let after_q1 = &after[q1 + 1..];
-                if let Some(q2) = after_q1.find('"') {
-                    request_ids.push(after_q1[..q2].to_string());
-                }
-            }
-        }
-        pos += idx + 12;
-    }
-
-    // Approve each with sh -lc (uses system openclaw)
+    // Approve each pending request using bundled openclaw
     for req_id in &request_ids {
-        let _ = Command::new("sh")
-            .arg("-lc")
-            .arg(format!("openclaw devices approve {} --token {}", req_id, token))
-            .output();
+        let _ = run_openclaw(
+            &resource_dir,
+            &["devices", "approve", req_id.as_str(), "--token", token.as_str()],
+        );
     }
 
     Ok(())
 }
 
+/// Run an arbitrary openclaw command using bundled binaries
+#[tauri::command]
+pub fn xcloud_run(
+    state: tauri::State<'_, EngineProcess>,
+    args: Vec<String>,
+) -> Result<String, String> {
+    let resource_dir = state.resource_dir.lock().unwrap().clone();
+    let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    run_openclaw(&resource_dir, &str_args)
+}
+
+// ─── Commands: Gateway Lifecycle ──────────────────────────────────────────────
+
 #[tauri::command]
 pub async fn engine_ensure_running(
+    app: tauri::AppHandle,
     state: tauri::State<'_, EngineProcess>,
 ) -> Result<EngineStatus, String> {
     let port = *state.port.lock().unwrap();
 
     // Already running?
     if is_port_open(port) {
+        // Auto-approve pending devices in background (don't block)
+        let resource_dir_clone = state.resource_dir.lock().unwrap().clone();
+        std::thread::spawn(move || {
+            auto_pair_devices(&resource_dir_clone);
+        });
+
         let child_guard = state.child.lock().unwrap();
         return Ok(EngineStatus {
             running: true,
             port,
             pid: child_guard.as_ref().map(|c| c.id()),
             managed: child_guard.is_some(),
+            identity: load_identity(),
         });
     }
 
@@ -272,7 +358,7 @@ pub async fn engine_ensure_running(
         *child_guard = Some(child);
     }
 
-    // Wait for port (up to 30s) — longer timeout for first run when plugins install
+    // Wait for port (up to 30s for first run when plugins install)
     for _ in 0..100 {
         std::thread::sleep(Duration::from_millis(300));
 
@@ -294,16 +380,110 @@ pub async fn engine_ensure_running(
         }
 
         if is_port_open(port) {
+            // Auto-approve pending devices in background
+            let resource_dir_clone2 = state.resource_dir.lock().unwrap().clone();
+            std::thread::spawn(move || {
+                auto_pair_devices(&resource_dir_clone2);
+            });
+
+            // Start health monitor
+            let monitor_app = app.clone();
+            let monitor_port = port;
+            std::thread::spawn(move || {
+                gateway_health_monitor(monitor_app, monitor_port);
+            });
+
             return Ok(EngineStatus {
                 running: true,
                 port,
                 pid: Some(pid),
                 managed: true,
+                identity: load_identity(),
             });
         }
     }
 
     Err(format!("OpenClaw started (pid {}) but port {} not available after 30s", pid, port))
+}
+
+/// Auto-approve all pending device pairing requests (called internally, not via invoke)
+fn auto_pair_devices(resource_dir: &Option<PathBuf>) {
+    let state_dir = match openclaw_state_dir() {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+
+    let config_str = match fs::read_to_string(state_dir.join("openclaw.json")) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let token = match json_get_string(&config_str, "/gateway/auth/token") {
+        Some(t) => t,
+        None => return,
+    };
+
+    let pending_path = state_dir.join("devices").join("pending.json");
+    if !pending_path.exists() {
+        return;
+    }
+
+    let pending_str = fs::read_to_string(&pending_path).unwrap_or_default();
+    let request_ids = json_collect_strings(&pending_str, "requestId");
+
+    for req_id in &request_ids {
+        let _ = run_openclaw(
+            resource_dir,
+            &["devices", "approve", req_id.as_str(), "--token", token.as_str()],
+        );
+    }
+}
+
+/// Background thread that monitors gateway health and emits events on crash
+fn gateway_health_monitor(app: tauri::AppHandle, port: u16) {
+    loop {
+        std::thread::sleep(Duration::from_secs(5));
+
+        let state = app.state::<EngineProcess>();
+
+        // Check if child still exists
+        {
+            let child_guard = state.child.lock().unwrap();
+            if child_guard.is_none() {
+                // Gateway was stopped intentionally
+                break;
+            }
+        }
+
+        // Check if process exited
+        {
+            let mut child_guard = state.child.lock().unwrap();
+            if let Some(ref mut c) = *child_guard {
+                match c.try_wait() {
+                    Ok(Some(status)) => {
+                        *child_guard = None;
+                        let _ = app.emit("engine-gateway-crashed",
+                            format!("Gateway exited with status: {}", status));
+                        break;
+                    }
+                    Err(e) => {
+                        *child_guard = None;
+                        let _ = app.emit("engine-gateway-crashed",
+                            format!("Process check failed: {}", e));
+                        break;
+                    }
+                    Ok(None) => {} // Still running
+                }
+            } else {
+                break;
+            }
+        }
+
+        // Check port connectivity
+        if !is_port_open(port) {
+            let _ = app.emit("engine-gateway-unresponsive", ());
+        }
+    }
 }
 
 #[tauri::command]
@@ -315,6 +495,7 @@ pub async fn engine_status(state: tauri::State<'_, EngineProcess>) -> Result<Eng
         port,
         pid: child_guard.as_ref().map(|c| c.id()),
         managed: child_guard.is_some(),
+        identity: load_identity(),
     })
 }
 
