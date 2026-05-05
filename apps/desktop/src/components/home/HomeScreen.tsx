@@ -53,7 +53,7 @@ function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { main
       <button
         onClick={() => setViewIdx((viewIdx + 1) % 3)}
         className="group relative w-full rounded-2xl border border-white/[0.08] bg-white/[0.03] px-5 py-4 text-left transition-all hover:bg-white/[0.05]"
-        style={{ transform: "rotate(-1deg)" }}
+        style={{ transform: "rotate(0deg)" }}
       >
         {/* Icon */}
         <div className="mb-2">
@@ -109,7 +109,8 @@ function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { main
       {/* Action */}
       <button
         onClick={step.action}
-        className="w-full mt-2 rounded-xl bg-white/[0.06] py-2 text-[11px] text-white/60 font-medium hover:bg-white/[0.1] hover:text-white/80 transition-colors"
+        className="w-full mt-2 bg-white/10 py-2.5 text-[12px] text-white font-medium hover:bg-white/15 transition-colors"
+        style={{ borderRadius: "12px", WebkitBorderRadius: "12px" }}
       >
         {viewIdx === 1 ? "Open Settings" : "Open chat"}
       </button>
