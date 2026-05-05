@@ -1,4 +1,5 @@
 mod engine;
+mod pty;
 
 use std::process::Command as StdCommand;
 use tauri::Manager;
@@ -44,6 +45,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(engine::EngineProcess::default())
+        .manage(pty::PtyState::default())
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
 
@@ -84,6 +86,10 @@ pub fn run() {
             engine::engine_setup,
             engine::engine_auto_pair,
             engine::xcloud_run,
+            pty::pty_spawn,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_kill,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

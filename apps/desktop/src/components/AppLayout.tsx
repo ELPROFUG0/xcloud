@@ -1,7 +1,7 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, lazy, Suspense } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
-import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, X, Sparkles, Plug } from "lucide-react";
+import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, Sparkles, Plug, Terminal } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { HomeScreen } from "./home/HomeScreen";
 import { useSessions } from "@/hooks/use-sessions";
@@ -10,6 +10,7 @@ import { AgentCanvas, type DetailPanel } from "./canvas/AgentCanvas";
 import { SettingsPanel } from "./SettingsPanel";
 import { DevPreview } from "./DevPreview";
 import { OnboardingScreen } from "./OnboardingScreen";
+const TerminalPanel = lazy(() => import("./terminal/TerminalPanel").then(m => ({ default: m.TerminalPanel })));
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTheme } from "@/hooks/use-theme";
 import ReactMarkdown from "react-markdown";
@@ -48,9 +49,16 @@ export function AppLayout({ engine }: AppLayoutProps) {
   const [canvasLabels, setCanvasLabels] = useState(() => localStorage.getItem("canvasShowLabels") !== "false");
   const [canvasOrbs, setCanvasOrbs] = useState(() => localStorage.getItem("canvasUseOrbs") === "true");
   const [showOnboardingPreview, setShowOnboardingPreview] = useState(false);
+  const [showTerminal, setShowTerminal] = useState(false);
+  const [terminalHeight, setTerminalHeight] = useState(() => {
+    const saved = localStorage.getItem("terminalHeight");
+    return saved ? Number(saved) : 300;
+  });
+  const [terminalCommand, setTerminalCommand] = useState<string | undefined>(undefined);
   const canvasViewportRef = useRef<Record<string, { x: number; y: number; zoom: number }>>({});
   const dragging = useRef(false);
   const draggingCanvas = useRef(false);
+  const draggingTerminal = useRef(false);
 
   // Detect fullscreen
   useEffect(() => {
@@ -79,6 +87,36 @@ export function AppLayout({ engine }: AppLayoutProps) {
       localStorage.setItem("canvasWidth", String(canvasWidth));
     }
   }, [isDragging, canvasWidth]);
+
+  // Persist terminal height when drag ends
+  useEffect(() => {
+    if (!isDragging) {
+      localStorage.setItem("terminalHeight", String(terminalHeight));
+    }
+  }, [isDragging, terminalHeight]);
+
+  // Listen for terminal open requests (from agent tools or UI)
+  useEffect(() => {
+    function handleOpenTerminal(e: Event) {
+      const cmd = (e as CustomEvent).detail?.command;
+      setTerminalCommand(cmd || undefined);
+      setShowTerminal(true);
+    }
+    window.addEventListener("xcloud-open-terminal", handleOpenTerminal);
+    return () => window.removeEventListener("xcloud-open-terminal", handleOpenTerminal);
+  }, []);
+
+  // Cmd+` to toggle terminal
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.metaKey && e.key === "`") {
+        e.preventDefault();
+        setShowTerminal((v) => !v);
+      }
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, []);
 
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
@@ -135,6 +173,34 @@ export function AppLayout({ engine }: AppLayoutProps) {
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
   }, []);
+
+  const onTerminalMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    draggingTerminal.current = true;
+    setIsDragging(true);
+    const startY = e.clientY;
+    const startHeight = terminalHeight;
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!draggingTerminal.current) return;
+      const delta = startY - ev.clientY;
+      setTerminalHeight(Math.min(600, Math.max(150, startHeight + delta)));
+    };
+
+    const onMouseUp = () => {
+      draggingTerminal.current = false;
+      setIsDragging(false);
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+  }, [terminalHeight]);
 
   const handleSelectAgent = useCallback((id: string) => {
     setActiveAgentId(id);
@@ -315,13 +381,25 @@ export function AppLayout({ engine }: AppLayoutProps) {
               <Settings className="h-4 w-4" />
               <span className="text-sm font-medium">Settings</span>
             </button>
-            <button
-              onClick={() => { setShowPreview(!showPreview); setShowSettings(false); }}
-              className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-white/6 hover:text-text"
-              title="Preview"
-            >
-              <Eye className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-0.5">
+              <button
+                onClick={() => setShowTerminal(!showTerminal)}
+                className={cn(
+                  "flex h-7 w-7 items-center justify-center rounded-lg transition-colors",
+                  showTerminal ? "bg-white/10 text-text" : "text-text-muted hover:bg-white/6 hover:text-text"
+                )}
+                title="Terminal (⌘`)"
+              >
+                <Terminal className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => { setShowPreview(!showPreview); setShowSettings(false); }}
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-white/6 hover:text-text"
+                title="Preview"
+              >
+                <Eye className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -359,26 +437,53 @@ export function AppLayout({ engine }: AppLayoutProps) {
             </div>
           ) : (
             <>
-          {/* Chat */}
-          <div className="flex flex-1 min-w-0 flex-col" style={{ display: canvasExpanded ? "none" : undefined }}>
-            {hasChat ? (
-              <ChatPanel
-                key={`${currentAgentId}-${activeSessionKey ?? "default"}`}
-                engine={engine}
-                agentId={currentAgentId}
-                sessionKey={activeSessionKey ?? undefined}
-                agentName={agents.find((a) => a.id === currentAgentId)?.name ?? currentAgentId}
-                agents={agents}
-                onSwitchAgent={(id) => setActiveAgentId(id)}
-                sidebarCollapsed={sidebarCollapsed}
-                isFullscreen={isFullscreen}
-                onRefresh={refreshAgents}
-              />
-            ) : (
-              <div className="flex h-full flex-col items-center justify-center gap-4 text-text-muted">
-                <div className="text-3xl opacity-20">✦</div>
-                <p className="text-sm">Select an agent to start chatting</p>
-              </div>
+          {/* Chat + Terminal (vertical split) */}
+          <div className="flex flex-1 min-w-0 min-h-0 flex-col overflow-hidden" style={{ display: canvasExpanded ? "none" : undefined }}>
+            {/* Chat area */}
+            <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
+              {hasChat ? (
+                <ChatPanel
+                  key={`${currentAgentId}-${activeSessionKey ?? "default"}`}
+                  engine={engine}
+                  agentId={currentAgentId}
+                  sessionKey={activeSessionKey ?? undefined}
+                  agentName={agents.find((a) => a.id === currentAgentId)?.name ?? currentAgentId}
+                  agents={agents}
+                  onSwitchAgent={(id) => setActiveAgentId(id)}
+                  sidebarCollapsed={sidebarCollapsed}
+                  isFullscreen={isFullscreen}
+                  onRefresh={refreshAgents}
+                />
+              ) : (
+                <div className="flex h-full flex-col items-center justify-center gap-4 text-text-muted">
+                  <div className="text-3xl opacity-20">✦</div>
+                  <p className="text-sm">Select an agent to start chatting</p>
+                </div>
+              )}
+            </div>
+
+            {/* Terminal panel (below chat) */}
+            {showTerminal && (
+              <>
+                {/* Resize handle */}
+                <div
+                  onMouseDown={onTerminalMouseDown}
+                  data-interactive
+                  className="relative z-10 h-0 w-full shrink-0 cursor-row-resize"
+                >
+                  <div className="absolute -top-1.5 left-0 w-full h-3 group">
+                    <div className="absolute top-1/2 left-0 w-full h-px -translate-y-1/2 bg-white/[0.06] transition-colors group-hover:bg-accent" />
+                  </div>
+                </div>
+                <div className="shrink-0" style={{ height: terminalHeight, transition: isDragging ? "none" : "height 150ms ease" }}>
+                  <Suspense fallback={<div className="flex h-full items-center justify-center bg-bg text-text-muted text-xs">Loading terminal...</div>}>
+                    <TerminalPanel
+                      initialCommand={terminalCommand}
+                      onClose={() => setShowTerminal(false)}
+                    />
+                  </Suspense>
+                </div>
+              </>
             )}
           </div>
 

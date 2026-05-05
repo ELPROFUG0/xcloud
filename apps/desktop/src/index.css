@@ -228,3 +228,40 @@ html, body {
   80% { transform: translateX(1px) rotate(3deg) scale(0.98); }
   100% { transform: translateX(0) rotate(0deg) scale(1); opacity: 1; }
 }
+
+/* Font smoothing — Superset applies antialiased globally */
+.xterm {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Terminal — xterm.js overrides (Superset style) */
+.xterm, .xterm .xterm-scrollable-element,
+.xterm .xterm-viewport, .xterm .xterm-screen {
+  height: 100%;
+  width: 100%;
+}
+.xterm-viewport {
+  scrollbar-width: none;
+}
+.xterm-viewport::-webkit-scrollbar {
+  display: none;
+}
+.xterm .xterm-rows a {
+  color: inherit;
+  cursor: pointer;
+}
+.xterm .xterm-rows a.xterm-underline-5 {
+  text-decoration-color: #3b8eea;
+}
+.xterm .xterm-rows a:hover.xterm-underline-5 {
+  text-decoration-color: #5ca8ff;
+}
+
+/* Hide scrollbar in tab bar overflow */
+.hide-scrollbar {
+  scrollbar-width: none;
+}
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
