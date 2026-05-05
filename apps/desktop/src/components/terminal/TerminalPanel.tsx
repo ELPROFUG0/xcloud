@@ -184,7 +184,7 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
       const xterm = new XTerm({
         cursorBlink: true,
         fontFamily: '"JetBrains Mono", "JetBrainsMono Nerd Font", "MesloLGM Nerd Font", "MesloLGM NF", "MesloLGS NF", "MesloLGS Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", "CaskaydiaCove Nerd Font", "Menlo", "Monaco", "Courier New", monospace',
-        fontSize: 14,
+        fontSize: 12,
         theme: TERMINAL_THEME,
         allowProposedApi: true,
         scrollback: 5000,
@@ -251,23 +251,22 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
     while (container.firstChild) container.removeChild(container.firstChild);
     container.appendChild(parked.wrapper);
 
-    const rafId = requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        try {
-          parked.fitAddon.fit();
-          const dims = parked.fitAddon.proposeDimensions();
-          if (dims) invoke("pty_resize", { id: activeTab, cols: dims.cols, rows: dims.rows }).catch(() => {});
-        } catch {}
-        parked.xterm.focus();
-      });
-    });
+    // Wait for layout to settle before fitting
+    const timerId = setTimeout(() => {
+      try {
+        parked.fitAddon.fit();
+        const dims = parked.fitAddon.proposeDimensions();
+        if (dims) invoke("pty_resize", { id: activeTab, cols: dims.cols, rows: dims.rows }).catch(() => {});
+      } catch {}
+      parked.xterm.focus();
+    }, 50);
 
     xtermRef.current = parked.xterm;
     fitAddonRef.current = parked.fitAddon;
     searchAddonRef.current = parked.searchAddon;
 
     return () => {
-      cancelAnimationFrame(rafId);
+      clearTimeout(timerId);
       if (container.contains(parked.wrapper)) container.removeChild(parked.wrapper);
     };
   }, [activeTab]);
@@ -279,25 +278,69 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
     let timeout: ReturnType<typeof setTimeout>;
     let lastCols = 0;
     let lastRows = 0;
+    let lastWidth = 0;
+    let lastHeight = 0;
+    let mouseDown = false;
+    let pendingResize = false;
+
+    const doResize = () => {
+      if (!fitAddonRef.current || activeTab === null) return;
+      try {
+        const xterm = xtermRef.current;
+        const wasAtBottom = xterm ? xterm.buffer.active.viewportY >= xterm.buffer.active.baseY : true;
+
+        fitAddonRef.current.fit();
+        const dims = fitAddonRef.current.proposeDimensions();
+        if (dims && (dims.cols !== lastCols || dims.rows !== lastRows)) {
+          lastCols = dims.cols;
+          lastRows = dims.rows;
+          invoke("pty_resize", { id: activeTab, cols: dims.cols, rows: dims.rows }).catch(() => {});
+        }
+
+        if (wasAtBottom && xterm) xterm.scrollToBottom();
+      } catch {}
+      pendingResize = false;
+    };
+
+    // Track mouse state — only resize on mouseup to avoid mid-drag duplication
+    const onMouseDown = () => { mouseDown = true; };
+    const onMouseUp = () => {
+      mouseDown = false;
+      if (pendingResize) {
+        clearTimeout(timeout);
+        timeout = setTimeout(doResize, 50);
+      }
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("mouseup", onMouseUp);
+
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
-      if (!entry || entry.contentRect.width < 10 || entry.contentRect.height < 10) return;
-      clearTimeout(timeout);
-      timeout = setTimeout(() => {
-        if (!fitAddonRef.current || activeTab === null) return;
-        try {
-          fitAddonRef.current.fit();
-          const dims = fitAddonRef.current.proposeDimensions();
-          if (dims && (dims.cols !== lastCols || dims.rows !== lastRows)) {
-            lastCols = dims.cols;
-            lastRows = dims.rows;
-            invoke("pty_resize", { id: activeTab, cols: dims.cols, rows: dims.rows }).catch(() => {});
-          }
-        } catch {}
-      }, 100);
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      if (width < 10 || height < 10) return;
+      // Skip if size barely changed (sub-pixel jitter)
+      if (Math.abs(width - lastWidth) < 2 && Math.abs(height - lastHeight) < 2) return;
+      lastWidth = width;
+      lastHeight = height;
+
+      if (mouseDown) {
+        // Mouse is held — defer resize until release
+        pendingResize = true;
+      } else {
+        // No drag — debounce normally (window resize, etc.)
+        clearTimeout(timeout);
+        pendingResize = false;
+        timeout = setTimeout(doResize, 200);
+      }
     });
     observer.observe(container);
-    return () => { clearTimeout(timeout); observer.disconnect(); };
+    return () => {
+      clearTimeout(timeout);
+      observer.disconnect();
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
   }, [activeTab]);
 
   // ── Init ──────────────────────────────────────────────────────────────────
