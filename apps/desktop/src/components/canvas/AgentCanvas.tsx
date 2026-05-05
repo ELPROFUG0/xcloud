@@ -3,6 +3,7 @@ import ForceGraph2D from "react-force-graph-2d";
 // ReactMarkdown removed — detail panel moved to sidebar
 import type { BrowserEngine } from "@/lib/engine";
 import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
+import orbOverlayUrl from "@/assets/orb-overlay.png?url";
 // lucide icons removed — detail panel moved to sidebar
 import { useAgentUI, AgentUIHeaderControls, AgentUIContent } from "./AgentUI";
 
@@ -28,7 +29,7 @@ interface AgentData {
   model: { provider: string; model: string; contextWindow: number };
   skills: Array<{ name: string; description: string }>;
   memoryFiles: string[];
-  integrations: string[];
+  integrations: Array<{ slug: string; logo: string }>;
 }
 
 interface GraphNode {
@@ -94,7 +95,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail }: Agen
     model: { provider: "", model: "", contextWindow: 0 },
     skills: [],
     memoryFiles: [],
-    integrations: (() => { try { return JSON.parse(localStorage.getItem("composioConnected") ?? "[]"); } catch { return []; } })(),
+    integrations: (() => { try { const d = JSON.parse(localStorage.getItem("composioConnected") ?? "[]"); return d.map((i: unknown) => typeof i === "string" ? { slug: i, logo: "" } : i); } catch { return []; } })(),
   });
   const [tab, setTab] = useState<"canvas" | "ui">("canvas");
   const [dataLoaded, setDataLoaded] = useState(false);
@@ -107,6 +108,25 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail }: Agen
   const [, forceRender] = useState(0);
   const avatarImg = useRef<HTMLImageElement | null>(null);
   const [avatarLoaded, setAvatarLoaded] = useState(false);
+  const orbImg = useRef<HTMLImageElement | null>(null);
+  const integrationLogos = useRef<Record<string, HTMLImageElement>>({});
+
+  // Load orb image
+  useEffect(() => {
+    const img = new Image();
+    img.onload = () => { orbImg.current = img; };
+    img.src = orbOverlayUrl;
+  }, []);
+
+  // Load integration logos from localStorage data URLs
+  useEffect(() => {
+    for (const app of agentData.integrations) {
+      if (!app.logo || integrationLogos.current[app.slug]) continue;
+      const img = new Image();
+      img.onload = () => { integrationLogos.current[app.slug] = img; };
+      img.src = app.logo;
+    }
+  }, [agentData.integrations]);
 
   // Load avatar image
   useEffect(() => {
@@ -159,7 +179,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail }: Agen
       model: { provider: "", model: "", contextWindow: 0 },
       skills: [],
       memoryFiles: [],
-      integrations: JSON.parse(localStorage.getItem("composioConnected") ?? "[]"),
+      integrations: (() => { try { const d = JSON.parse(localStorage.getItem("composioConnected") ?? "[]"); return d.map((i: unknown) => typeof i === "string" ? { slug: i, logo: "" } : i); } catch { return []; } })(),
     };
 
     try { data.identity = parseIdentity(await readTextFile(`${wsPath}/IDENTITY.md`, { baseDir: BaseDirectory.Home })); } catch { /* */ }
@@ -220,7 +240,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail }: Agen
     const onIntegrationChanged = () => {
       setAgentData((prev) => ({
         ...prev,
-        integrations: JSON.parse(localStorage.getItem("composioConnected") ?? "[]"),
+        integrations: (() => { try { const d = JSON.parse(localStorage.getItem("composioConnected") ?? "[]"); return d.map((i: unknown) => typeof i === "string" ? { slug: i, logo: "" } : i); } catch { return []; } })(),
       }));
     };
     window.addEventListener("xcloud-model-changed", onModelChanged);
@@ -314,10 +334,13 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail }: Agen
         links.push({ source: "skills", target: `skill-${skill.name}` });
       });
     }
-    agentData.integrations.forEach((slug) => {
-      const label = slug.charAt(0).toUpperCase() + slug.slice(1).replace(/_/g, " ");
-      nodes.push({ id: `int-${slug}`, label, color: NODE_COLORS.integrations!, size: 5 });
-      links.push({ source: "agent", target: `int-${slug}` });
+    const seenIntegrations = new Set<string>();
+    agentData.integrations.forEach((app) => {
+      if (seenIntegrations.has(app.slug)) return;
+      seenIntegrations.add(app.slug);
+      const label = app.slug.charAt(0).toUpperCase() + app.slug.slice(1).replace(/_/g, " ");
+      nodes.push({ id: `int-${app.slug}`, label, color: NODE_COLORS.integrations!, size: 5 });
+      links.push({ source: "agent", target: `int-${app.slug}` });
     });
     if (agentUI.repoPath) {
       nodes.push({ id: "ui-repo", label: "UI", color: NODE_COLORS["ui-repo"]!, size: 5 });
@@ -367,11 +390,25 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail }: Agen
       brightness = n.isCenter ? 240 : isBranch ? 224 : 208;
     }
 
-    // Circle
-    ctx.beginPath();
-    ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
-    ctx.fillStyle = `rgb(${brightness}, ${brightness}, ${brightness})`;
-    ctx.fill();
+    // Orb node
+    if (orbImg.current) {
+      const orbSize = r * 3.5;
+      // Background circle to blend with canvas bg
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, orbSize / 2, 0, 2 * Math.PI);
+      ctx.fillStyle = "#141414";
+      ctx.fill();
+      // Orb overlay
+      ctx.globalAlpha = brightness / 255;
+      ctx.drawImage(orbImg.current, n.x - orbSize / 2, n.y - orbSize / 2, orbSize, orbSize);
+      ctx.globalAlpha = 1;
+    } else {
+      // Fallback circle
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
+      ctx.fillStyle = `rgb(${brightness}, ${brightness}, ${brightness})`;
+      ctx.fill();
+    }
 
     // Avatar or emoji on center node
     if (n.isCenter) {
@@ -388,6 +425,109 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail }: Agen
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillText(n.emoji, n.x, n.y);
+      }
+    }
+
+    // Branch node icons (white)
+    const iconNodes = ["trigger", "identity", "model", "soul", "memory", "skills"];
+    if (iconNodes.includes(n.id) && !n.isCenter) {
+      const s = r * 0.7;
+      ctx.strokeStyle = "white";
+      ctx.fillStyle = "white";
+      ctx.lineWidth = s * 0.15;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+
+      if (n.id === "trigger") {
+        // Chat bubble
+        ctx.beginPath();
+        ctx.moveTo(n.x - s, n.y - s * 0.7);
+        ctx.lineTo(n.x + s, n.y - s * 0.7);
+        ctx.quadraticCurveTo(n.x + s * 1.2, n.y - s * 0.7, n.x + s * 1.2, n.y - s * 0.2);
+        ctx.lineTo(n.x + s * 1.2, n.y + s * 0.3);
+        ctx.quadraticCurveTo(n.x + s * 1.2, n.y + s * 0.7, n.x + s * 0.7, n.y + s * 0.7);
+        ctx.lineTo(n.x - s * 0.2, n.y + s * 0.7);
+        ctx.lineTo(n.x - s * 0.7, n.y + s * 1.1);
+        ctx.lineTo(n.x - s * 0.7, n.y + s * 0.7);
+        ctx.quadraticCurveTo(n.x - s * 1.2, n.y + s * 0.7, n.x - s * 1.2, n.y + s * 0.2);
+        ctx.lineTo(n.x - s * 1.2, n.y - s * 0.2);
+        ctx.quadraticCurveTo(n.x - s * 1.2, n.y - s * 0.7, n.x - s, n.y - s * 0.7);
+        ctx.stroke();
+      } else if (n.id === "identity") {
+        // Person
+        ctx.beginPath();
+        ctx.arc(n.x, n.y - s * 0.4, s * 0.45, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(n.x, n.y + s * 1.1, s * 0.9, Math.PI * 1.2, Math.PI * 1.8);
+        ctx.stroke();
+      } else if (n.id === "model") {
+        // CPU/chip
+        ctx.strokeRect(n.x - s * 0.5, n.y - s * 0.5, s, s);
+        for (let i = -1; i <= 1; i += 2) {
+          ctx.beginPath(); ctx.moveTo(n.x + i * s * 0.5, n.y - s * 0.8); ctx.lineTo(n.x + i * s * 0.5, n.y - s * 0.5); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(n.x + i * s * 0.5, n.y + s * 0.5); ctx.lineTo(n.x + i * s * 0.5, n.y + s * 0.8); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(n.x - s * 0.8, n.y + i * s * 0.25); ctx.lineTo(n.x - s * 0.5, n.y + i * s * 0.25); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(n.x + s * 0.5, n.y + i * s * 0.25); ctx.lineTo(n.x + s * 0.8, n.y + i * s * 0.25); ctx.stroke();
+        }
+      } else if (n.id === "soul") {
+        // Heart
+        ctx.beginPath();
+        ctx.moveTo(n.x, n.y + s * 0.7);
+        ctx.bezierCurveTo(n.x - s * 1.2, n.y - s * 0.2, n.x - s * 0.6, n.y - s * 1, n.x, n.y - s * 0.3);
+        ctx.bezierCurveTo(n.x + s * 0.6, n.y - s * 1, n.x + s * 1.2, n.y - s * 0.2, n.x, n.y + s * 0.7);
+        ctx.stroke();
+      } else if (n.id === "memory") {
+        // Brain/database
+        ctx.beginPath();
+        ctx.ellipse(n.x, n.y - s * 0.5, s * 0.7, s * 0.3, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(n.x - s * 0.7, n.y - s * 0.5); ctx.lineTo(n.x - s * 0.7, n.y + s * 0.5); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(n.x + s * 0.7, n.y - s * 0.5); ctx.lineTo(n.x + s * 0.7, n.y + s * 0.5); ctx.stroke();
+        ctx.beginPath();
+        ctx.ellipse(n.x, n.y, s * 0.7, s * 0.3, 0, 0, Math.PI);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.ellipse(n.x, n.y + s * 0.5, s * 0.7, s * 0.3, 0, 0, Math.PI);
+        ctx.stroke();
+      } else if (n.id === "skills") {
+        // Sparkle/star
+        const pts = 4;
+        ctx.beginPath();
+        for (let i = 0; i < pts * 2; i++) {
+          const angle = (i * Math.PI) / pts - Math.PI / 2;
+          const dist = i % 2 === 0 ? s * 0.8 : s * 0.3;
+          const px = n.x + Math.cos(angle) * dist;
+          const py = n.y + Math.sin(angle) * dist;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
+
+    // Integration logo masked to squircle
+    if (n.id.startsWith("int-")) {
+      const slug = n.id.slice(4);
+      const logo = integrationLogos.current[slug];
+      if (logo) {
+        const s = r * 1.8;
+        const cr = s * 0.25;
+        const x = n.x - s / 2;
+        const y = n.y - s / 2;
+        ctx.save();
+        // Squircle mask
+        ctx.beginPath();
+        ctx.moveTo(x + cr, y);
+        ctx.arcTo(x + s, y, x + s, y + s, cr);
+        ctx.arcTo(x + s, y + s, x, y + s, cr);
+        ctx.arcTo(x, y + s, x, y, cr);
+        ctx.arcTo(x, y, x + s, y, cr);
+        ctx.closePath();
+        ctx.clip();
+        // Draw logo filling the entire mask
+        ctx.drawImage(logo, x, y, s, s);
+        ctx.restore();
       }
     }
 

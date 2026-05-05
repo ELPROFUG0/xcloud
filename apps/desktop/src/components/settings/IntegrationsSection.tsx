@@ -69,7 +69,29 @@ export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProp
           setComposioApps((prev) =>
             prev.map((a) => connectedSlugs.has(a.slug) ? { ...a, connected: true } : a)
           );
-          localStorage.setItem("composioConnected", JSON.stringify(Array.from(connectedSlugs)));
+          // Save slugs + download logos as base64 for canvas
+          const existing: Array<{slug: string; logo: string}> = JSON.parse(localStorage.getItem("composioConnected") ?? "[]");
+          const existingSlugs = new Set(existing.map(e => typeof e === "string" ? e : e.slug));
+          for (const slug of connectedSlugs) {
+            if (!existingSlugs.has(slug)) {
+              // Download logo and store as base64
+              invoke<string>("run_shell", {
+                cmd: `curl -s "https://logos.composio.dev/api/${slug}" | base64`,
+              }).then((b64) => {
+                if (!b64.trim()) return;
+                const items: Array<{slug: string; logo: string}> = JSON.parse(localStorage.getItem("composioConnected") ?? "[]");
+                items.push({ slug, logo: `data:image/svg+xml;base64,${b64.trim()}` });
+                localStorage.setItem("composioConnected", JSON.stringify(items));
+              }).catch(() => {
+                // Save without logo
+                const items: Array<{slug: string; logo: string}> = JSON.parse(localStorage.getItem("composioConnected") ?? "[]");
+                if (!items.find(i => i.slug === slug)) {
+                  items.push({ slug, logo: "" });
+                  localStorage.setItem("composioConnected", JSON.stringify(items));
+                }
+              });
+            }
+          }
         }
       } catch { /* ignore — just won't show connected status */ }
     })();
@@ -129,12 +151,24 @@ export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProp
                 setComposioApps((prev) =>
                   prev.map((a) => a.slug === slug ? { ...a, connected: true, connecting: false } : a)
                 );
-                const saved = JSON.parse(localStorage.getItem("composioConnected") ?? "[]") as string[];
-                if (!saved.includes(slug)) {
-                  saved.push(slug);
-                  localStorage.setItem("composioConnected", JSON.stringify(saved));
-                }
-                window.dispatchEvent(new CustomEvent("xcloud-integration-changed"));
+                // Save with logo
+                invoke<string>("run_shell", {
+                  cmd: `curl -s "https://logos.composio.dev/api/${slug}" | base64`,
+                }).then((b64) => {
+                  const items: Array<{slug: string; logo: string}> = JSON.parse(localStorage.getItem("composioConnected") ?? "[]");
+                  if (!items.find(i => i.slug === slug)) {
+                    items.push({ slug, logo: b64.trim() ? `data:image/svg+xml;base64,${b64.trim()}` : "" });
+                    localStorage.setItem("composioConnected", JSON.stringify(items));
+                  }
+                  window.dispatchEvent(new CustomEvent("xcloud-integration-changed"));
+                }).catch(() => {
+                  const items: Array<{slug: string; logo: string}> = JSON.parse(localStorage.getItem("composioConnected") ?? "[]");
+                  if (!items.find(i => i.slug === slug)) {
+                    items.push({ slug, logo: "" });
+                    localStorage.setItem("composioConnected", JSON.stringify(items));
+                  }
+                  window.dispatchEvent(new CustomEvent("xcloud-integration-changed"));
+                });
                 return;
               }
             }
