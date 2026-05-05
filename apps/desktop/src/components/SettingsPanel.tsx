@@ -106,6 +106,7 @@ interface ComposioApp {
   description: string;
   categories: string[];
   connected: boolean;
+  connecting?: boolean;
 }
 
 interface ChannelField {
@@ -433,14 +434,44 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
       const redirectUrl = inner.data?.results?.[slug]?.redirect_url;
 
       if (redirectUrl) {
-        await openUrl(redirectUrl);
+        // Mark as connecting
         setComposioApps((prev) =>
-          prev.map((a) => a.slug === slug ? { ...a, connected: true } : a)
+          prev.map((a) => a.slug === slug ? { ...a, connecting: true } : a)
+        );
+        await openUrl(redirectUrl);
+
+        // Poll for connection to become active (up to 5 minutes)
+        for (let i = 0; i < 60; i++) {
+          await new Promise((r) => setTimeout(r, 5000));
+          try {
+            const checkResult = await invoke<string>("run_shell", {
+              cmd: `curl -s -X POST "https://connect.composio.dev/mcp" -H "x-consumer-api-key: ${composioKey.trim()}" -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"COMPOSIO_MANAGE_CONNECTIONS","arguments":{"toolkits":[{"name":"${slug}","action":"list"}]}}}'`,
+            });
+            const checkLine = checkResult.split("\n").find(l => l.startsWith("data:"));
+            if (checkLine) {
+              const checkRpc = JSON.parse(checkLine.slice(5).trim());
+              const checkText = checkRpc.result?.content?.[0]?.text ?? "";
+              const checkInner = JSON.parse(checkText);
+              if (checkInner.data?.results?.[slug]?.status === "active") {
+                setComposioApps((prev) =>
+                  prev.map((a) => a.slug === slug ? { ...a, connected: true, connecting: false } : a)
+                );
+                return;
+              }
+            }
+          } catch { /* keep polling */ }
+        }
+        // Timeout — remove connecting state
+        setComposioApps((prev) =>
+          prev.map((a) => a.slug === slug ? { ...a, connecting: false } : a)
         );
       } else {
         throw new Error("No redirect URL received");
       }
     } catch (err) {
+      setComposioApps((prev) =>
+        prev.map((a) => a.slug === slug ? { ...a, connecting: false } : a)
+      );
       setComposioError(err instanceof Error ? err.message : "Failed to connect");
     }
   }, [composioKey]);
@@ -1393,10 +1424,7 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
                     {filteredComposioApps.map((app) => (
                       <div
                         key={app.slug}
-                        className={cn(
-                          "flex items-center gap-3 rounded-xl bg-container px-3 py-3 transition-colors",
-                          app.connected && "ring-1 ring-emerald-500/30"
-                        )}
+                        className="flex items-center gap-3 rounded-xl bg-container px-3 py-3 transition-colors"
                       >
                         {app.logo ? (
                           <img src={app.logo} alt="" className="h-7 w-7 shrink-0 rounded-lg" />
@@ -1409,7 +1437,11 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
                           <div className="text-sm text-text truncate">{app.name}</div>
                         </div>
                         {app.connected ? (
-                          <span className="shrink-0 text-[10px] text-emerald-400 font-medium">Connected</span>
+                          <span className="shrink-0 rounded-md px-2 py-0.5 text-[10px] text-white font-semibold" style={{ backgroundColor: "#4EDD44" }}>Connected</span>
+                        ) : app.connecting ? (
+                          <span className="shrink-0 flex items-center gap-1 text-[10px] text-amber-400 font-medium">
+                            <Loader2 size={10} className="animate-spin" /> Waiting...
+                          </span>
                         ) : (
                           <button
                             onClick={() => handleComposioConnect(app.slug)}
