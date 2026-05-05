@@ -46,7 +46,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
   const [canvasTransitioning, setCanvasTransitioning] = useState(false);
   const [showCanvasSettings, setShowCanvasSettings] = useState(false);
   const [canvasLabels, setCanvasLabels] = useState(() => localStorage.getItem("canvasShowLabels") !== "false");
-  const [canvasOrbs, setCanvasOrbs] = useState(() => localStorage.getItem("canvasUseOrbs") !== "false");
+  const [canvasOrbs, setCanvasOrbs] = useState(() => localStorage.getItem("canvasUseOrbs") === "true");
   const [showOnboardingPreview, setShowOnboardingPreview] = useState(false);
   const canvasViewportRef = useRef<Record<string, { x: number; y: number; zoom: number }>>({});
   const dragging = useRef(false);

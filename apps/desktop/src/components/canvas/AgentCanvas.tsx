@@ -100,7 +100,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
   });
   const [tab, setTab] = useState<"canvas" | "ui">("canvas");
   const [showLabels, setShowLabels] = useState(() => localStorage.getItem("canvasShowLabels") !== "false");
-  const [useOrbs, setUseOrbs] = useState(() => localStorage.getItem("canvasUseOrbs") !== "false");
+  const [useOrbs, setUseOrbs] = useState(() => localStorage.getItem("canvasUseOrbs") === "true");
   const [dataLoaded, setDataLoaded] = useState(false);
   const [dimensions, setDimensions] = useState({ width: 400, height: 400 });
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
@@ -248,7 +248,11 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
     };
     const onCanvasSettingsChanged = () => {
       setShowLabels(localStorage.getItem("canvasShowLabels") !== "false");
-      setUseOrbs(localStorage.getItem("canvasUseOrbs") !== "false");
+      setUseOrbs(localStorage.getItem("canvasUseOrbs") === "true");
+      // Force canvas repaint
+      if (graphRef.current) {
+        graphRef.current.d3ReheatSimulation();
+      }
     };
     window.addEventListener("xcloud-model-changed", onModelChanged);
     window.addEventListener("xcloud-integration-changed", onIntegrationChanged);
@@ -572,7 +576,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
       ctx.fillText(n.label, n.x, n.y + r + 2 + offset);
       ctx.globalAlpha = 1;
     }
-  }, [hoveredNode, connectedNodes]);
+  }, [hoveredNode, connectedNodes, showLabels, useOrbs]);
 
   // Configure forces when graph ref is ready
   useEffect(() => {
