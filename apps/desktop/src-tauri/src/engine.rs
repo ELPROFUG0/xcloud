@@ -246,10 +246,40 @@ pub fn engine_setup(
         let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let _ = run_openclaw(&resource_dir, &str_args);
 
-        // Check workspace was created (more reliable than exit code)
+        // Append Composio instructions to AGENTS.md if it exists
         let home = home_dir().unwrap_or_default();
+        let agents_md = home.join(".openclaw/workspace/AGENTS.md");
+        if agents_md.exists() {
+            let content = fs::read_to_string(&agents_md).unwrap_or_default();
+            if !content.contains("Composio Integrations") {
+                let composio_block = r#"
+
+## Composio Integrations
+
+You have access to Composio MCP tools for connecting and using external apps. The user may have connected apps like Gmail, Notion, Slack, GitHub, etc. via OAuth in the app's Settings → Integrations.
+
+### Available tools:
+- **COMPOSIO_SEARCH_TOOLS** — Search for available tools by use case
+- **COMPOSIO_MANAGE_CONNECTIONS** — Add, list, or remove app connections
+- **COMPOSIO_WAIT_FOR_CONNECTIONS** — Poll until a connection becomes active
+
+### Workflow:
+1. Call `COMPOSIO_SEARCH_TOOLS` with the user's request to find relevant tools
+2. If no active connection, call `COMPOSIO_MANAGE_CONNECTIONS` to initiate OAuth
+3. Share the auth link and call `COMPOSIO_WAIT_FOR_CONNECTIONS`
+4. Once connected, execute the toolkit tools directly
+
+### Important:
+- Never execute a toolkit tool without an ACTIVE connection
+- Connected apps are managed through Composio's OAuth — no API keys needed
+- To connect a new app, use COMPOSIO_MANAGE_CONNECTIONS with action "add"
+"#;
+                let _ = fs::write(&agents_md, format!("{}{}", content, composio_block));
+            }
+        }
+
         let has_identity = home.join(".openclaw/identity/device.json").exists();
-        let has_workspace = home.join(".openclaw/workspace/IDENTITY.md").exists();
+        let has_workspace = agents_md.exists();
 
         let _ = app.emit("engine-setup-complete", has_identity || has_workspace);
     });

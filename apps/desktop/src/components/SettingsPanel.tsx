@@ -3,6 +3,7 @@ import composioAppsData from "@/data/composio-apps.json";
 import { useTheme, type ThemeName, type ThemeColors } from "@/hooks/use-theme";
 import { RotateCcw } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "@/lib/cn";
 import type { BrowserEngine } from "@/lib/engine";
 import { useModels } from "@/hooks/use-models";
@@ -351,18 +352,61 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
     })),
   []);
 
-  // Show apps when key is present
+  // Show apps and check connected status when key is present
   useEffect(() => {
     if (section !== "integrations" || !composioKey.trim()) {
       setComposioApps([]);
       return;
     }
+    // Start with catalog
     setComposioApps(COMPOSIO_CATALOG);
+
+    // Check connected status for popular apps via MCP
+    (async () => {
+      try {
+        // Query a broad set of common toolkits to check connection status
+        const checkSlugs = ["gmail", "slack", "notion", "github", "google_calendar", "google_drive",
+          "discord", "twitter", "linkedin", "jira", "linear", "hubspot", "salesforce",
+          "stripe", "shopify", "figma", "asana", "trello", "airtable", "dropbox"];
+
+        const result = await invoke<string>("run_shell", {
+          cmd: `curl -s -X POST "https://connect.composio.dev/mcp" -H "x-consumer-api-key: ${composioKey.trim()}" -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"COMPOSIO_MANAGE_CONNECTIONS","arguments":{"toolkits":[${checkSlugs.map(s => `{"name":"${s}","action":"list"}`).join(",")}]}}}'`,
+        });
+
+        const dataLine = result.split("\n").find(l => l.startsWith("data:"));
+        if (!dataLine) return;
+
+        const rpc = JSON.parse(dataLine.slice(5).trim());
+        const contentText = rpc.result?.content?.[0]?.text ?? "";
+        const inner = JSON.parse(contentText);
+        const results = inner.data?.results ?? {};
+
+        const connectedSlugs = new Set<string>();
+        for (const [slug, info] of Object.entries(results)) {
+          const toolkit = info as Record<string, unknown>;
+          if (toolkit.status === "active") {
+            connectedSlugs.add(slug);
+          }
+        }
+
+        if (connectedSlugs.size > 0) {
+          setComposioApps((prev) =>
+            prev.map((a) => connectedSlugs.has(a.slug) ? { ...a, connected: true } : a)
+          );
+        }
+      } catch { /* ignore — just won't show connected status */ }
+    })();
   }, [section, composioKey, COMPOSIO_CATALOG]);
 
-  const saveComposioKey = useCallback((key: string) => {
+  const saveComposioKey = useCallback(async (key: string) => {
     setComposioKey(key);
     localStorage.setItem("composioApiKey", key);
+    // Configure Composio MCP server in OpenClaw so agents can use connected apps
+    if (key.trim()) {
+      await invoke<string>("run_shell", {
+        cmd: `sh -lc 'openclaw mcp set composio "{\\"transport\\":\\"streamable-http\\",\\"url\\":\\"https://connect.composio.dev/mcp\\",\\"headers\\":{\\"x-consumer-api-key\\":\\"${key.trim()}\\"}}"'`,
+      }).catch(() => {});
+    }
   }, []);
 
   const filteredComposioApps = useMemo(() => {
@@ -374,41 +418,27 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
   const handleComposioConnect = useCallback(async (slug: string) => {
     if (!composioKey.trim()) return;
     try {
-      // Use COMPOSIO_MANAGE_CONNECTIONS via MCP to initiate OAuth
-      const res = await fetch("https://connect.composio.dev/mcp", {
-        method: "POST",
-        headers: {
-          "x-consumer-api-key": composioKey.trim(),
-          "Content-Type": "application/json",
-          "Accept": "application/json, text/event-stream",
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0", id: Date.now(),
-          method: "tools/call",
-          params: {
-            name: "COMPOSIO_MANAGE_CONNECTIONS",
-            arguments: {
-              toolkits: [{ name: slug, action: "add" }],
-            },
-          },
-        }),
+      // Call Composio MCP via Rust backend (avoids CORS)
+      const result = await invoke<string>("run_shell", {
+        cmd: `curl -s -X POST "https://connect.composio.dev/mcp" -H "x-consumer-api-key: ${composioKey.trim()}" -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"COMPOSIO_MANAGE_CONNECTIONS","arguments":{"toolkits":[{"name":"${slug}","action":"add"}]}}}'`,
       });
 
-      const text = await res.text();
       // Parse SSE response
-      const dataLine = text.split("\n").find(l => l.startsWith("data:"));
-      if (dataLine) {
-        const data = JSON.parse(dataLine.replace("data: ", ""));
-        const content = data.result?.content?.[0]?.text ?? "";
-        // Extract redirect URL from response
-        const urlMatch = content.match(/https:\/\/[^\s)]+/);
-        if (urlMatch) {
-          window.open(urlMatch[0], "_blank");
-          // Mark as connecting
-          setComposioApps((prev) =>
-            prev.map((a) => a.slug === slug ? { ...a, connected: true } : a)
-          );
-        }
+      const dataLine = result.split("\n").find(l => l.startsWith("data:"));
+      if (!dataLine) throw new Error("No response from Composio");
+
+      const rpcResponse = JSON.parse(dataLine.slice(5).trim());
+      const contentText = rpcResponse.result?.content?.[0]?.text ?? "";
+      const inner = JSON.parse(contentText);
+      const redirectUrl = inner.data?.results?.[slug]?.redirect_url;
+
+      if (redirectUrl) {
+        await openUrl(redirectUrl);
+        setComposioApps((prev) =>
+          prev.map((a) => a.slug === slug ? { ...a, connected: true } : a)
+        );
+      } else {
+        throw new Error("No redirect URL received");
       }
     } catch (err) {
       setComposioError(err instanceof Error ? err.message : "Failed to connect");
