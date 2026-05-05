@@ -44,6 +44,9 @@ export function AppLayout({ engine }: AppLayoutProps) {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [canvasExpanded, setCanvasExpanded] = useState(false);
   const [canvasTransitioning, setCanvasTransitioning] = useState(false);
+  const [showCanvasSettings, setShowCanvasSettings] = useState(false);
+  const [canvasLabels, setCanvasLabels] = useState(() => localStorage.getItem("canvasShowLabels") !== "false");
+  const [canvasOrbs, setCanvasOrbs] = useState(() => localStorage.getItem("canvasUseOrbs") !== "false");
   const [showOnboardingPreview, setShowOnboardingPreview] = useState(false);
   const canvasViewportRef = useRef<Record<string, { x: number; y: number; zoom: number }>>({});
   const dragging = useRef(false);
@@ -245,6 +248,49 @@ export function AppLayout({ engine }: AppLayoutProps) {
                 ) : null}
               </div>
             </div>
+          ) : showCanvasSettings ? (
+            /* Canvas settings */
+            <div className="flex h-full flex-col">
+              <div className={`px-3 pb-3 ${isFullscreen ? "pt-12" : "pt-14"}`}>
+                <button
+                  onClick={() => setShowCanvasSettings(false)}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text-muted transition-colors hover:bg-white/6 hover:text-text"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  <span className="text-[13px] font-medium">Canvas Settings</span>
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-4">
+                <div className="flex items-center justify-between py-2">
+                  <span className="text-sm text-text">Show labels</span>
+                  <button
+                    onClick={() => {
+                      const v = !canvasLabels;
+                      setCanvasLabels(v);
+                      localStorage.setItem("canvasShowLabels", String(v));
+                      window.dispatchEvent(new CustomEvent("xcloud-canvas-settings"));
+                    }}
+                    className={`relative h-5 w-9 rounded-full transition-colors ${canvasLabels ? "bg-white/30" : "bg-white/10"}`}
+                  >
+                    <div className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${canvasLabels ? "translate-x-4" : "translate-x-0.5"}`} />
+                  </button>
+                </div>
+                <div className="flex items-center justify-between py-2">
+                  <span className="text-sm text-text">Orb style</span>
+                  <button
+                    onClick={() => {
+                      const v = !canvasOrbs;
+                      setCanvasOrbs(v);
+                      localStorage.setItem("canvasUseOrbs", String(v));
+                      window.dispatchEvent(new CustomEvent("xcloud-canvas-settings"));
+                    }}
+                    className={`relative h-5 w-9 rounded-full transition-colors ${canvasOrbs ? "bg-white/30" : "bg-white/10"}`}
+                  >
+                    <div className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${canvasOrbs ? "translate-x-4" : "translate-x-0.5"}`} />
+                  </button>
+                </div>
+              </div>
+            </div>
           ) : (
             <HomeScreen
               agents={agents}
@@ -366,6 +412,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
                   savedViewport={canvasViewportRef.current[currentAgentId]}
                   onViewportChange={(vp) => { canvasViewportRef.current[currentAgentId] = vp; }}
                   onNodeDetail={setNodeDetail}
+                  onCanvasSettings={() => setShowCanvasSettings(!showCanvasSettings)}
                 />
               </div>
               {showPreview && <DevPreview />}
