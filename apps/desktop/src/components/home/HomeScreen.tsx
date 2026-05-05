@@ -7,6 +7,10 @@ import { cn } from "@/lib/cn";
 import { EmojiPicker } from "../ui/EmojiPicker";
 import { AgentAvatar } from "../ui/AgentAvatar";
 import { updateAgentEmoji } from "@/lib/update-identity";
+import gmailIcon from "@/assets/setup-icons/gmail.svg";
+import slackIcon from "@/assets/setup-icons/slack.svg";
+import notionIcon from "@/assets/setup-icons/notion.svg";
+import { Letters } from "@kumailnanji/letters";
 
 interface HomeScreenProps {
   agents: AgentInfo[];
@@ -36,76 +40,67 @@ function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { main
   if (completed >= 3) return null;
 
   const steps = [
-    { done: hasName, emoji: "✨", title: "Name your agent", description: "Ask it to pick a name and personality", action: () => onSelectAgent(mainAgent.id) },
-    { done: hasIntegrations, emoji: "🔌", title: "Connect your apps", description: "Link Gmail, Notion, Slack and more", action: () => onOpenSettings?.() },
-    { done: hasSubAgents, emoji: "🤖", title: "Create a sub-agent", description: "Ask your agent to create a specialist", action: () => onSelectAgent(mainAgent.id) },
+    { done: hasName, title: "Name your agent", description: "Ask it to pick a name and personality", action: () => onSelectAgent(mainAgent.id) },
+    { done: hasIntegrations, title: "Connect your apps", description: "Link Gmail, Notion, Slack and more", action: () => onOpenSettings?.() },
+    { done: hasSubAgents, title: "Create a sub-agent", description: "Ask your agent to create a specialist", action: () => onSelectAgent(mainAgent.id) },
   ];
 
   const step = steps[viewIdx] ?? steps[0]!;
 
   return (
-    <div className="shrink-0 px-3 pb-2">
+    <div className="shrink-0 px-3 pb-3">
       <button
         onClick={() => setViewIdx((viewIdx + 1) % 3)}
-        className="group relative w-full overflow-hidden rounded-2xl bg-gradient-to-br from-white/[0.06] to-white/[0.02] border border-white/[0.06] p-4 text-left transition-all hover:from-white/[0.08] hover:to-white/[0.04] hover:border-white/[0.1]"
+        className="group relative w-full rounded-2xl border border-white/[0.08] bg-white/[0.03] p-5 text-left transition-all hover:bg-white/[0.05]"
         style={{ transform: "rotate(-1deg)" }}
       >
-        {/* Decorative dots */}
-        <div className="absolute top-2.5 right-3 flex gap-1">
-          <div className={cn("h-1 w-1 rounded-full", hasName ? "bg-accent" : "bg-accent/30")} />
-          <div className={cn("h-1 w-1 rounded-full", hasIntegrations ? "bg-emerald-400" : "bg-emerald-400/30")} />
-          <div className={cn("h-1 w-1 rounded-full", hasSubAgents ? "bg-amber-400" : "bg-amber-400/30")} />
+        {/* Icon */}
+        <div className="mb-4">
+          {viewIdx === 0 ? (
+            <Letters key="letters-name" text="name me" autoPlay loop loopPauseMs={1000} color="white" strokeWidth={1.5} className="h-6 w-auto" />
+          ) : viewIdx === 1 ? (
+            <div className="flex items-center -space-x-1">
+              <img src={gmailIcon} alt="" className="h-6 w-6 rounded" />
+              <img src={slackIcon} alt="" className="h-6 w-6 rounded" />
+              <img src={notionIcon} alt="" className="h-6 w-6 rounded" />
+            </div>
+          ) : (
+            <svg className="h-6 w-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="4" y="10" width="16" height="11" rx="2" /><circle cx="12" cy="6" r="3" /><circle cx="9" cy="15" r="1" fill="currentColor" /><circle cx="15" cy="15" r="1" fill="currentColor" /></svg>
+          )}
         </div>
 
-        {/* Circle progress + content */}
-        <div className="flex items-start gap-3">
-          <div className="shrink-0 relative h-10 w-10 mt-0.5">
-            <svg className="h-10 w-10 -rotate-90" viewBox="0 0 36 36">
-              <circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="2.5" />
-              <circle
-                cx="18" cy="18" r="15" fill="none" stroke="white" strokeWidth="2.5"
-                strokeDasharray={2 * Math.PI * 15} strokeDashoffset={2 * Math.PI * 15 - (completed / 3) * 2 * Math.PI * 15}
-                strokeLinecap="round"
-                className="transition-all duration-500"
-              />
-            </svg>
-            <span className="absolute inset-0 flex items-center justify-center text-[11px]">{step.emoji}</span>
-          </div>
+        {/* Text */}
+        <p className={cn("text-[14px] font-bold leading-tight", step.done ? "text-white/30 line-through" : "text-white")}>
+          {step.title}
+        </p>
+        <p className="text-[12px] text-white/60 mt-1.5 leading-snug">
+          {step.description}
+        </p>
 
-          <div className="flex-1 min-w-0 pt-1">
-            <p className={cn("text-[12px] font-semibold leading-tight", step.done ? "text-text-muted line-through" : "text-text")}>
-              {step.title}
-            </p>
-            <p className="text-[10px] text-text-muted mt-1 leading-snug">
-              {step.description}
-            </p>
-          </div>
-        </div>
-
-        {/* Bottom: progress bars + counter */}
-        <div className="flex items-center gap-3 mt-3">
-          <div className="flex gap-1.5">
+        {/* Progress */}
+        <div className="flex items-center gap-2.5 mt-4">
+          <div className="flex flex-1 gap-1">
             {steps.map((_, i) => (
               <div
                 key={i}
                 className={cn(
-                  "h-1 w-6 rounded-full transition-all duration-300",
-                  steps[i]!.done ? "bg-white/40" : i === viewIdx ? "bg-white/25" : "bg-white/[0.07]"
+                  "h-[3px] flex-1 rounded-full transition-all duration-300",
+                  steps[i]!.done ? "bg-white/50" : i === viewIdx ? "bg-white/25" : "bg-white/[0.08]"
                 )}
               />
             ))}
           </div>
-          <span className="text-[9px] text-text-muted/50">{completed}/3</span>
+          <span className="text-[10px] text-white/30 font-medium">{completed}/3</span>
         </div>
       </button>
 
-      {/* Action button */}
+      {/* Action */}
       {!step.done && (
         <button
           onClick={step.action}
-          className="w-full mt-1.5 rounded-xl bg-white/[0.05] py-1.5 text-[10px] text-text-muted hover:bg-white/[0.08] hover:text-text transition-colors"
+          className="w-full mt-2 rounded-xl bg-white/[0.06] py-2 text-[11px] text-white/60 font-medium hover:bg-white/[0.1] hover:text-white/80 transition-colors"
         >
-          {viewIdx === 0 ? "Open chat" : viewIdx === 1 ? "Open integrations" : "Open chat"}
+          {viewIdx === 1 ? "Open integrations" : "Open chat"}
         </button>
       )}
     </div>
