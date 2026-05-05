@@ -17,17 +17,36 @@ export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProp
   const [composioError, setComposioError] = useState<string | null>(null);
   const [composioSearch, setComposioSearch] = useState("");
 
+  // Popular apps shown first
+  const POPULAR_SLUGS = new Set([
+    "gmail", "slack", "notion", "github", "googlecalendar", "googledrive",
+    "googlesheets", "googledocs", "discord", "twitter", "whatsapp", "telegram",
+    "linkedin", "instagram", "youtube", "jira", "linear", "trello", "asana",
+    "airtable", "hubspot", "salesforce", "stripe", "shopify", "figma",
+    "dropbox", "spotify", "todoist", "clickup", "intercom", "zendesk",
+    "microsoft_teams", "outlook", "pipedrive", "supabase", "vercel",
+    "sentry", "twilio", "mailchimp", "canva", "reddit",
+  ]);
+
   // Full Composio app catalog loaded from JSON + logos from CDN
-  const COMPOSIO_CATALOG: ComposioApp[] = useMemo(() =>
-    composioAppsData.map((a: { slug: string; name: string }) => ({
+  const COMPOSIO_CATALOG: ComposioApp[] = useMemo(() => {
+    const all = composioAppsData.map((a: { slug: string; name: string }) => ({
       slug: a.slug,
       name: a.name,
       logo: `https://logos.composio.dev/api/${a.slug}`,
       description: "",
       categories: [],
       connected: false,
-    })),
-  []);
+    }));
+    // Sort: popular first, then alphabetical
+    return all.sort((a, b) => {
+      const aPopular = POPULAR_SLUGS.has(a.slug);
+      const bPopular = POPULAR_SLUGS.has(b.slug);
+      if (aPopular && !bPopular) return -1;
+      if (!aPopular && bPopular) return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, []);
 
   // Show apps and check connected status when key is present
   useEffect(() => {
@@ -207,9 +226,9 @@ export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProp
             href="https://app.composio.dev/developers"
             target="_blank"
             rel="noreferrer"
-            className="shrink-0 flex items-center gap-1.5 rounded-xl bg-white/10 px-3 py-2 text-xs text-text-muted hover:text-text transition-colors"
+            className="shrink-0 flex items-center rounded-xl bg-white px-4 py-2.5 text-xs text-black font-semibold hover:bg-white/90 transition-colors"
           >
-            Get Key <ExternalLink size={12} />
+            Get Key
           </a>
         </div>
         {composioKey.trim() && (
