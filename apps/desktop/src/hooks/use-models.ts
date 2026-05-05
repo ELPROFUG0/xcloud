@@ -46,16 +46,27 @@ export function useModels(engine: BrowserEngine): UseModelsReturn {
 
         if (cancelled) return;
 
-        // Merge: gateway models + full catalog (deduplicated by id)
-        const seen = new Set(modelList.map((m) => m.id));
-        const merged = [...modelList];
-        for (const m of ALL_MODELS) {
-          if (!seen.has(m.id)) {
-            merged.push(m);
+        // Use gateway models if available, otherwise fall back to hardcoded catalog
+        if (modelList.length > 10) {
+          setModels(modelList);
+        } else {
+          // Gateway returned few models — merge with catalog
+          const seen = new Set<string>();
+          for (const m of modelList) {
             seen.add(m.id);
+            if (m.id.includes("/")) seen.add(m.id.split("/").pop()!);
           }
+          const merged = [...modelList];
+          for (const m of ALL_MODELS) {
+            const name = m.id.includes("/") ? m.id.split("/").pop()! : m.id;
+            if (!seen.has(m.id) && !seen.has(name)) {
+              merged.push(m);
+              seen.add(m.id);
+              seen.add(name);
+            }
+          }
+          setModels(merged);
         }
-        setModels(merged);
 
         const config = (configResult as { config?: Record<string, unknown>; hash?: string });
         setConfigHash((config.hash as string) ?? "");

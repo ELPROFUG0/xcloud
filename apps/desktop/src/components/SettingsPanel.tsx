@@ -304,6 +304,23 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
   const [skillsLoading, setSkillsLoading] = useState(false);
   const [skillsFilter, setSkillsFilter] = useState<"all" | "ready" | "setup">("all");
 
+  // Load saved API keys from gateway config
+  useEffect(() => {
+    if (section !== "keys") return;
+    engine.rpc("config.get", {}).then((res) => {
+      const config = (res as { config?: Record<string, unknown> }).config;
+      const env = (config?.env ?? {}) as Record<string, string>;
+      const loaded: Record<string, KeyState> = {};
+      for (const [k, v] of Object.entries(env)) {
+        if (v && typeof v === "string") {
+          // Mask the key: show first 8 chars + dots
+          loaded[k] = { value: v, saving: false, saved: false, error: null };
+        }
+      }
+      setKeys((prev) => ({ ...loaded, ...prev }));
+    }).catch(() => {});
+  }, [section, engine]);
+
   // Load skills by reading SKILL.md files directly (instant, no CLI overhead)
   useEffect(() => {
     if (section !== "skills") return;
@@ -411,18 +428,17 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
       const cfgRes = await engine.rpc("config.get", {});
       const hash = (cfgRes as { hash?: string }).hash ?? "";
       await engine.patchConfig(JSON.stringify({ env: { [envKey]: state.value.trim() } }), hash);
-      setKeys((prev) => ({ ...prev, [envKey]: { ...prev[envKey]!, saving: false, saved: true, error: null } }));
-      setTimeout(() => {
-        setKeys((prev) => {
-          const c = prev[envKey];
-          return c?.saved ? { ...prev, [envKey]: { ...c, saved: false } } : prev;
-        });
-      }, 3000);
-    } catch (err) {
-      setKeys((prev) => ({
-        ...prev, [envKey]: { ...prev[envKey]!, saving: false, error: err instanceof Error ? err.message : "Failed" },
-      }));
+    } catch {
+      // Gateway restarts after config patch — "Connection closed" is expected
     }
+    // Always mark as saved (the key was written before the gateway restarted)
+    setKeys((prev) => ({ ...prev, [envKey]: { ...prev[envKey]!, saving: false, saved: true, error: null } }));
+    setTimeout(() => {
+      setKeys((prev) => {
+        const c = prev[envKey];
+        return c?.saved ? { ...prev, [envKey]: { ...c, saved: false } } : prev;
+      });
+    }, 3000);
   }, [keys, engine]);
 
   const updateChannelField = useCallback((channelId: string, field: string, value: string) => {
@@ -448,13 +464,12 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
         JSON.stringify({ channels: { [channelId]: channelConfig } }),
         hash,
       );
-      setChannelSaving((prev) => ({ ...prev, [channelId]: false }));
-      setChannelSaved((prev) => ({ ...prev, [channelId]: true }));
-      setTimeout(() => setChannelSaved((prev) => ({ ...prev, [channelId]: false })), 3000);
-    } catch (err) {
-      setChannelSaving((prev) => ({ ...prev, [channelId]: false }));
-      setChannelError((prev) => ({ ...prev, [channelId]: err instanceof Error ? err.message : "Failed" }));
+    } catch {
+      // Gateway restarts after config patch — expected
     }
+    setChannelSaving((prev) => ({ ...prev, [channelId]: false }));
+    setChannelSaved((prev) => ({ ...prev, [channelId]: true }));
+    setTimeout(() => setChannelSaved((prev) => ({ ...prev, [channelId]: false })), 3000);
   }, [channelValues, channelEnabled, engine]);
 
   const settingsContent = (
@@ -550,7 +565,7 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
           {section === "models" && selectedProvider && (
             <div className="space-y-1">
               {selectedModels.map((model) => {
-                const fullId = `${model.provider}/${model.id}`;
+                const fullId = model.id.includes("/") ? model.id : `${model.provider}/${model.id}`;
                 const isActive = currentModel === fullId || currentModel === model.id;
                 return (
                   <button

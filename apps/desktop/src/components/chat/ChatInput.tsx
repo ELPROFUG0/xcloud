@@ -303,7 +303,7 @@ export function ChatInput({
             })}
 
             {selectedProvider && filteredModels.map((model) => {
-              const fullId = `${model.provider}/${model.id}`;
+              const fullId = model.id.includes("/") ? model.id : `${model.provider}/${model.id}`;
               const isActive = currentModel === fullId || currentModel === model.id;
               return (
                 <button
