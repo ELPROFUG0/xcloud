@@ -55,8 +55,20 @@ const NODE_COLORS: Record<string, string> = {
   "ui-repo": "#3b82f6",
 };
 
+function isPlaceholder(v: string): boolean {
+  if (!v) return true;
+  if (v.startsWith("_(")) return true;
+  if (v.includes("pick something") || v.includes("pick one") || v.includes("fill this")) return true;
+  if (v.includes("workspace-relative") || v.includes("data URI") || v.includes("feels right")) return true;
+  return false;
+}
+
 function parseIdentity(content: string) {
-  const get = (key: string) => content.match(new RegExp(`\\*\\*${key}:\\*\\*\\s*(.+)`, "i"))?.[1]?.trim() ?? "";
+  const get = (key: string) => {
+    const m = content.match(new RegExp(`\\*\\*${key}:\\*\\*\\s*(.+)`, "i"));
+    const v = m?.[1]?.trim() ?? "";
+    return isPlaceholder(v) ? "" : v;
+  };
   return { name: get("Name"), emoji: get("Emoji"), creature: get("Creature"), vibe: get("Vibe") };
 }
 
