@@ -74,9 +74,22 @@ function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { main
         </div>
 
         {/* Text */}
-        <p className={cn("text-[14px] font-bold leading-tight", step.done ? "text-white/30 line-through" : "text-white")}>
-          {step.title}
-        </p>
+        <div className="relative inline-block">
+          <p className={cn("text-[14px] font-bold leading-tight", step.done ? "text-white/50" : "text-white")}>
+            {step.title}
+          </p>
+          {step.done && (
+            <svg className="absolute top-1/2 left-0 w-full h-3 -translate-y-1/2 pointer-events-none" viewBox="0 0 120 10" preserveAspectRatio="none">
+              <path
+                d="M0 5 Q10 0 20 5 T40 5 T60 5 T80 5 T100 5 T120 5"
+                fill="none" stroke="white" strokeWidth="1.5" strokeLinecap="round"
+                strokeDasharray="130" strokeDashoffset="130"
+              >
+                <animate attributeName="stroke-dashoffset" from="130" to="0" dur="0.6s" fill="freeze" />
+              </path>
+            </svg>
+          )}
+        </div>
         <p className="text-[12px] text-white/60 mt-1.5 leading-snug">
           {step.description}
         </p>
