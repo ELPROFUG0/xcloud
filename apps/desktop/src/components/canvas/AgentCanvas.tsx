@@ -433,6 +433,8 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail }: Agen
     fg.d3Force("link")?.distance((link: any, i: number) => {
       const t = typeof link.target === "object" ? link.target.id : link.target;
       const s = typeof link.source === "object" ? link.source.id : link.source;
+      const isIntegration = t.startsWith("int-") || s.startsWith("int-");
+      if (isIntegration) return 50 + (i % 3) * 8;
       const isLeafLink = t.includes("-") || s.includes("-");
       return isLeafLink ? 18 + (i % 3) * 6 : 30;
     });
