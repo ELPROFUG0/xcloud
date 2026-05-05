@@ -16,6 +16,7 @@ interface HomeScreenProps {
   getAgentSessions?: (agentId: string) => SessionInfo[];
   isFullscreen?: boolean;
   onRefresh?: () => Promise<void>;
+  onOpenSettings?: () => void;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -24,7 +25,94 @@ const STATUS_COLORS: Record<string, string> = {
   idle: "bg-text-muted/40",
 };
 
-export function HomeScreen({ agents, activeAgentId, onSelectAgent, onSelectSession, getAgentSessions, isFullscreen, onRefresh }: HomeScreenProps) {
+function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { mainAgent: AgentInfo; agents: AgentInfo[]; onSelectAgent: (id: string) => void; onOpenSettings?: () => void }) {
+  const [viewIdx, setViewIdx] = useState(0);
+
+  const hasName = !!(mainAgent.name && mainAgent.name !== mainAgent.id);
+  const hasIntegrations = (() => { try { return JSON.parse(localStorage.getItem("composioConnected") ?? "[]").length > 0; } catch { return false; } })();
+  const hasSubAgents = agents.length > 1;
+
+  const completed = (hasName ? 1 : 0) + (hasIntegrations ? 1 : 0) + (hasSubAgents ? 1 : 0);
+  if (completed >= 3) return null;
+
+  const steps = [
+    { done: hasName, emoji: "✨", title: "Name your agent", description: "Ask it to pick a name and personality", action: () => onSelectAgent(mainAgent.id) },
+    { done: hasIntegrations, emoji: "🔌", title: "Connect your apps", description: "Link Gmail, Notion, Slack and more", action: () => onOpenSettings?.() },
+    { done: hasSubAgents, emoji: "🤖", title: "Create a sub-agent", description: "Ask your agent to create a specialist", action: () => onSelectAgent(mainAgent.id) },
+  ];
+
+  const step = steps[viewIdx] ?? steps[0]!;
+
+  return (
+    <div className="shrink-0 px-3 pb-2">
+      <button
+        onClick={() => setViewIdx((viewIdx + 1) % 3)}
+        className="group relative w-full overflow-hidden rounded-2xl bg-gradient-to-br from-white/[0.06] to-white/[0.02] border border-white/[0.06] p-4 text-left transition-all hover:from-white/[0.08] hover:to-white/[0.04] hover:border-white/[0.1]"
+        style={{ transform: "rotate(-1deg)" }}
+      >
+        {/* Decorative dots */}
+        <div className="absolute top-2.5 right-3 flex gap-1">
+          <div className={cn("h-1 w-1 rounded-full", hasName ? "bg-accent" : "bg-accent/30")} />
+          <div className={cn("h-1 w-1 rounded-full", hasIntegrations ? "bg-emerald-400" : "bg-emerald-400/30")} />
+          <div className={cn("h-1 w-1 rounded-full", hasSubAgents ? "bg-amber-400" : "bg-amber-400/30")} />
+        </div>
+
+        {/* Circle progress + content */}
+        <div className="flex items-start gap-3">
+          <div className="shrink-0 relative h-10 w-10 mt-0.5">
+            <svg className="h-10 w-10 -rotate-90" viewBox="0 0 36 36">
+              <circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="2.5" />
+              <circle
+                cx="18" cy="18" r="15" fill="none" stroke="white" strokeWidth="2.5"
+                strokeDasharray={2 * Math.PI * 15} strokeDashoffset={2 * Math.PI * 15 - (completed / 3) * 2 * Math.PI * 15}
+                strokeLinecap="round"
+                className="transition-all duration-500"
+              />
+            </svg>
+            <span className="absolute inset-0 flex items-center justify-center text-[11px]">{step.emoji}</span>
+          </div>
+
+          <div className="flex-1 min-w-0 pt-1">
+            <p className={cn("text-[12px] font-semibold leading-tight", step.done ? "text-text-muted line-through" : "text-text")}>
+              {step.title}
+            </p>
+            <p className="text-[10px] text-text-muted mt-1 leading-snug">
+              {step.description}
+            </p>
+          </div>
+        </div>
+
+        {/* Bottom: progress bars + counter */}
+        <div className="flex items-center gap-3 mt-3">
+          <div className="flex gap-1.5">
+            {steps.map((_, i) => (
+              <div
+                key={i}
+                className={cn(
+                  "h-1 w-6 rounded-full transition-all duration-300",
+                  steps[i]!.done ? "bg-white/40" : i === viewIdx ? "bg-white/25" : "bg-white/[0.07]"
+                )}
+              />
+            ))}
+          </div>
+          <span className="text-[9px] text-text-muted/50">{completed}/3</span>
+        </div>
+      </button>
+
+      {/* Action button */}
+      {!step.done && (
+        <button
+          onClick={step.action}
+          className="w-full mt-1.5 rounded-xl bg-white/[0.05] py-1.5 text-[10px] text-text-muted hover:bg-white/[0.08] hover:text-text transition-colors"
+        >
+          {viewIdx === 0 ? "Open chat" : viewIdx === 1 ? "Open integrations" : "Open chat"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function HomeScreen({ agents, activeAgentId, onSelectAgent, onSelectSession, getAgentSessions, isFullscreen, onRefresh, onOpenSettings }: HomeScreenProps) {
   const mainAgent = agents.find((a) => a.isDefault) ?? agents[0];
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem("pinnedAgents") ?? "[]"); } catch { return []; }
@@ -164,6 +252,7 @@ export function HomeScreen({ agents, activeAgentId, onSelectAgent, onSelectSessi
             <div className="space-y-0.5">
               {renderAgent(mainAgent, true)}
             </div>
+
           </>
         )}
 
@@ -191,15 +280,12 @@ export function HomeScreen({ agents, activeAgentId, onSelectAgent, onSelectSessi
           </>
         )}
 
-        {/* Empty state */}
-        {agents.length <= 1 && (
-          <div className="px-4 py-8 text-center">
-            <p className="text-[11px] text-text-muted/60">
-              Ask the main agent to create new agents.
-            </p>
-          </div>
-        )}
       </div>
+
+      {/* Setup guide — bottom */}
+      {mainAgent && (
+        <SetupGuide mainAgent={mainAgent} agents={agents} onSelectAgent={onSelectAgent} onOpenSettings={onOpenSettings} />
+      )}
     </div>
   );
 }

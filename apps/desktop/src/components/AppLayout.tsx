@@ -300,6 +300,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
               getAgentSessions={getAgentSessions}
               isFullscreen={isFullscreen}
               onRefresh={refreshAgents}
+              onOpenSettings={() => { setShowSettings(true); setSettingsSection("integrations"); }}
             />
           )}
         </div>
