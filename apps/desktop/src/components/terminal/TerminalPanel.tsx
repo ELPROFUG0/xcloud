@@ -32,7 +32,7 @@ interface CLIAgent {
 }
 
 const CLI_AGENTS: CLIAgent[] = [
-  { id: "shell",    label: "Terminal",     icon: terminalIcon,  command: null,      binary: null },
+  { id: "shell",    label: "Terminal",     icon: "",            command: null,      binary: null },
   { id: "claude",   label: "Claude Code",  icon: claudeIcon,    command: "claude",  binary: "claude" },
   { id: "codex",    label: "Codex",        icon: codexIcon,     command: "codex",   binary: "codex" },
   { id: "cursor",   label: "Cursor Agent", icon: cursorIcon,    command: "cursor-agent", binary: "cursor-agent" },
@@ -138,10 +138,8 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [isAtBottom, setIsAtBottom] = useState(true);
-  const [showAgentPicker, setShowAgentPicker] = useState(false);
   const [installedAgents, setInstalledAgents] = useState<Set<string>>(new Set(["shell"]));
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const pickerRef = useRef<HTMLDivElement>(null);
   const initRef = useRef(false);
 
   const parkedRef = useRef<Map<number, { xterm: XTerm; wrapper: HTMLDivElement; fitAddon: FitAddon; searchAddon: SearchAddon }>>(new Map());
@@ -163,17 +161,6 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
     detect();
   }, []);
 
-  // ── Close agent picker on click outside ───────────────────────────────────
-  useEffect(() => {
-    if (!showAgentPicker) return;
-    function handleClick(e: MouseEvent) {
-      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
-        setShowAgentPicker(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [showAgentPicker]);
 
   // ── Create tab ────────────────────────────────────────────────────────────
   const createTab = useCallback(async (agentId: string = "shell", command?: string) => {
@@ -368,7 +355,7 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className={cn("flex h-full flex-col bg-bg", className)}>
-      {/* Tab bar */}
+      {/* Tab bar — same height as chat header */}
       <div className="flex h-9 shrink-0 items-center border-b border-border" style={{ background: BG }}>
         <div className="flex flex-1 items-center overflow-x-auto hide-scrollbar">
           {tabs.map((tab) => (
@@ -381,9 +368,9 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
                   ? "bg-white/[0.06] text-text"
                   : "text-text-muted hover:bg-white/[0.03] hover:text-text/80"
               )}
-              style={{ minWidth: 120, maxWidth: 180 }}
+              style={{ minWidth: 110, maxWidth: 170 }}
             >
-              <img src={tab.icon} alt="" className="h-4 w-4 shrink-0 object-contain" />
+              {tab.icon && <img src={tab.icon} alt="" className="h-3.5 w-3.5 shrink-0 object-contain" />}
               <span className="truncate flex-1 text-left">{tab.title}</span>
               <span
                 onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
@@ -395,57 +382,11 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
           ))}
         </div>
 
-        {/* New tab dropdown */}
-        <div className="relative flex items-center gap-1 px-2">
-          <button
-            onClick={() => setShowAgentPicker(!showAgentPicker)}
-            className="flex h-6 w-6 items-center justify-center rounded-md border border-border text-text-muted hover:bg-white/[0.06] hover:text-text transition-colors"
-            title="New terminal"
-          >
-            <Plus className="h-3 w-3" />
-          </button>
-
-          {/* Agent picker dropdown */}
-          {showAgentPicker && (
-            <div
-              ref={pickerRef}
-              className="absolute right-0 top-full mt-1 z-30 w-52 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl"
-              style={{ animation: "slideUp 120ms ease-out" }}
-            >
-              <div className="p-1">
-                {CLI_AGENTS.map((agent) => {
-                  const isInstalled = installedAgents.has(agent.id);
-                  return (
-                    <button
-                      key={agent.id}
-                      onClick={() => {
-                        if (isInstalled) {
-                          createTab(agent.id);
-                          setShowAgentPicker(false);
-                        }
-                      }}
-                      className={cn(
-                        "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors",
-                        isInstalled
-                          ? "hover:bg-surface-hover text-text"
-                          : "opacity-40 cursor-not-allowed text-text-muted"
-                      )}
-                    >
-                      <img src={agent.icon} alt="" className="h-4 w-4 shrink-0 object-contain" />
-                      <span className="text-xs font-medium flex-1">{agent.label}</span>
-                      {!isInstalled && (
-                        <span className="text-[10px] text-text-muted">not installed</span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
+        {/* Actions */}
+        <div className="flex items-center gap-0.5 px-2">
           <button
             onClick={() => setShowSearch(!showSearch)}
-            className="flex h-6 w-6 items-center justify-center rounded-md text-text-muted hover:bg-white/[0.06] hover:text-text transition-colors"
+            className="flex h-6 w-6 items-center justify-center rounded text-text-muted hover:bg-white/[0.06] hover:text-text transition-colors"
             title="Search (⌘F)"
           >
             <Search className="h-3 w-3" />
@@ -453,13 +394,36 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
           {onClose && (
             <button
               onClick={onClose}
-              className="flex h-6 w-6 items-center justify-center rounded-md text-text-muted hover:bg-white/[0.06] hover:text-text transition-colors"
+              className="flex h-6 w-6 items-center justify-center rounded text-text-muted hover:bg-white/[0.06] hover:text-text transition-colors"
               title="Close terminal"
             >
               <X className="h-3 w-3" />
             </button>
           )}
         </div>
+      </div>
+
+      {/* Agent quick-launch bar — same height as chat header, always visible */}
+      <div className="flex h-9 shrink-0 items-center gap-1.5 px-2.5 border-b border-border/50 overflow-x-auto hide-scrollbar" style={{ background: BG }}>
+        {CLI_AGENTS.map((agent) => {
+          const isInstalled = installedAgents.has(agent.id);
+          return (
+            <button
+              key={agent.id}
+              onClick={() => { if (isInstalled) createTab(agent.id); }}
+              className={cn(
+                "flex items-center gap-1.5 shrink-0 rounded-md px-2 py-1 transition-colors",
+                isInstalled
+                  ? "hover:bg-white/[0.06] text-text-muted hover:text-text"
+                  : "opacity-30 cursor-not-allowed text-text-muted"
+              )}
+              title={isInstalled ? agent.label : `${agent.label} (not installed)`}
+            >
+              {agent.icon && <img src={agent.icon} alt={agent.label} className="h-4 w-4 object-contain" />}
+              <span className="text-[11px]">{agent.label}</span>
+            </button>
+          );
+        })}
       </div>
 
       {/* Terminal content */}
