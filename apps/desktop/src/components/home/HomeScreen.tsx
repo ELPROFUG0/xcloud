@@ -11,6 +11,7 @@ import gmailIcon from "@/assets/setup-icons/gmail.svg";
 import slackIcon from "@/assets/setup-icons/slack.svg";
 import notionIcon from "@/assets/setup-icons/notion.svg";
 import { Letters } from "@kumailnanji/letters";
+import orbVideo from "@/assets/setup-icons/orb-video.mp4";
 
 interface HomeScreenProps {
   agents: AgentInfo[];
@@ -65,7 +66,9 @@ function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { main
               <img src={notionIcon} alt="" className="h-6 w-6 rounded" />
             </div>
           ) : (
-            <svg className="h-6 w-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="4" y="10" width="16" height="11" rx="2" /><circle cx="12" cy="6" r="3" /><circle cx="9" cy="15" r="1" fill="currentColor" /><circle cx="15" cy="15" r="1" fill="currentColor" /></svg>
+            <div className="h-8 w-8 rounded-full overflow-hidden border-2 border-white">
+              <video src={orbVideo} autoPlay loop muted playsInline className="h-full w-full object-cover" />
+            </div>
           )}
         </div>
 
