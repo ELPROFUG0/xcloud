@@ -8,11 +8,40 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { LigaturesAddon } from "@xterm/addon-ligatures";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Terminal, X, Plus, Search, AlertTriangle, ArrowDown, ChevronUp, ChevronDown } from "lucide-react";
+import { X, Plus, Search, AlertTriangle, ArrowDown, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/cn";
 import "@xterm/xterm/css/xterm.css";
 
-// ── Theme matching app background (#141414) ─────────────────────────────────
+// CLI agent icons (from existing assets/editors/)
+import claudeIcon from "@/assets/editors/claude-code.svg";
+import codexIcon from "@/assets/editors/codex.svg";
+import cursorIcon from "@/assets/editors/cursor.svg";
+import opencodeIcon from "@/assets/editors/opencode.svg";
+import terminalIcon from "@/assets/editors/terminal.svg";
+// Providers for agents without editor icons
+import geminiIcon from "@/assets/providers/google.svg";
+import copilotIcon from "@/assets/providers/github.svg";
+
+// ── CLI Agent definitions ───────────────────────────────────────────────────
+interface CLIAgent {
+  id: string;
+  label: string;
+  icon: string;
+  command: string | null; // null = plain shell
+  binary: string | null; // binary to check in PATH
+}
+
+const CLI_AGENTS: CLIAgent[] = [
+  { id: "shell",    label: "Terminal",     icon: terminalIcon,  command: null,      binary: null },
+  { id: "claude",   label: "Claude Code",  icon: claudeIcon,    command: "claude",  binary: "claude" },
+  { id: "codex",    label: "Codex",        icon: codexIcon,     command: "codex",   binary: "codex" },
+  { id: "cursor",   label: "Cursor Agent", icon: cursorIcon,    command: "cursor-agent", binary: "cursor-agent" },
+  { id: "opencode", label: "OpenCode",     icon: opencodeIcon,  command: "opencode", binary: "opencode" },
+  { id: "gemini",   label: "Gemini CLI",   icon: geminiIcon,    command: "gemini",  binary: "gemini" },
+  { id: "copilot",  label: "Copilot",      icon: copilotIcon,   command: "github-copilot", binary: "github-copilot" },
+];
+
+// ── Theme ───────────────────────────────────────────────────────────────────
 const TERMINAL_THEME = {
   background: "#141414",
   foreground: "#e8e8e8",
@@ -67,12 +96,7 @@ class TerminalErrorBoundary extends Component<
         <div className="flex h-full flex-col items-center justify-center gap-2 bg-bg text-text-muted">
           <AlertTriangle className="h-5 w-5 text-red-400" />
           <p className="text-xs">Terminal crashed: {this.state.error}</p>
-          <button
-            onClick={() => this.props.onClose?.()}
-            className="mt-1 rounded-md bg-white/10 px-3 py-1 text-xs hover:bg-white/15"
-          >
-            Close
-          </button>
+          <button onClick={() => this.props.onClose?.()} className="mt-1 rounded-md bg-white/10 px-3 py-1 text-xs hover:bg-white/15">Close</button>
         </div>
       );
     }
@@ -85,6 +109,8 @@ interface TerminalTab {
   id: number;
   ptyId: number;
   title: string;
+  icon: string;
+  agentId: string;
 }
 
 interface TerminalPanelProps {
@@ -93,7 +119,6 @@ interface TerminalPanelProps {
   initialCommand?: string;
 }
 
-// ── Exported component ──────────────────────────────────────────────────────
 export function TerminalPanel(props: TerminalPanelProps) {
   return (
     <TerminalErrorBoundary onClose={props.onClose}>
@@ -113,23 +138,61 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [isAtBottom, setIsAtBottom] = useState(true);
+  const [showAgentPicker, setShowAgentPicker] = useState(false);
+  const [installedAgents, setInstalledAgents] = useState<Set<string>>(new Set(["shell"]));
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const pickerRef = useRef<HTMLDivElement>(null);
   const initRef = useRef(false);
 
-  // Parking map
   const parkedRef = useRef<Map<number, { xterm: XTerm; wrapper: HTMLDivElement; fitAddon: FitAddon; searchAddon: SearchAddon }>>(new Map());
   const unlistenersRef = useRef<Map<number, () => void>>(new Map());
 
+  // ── Detect installed CLIs ─────────────────────────────────────────────────
+  useEffect(() => {
+    async function detect() {
+      const installed = new Set<string>(["shell"]);
+      for (const agent of CLI_AGENTS) {
+        if (!agent.binary) continue;
+        try {
+          const result: string = await invoke("run_shell", { cmd: `which ${agent.binary} 2>/dev/null` });
+          if (result.trim()) installed.add(agent.id);
+        } catch {}
+      }
+      setInstalledAgents(installed);
+    }
+    detect();
+  }, []);
+
+  // ── Close agent picker on click outside ───────────────────────────────────
+  useEffect(() => {
+    if (!showAgentPicker) return;
+    function handleClick(e: MouseEvent) {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setShowAgentPicker(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showAgentPicker]);
+
   // ── Create tab ────────────────────────────────────────────────────────────
-  const createTab = useCallback(async (command?: string) => {
+  const createTab = useCallback(async (agentId: string = "shell", command?: string) => {
     try {
+      const agent = CLI_AGENTS.find(a => a.id === agentId) ?? CLI_AGENTS[0]!;
+
       const ptyId: number = await invoke("pty_spawn", {
         cols: 80,
         rows: 24,
         cwd: null,
       });
 
-      const tab: TerminalTab = { id: ptyId, ptyId, title: "zsh" };
+      const tab: TerminalTab = {
+        id: ptyId,
+        ptyId,
+        title: agent.label,
+        icon: agent.icon,
+        agentId: agent.id,
+      };
 
       const xterm = new XTerm({
         cursorBlink: true,
@@ -158,18 +221,10 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
       wrapper.style.height = "100%";
       xterm.open(wrapper);
 
-      xterm.onScroll(() => {
-        const buf = xterm.buffer.active;
-        setIsAtBottom(buf.viewportY >= buf.baseY);
-      });
-      xterm.onWriteParsed(() => {
-        const buf = xterm.buffer.active;
-        setIsAtBottom(buf.viewportY >= buf.baseY);
-      });
+      xterm.onScroll(() => { const buf = xterm.buffer.active; setIsAtBottom(buf.viewportY >= buf.baseY); });
+      xterm.onWriteParsed(() => { const buf = xterm.buffer.active; setIsAtBottom(buf.viewportY >= buf.baseY); });
 
-      xterm.onData((data) => {
-        invoke("pty_write", { id: ptyId, data }).catch(() => {});
-      });
+      xterm.onData((data) => { invoke("pty_write", { id: ptyId, data }).catch(() => {}); });
 
       const unlisten = await listen<{ id: number; data: string }>("pty-output", (event) => {
         if (event.payload.id === ptyId) xterm.write(event.payload.data);
@@ -184,10 +239,12 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
       setTabs((prev) => [...prev, tab]);
       setActiveTab(ptyId);
 
-      if (command) {
+      // Launch the CLI agent command after shell is ready
+      const launchCmd = command ?? (agent.command ? agent.command : null);
+      if (launchCmd) {
         setTimeout(() => {
-          invoke("pty_write", { id: ptyId, data: command + "\n" }).catch(() => {});
-        }, 500);
+          invoke("pty_write", { id: ptyId, data: launchCmd + "\n" }).catch(() => {});
+        }, 600);
       }
 
       return ptyId;
@@ -204,11 +261,9 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
     const parked = parkedRef.current.get(activeTab);
     if (!parked) return;
 
-    // Clear and attach
     while (container.firstChild) container.removeChild(container.firstChild);
     container.appendChild(parked.wrapper);
 
-    // Delay fit to ensure DOM is laid out
     const rafId = requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         try {
@@ -230,20 +285,16 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
     };
   }, [activeTab]);
 
-  // ── Resize observer (debounced) ───────────────────────────────────────────
+  // ── Resize observer ───────────────────────────────────────────────────────
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-
     let timeout: ReturnType<typeof setTimeout>;
     let lastCols = 0;
     let lastRows = 0;
-
     const observer = new ResizeObserver((entries) => {
-      // Skip zero-size entries (happens during collapse/expand)
       const entry = entries[0];
       if (!entry || entry.contentRect.width < 10 || entry.contentRect.height < 10) return;
-
       clearTimeout(timeout);
       timeout = setTimeout(() => {
         if (!fitAddonRef.current || activeTab === null) return;
@@ -258,16 +309,15 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
         } catch {}
       }, 100);
     });
-
     observer.observe(container);
     return () => { clearTimeout(timeout); observer.disconnect(); };
   }, [activeTab]);
 
-  // ── Init (only once) ─────────────────────────────────────────────────────
+  // ── Init ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (initRef.current) return;
     initRef.current = true;
-    createTab(initialCommand).catch((err) => {
+    createTab("shell", initialCommand ?? undefined).catch((err) => {
       console.error("Terminal init failed:", err);
       if (onClose) onClose();
     });
@@ -280,7 +330,6 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
     if (parked) { parked.xterm.dispose(); parkedRef.current.delete(tabId); }
     const unlisten = unlistenersRef.current.get(tabId);
     if (unlisten) { unlisten(); unlistenersRef.current.delete(tabId); }
-
     setTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
       if (activeTab === tabId) setActiveTab(next.length > 0 ? next[next.length - 1].id : null);
@@ -289,13 +338,10 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
     });
   }, [activeTab, onClose]);
 
-  // ── Cleanup on unmount ────────────────────────────────────────────────────
+  // ── Cleanup ───────────────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
-      for (const [id, parked] of parkedRef.current) {
-        parked.xterm.dispose();
-        invoke("pty_kill", { id }).catch(() => {});
-      }
+      for (const [id, parked] of parkedRef.current) { parked.xterm.dispose(); invoke("pty_kill", { id }).catch(() => {}); }
       for (const fn of unlistenersRef.current.values()) fn();
       parkedRef.current.clear();
       unlistenersRef.current.clear();
@@ -304,14 +350,12 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
 
   // ── Search ────────────────────────────────────────────────────────────────
   useEffect(() => { if (showSearch) searchInputRef.current?.focus(); }, [showSearch]);
-
   const handleSearch = useCallback((direction: "next" | "prev") => {
     if (!searchAddonRef.current || !searchQuery) return;
     const opts = { decorations: SEARCH_DECORATIONS };
     if (direction === "next") searchAddonRef.current.findNext(searchQuery, opts);
     else searchAddonRef.current.findPrevious(searchQuery, opts);
   }, [searchQuery]);
-
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (e.metaKey && e.key === "f") { e.preventDefault(); setShowSearch((v) => !v); }
@@ -319,7 +363,6 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
-
   const scrollToBottom = useCallback(() => { xtermRef.current?.scrollToBottom(); }, []);
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -338,9 +381,9 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
                   ? "bg-white/[0.06] text-text"
                   : "text-text-muted hover:bg-white/[0.03] hover:text-text/80"
               )}
-              style={{ minWidth: 120, maxWidth: 160 }}
+              style={{ minWidth: 120, maxWidth: 180 }}
             >
-              <Terminal className="h-3.5 w-3.5 shrink-0" />
+              <img src={tab.icon} alt="" className="h-4 w-4 shrink-0 object-contain" />
               <span className="truncate flex-1 text-left">{tab.title}</span>
               <span
                 onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
@@ -352,15 +395,54 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
           ))}
         </div>
 
-        {/* Actions */}
-        <div className="flex items-center gap-1 px-2">
+        {/* New tab dropdown */}
+        <div className="relative flex items-center gap-1 px-2">
           <button
-            onClick={() => createTab()}
+            onClick={() => setShowAgentPicker(!showAgentPicker)}
             className="flex h-6 w-6 items-center justify-center rounded-md border border-border text-text-muted hover:bg-white/[0.06] hover:text-text transition-colors"
             title="New terminal"
           >
             <Plus className="h-3 w-3" />
           </button>
+
+          {/* Agent picker dropdown */}
+          {showAgentPicker && (
+            <div
+              ref={pickerRef}
+              className="absolute right-0 top-full mt-1 z-30 w-52 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl"
+              style={{ animation: "slideUp 120ms ease-out" }}
+            >
+              <div className="p-1">
+                {CLI_AGENTS.map((agent) => {
+                  const isInstalled = installedAgents.has(agent.id);
+                  return (
+                    <button
+                      key={agent.id}
+                      onClick={() => {
+                        if (isInstalled) {
+                          createTab(agent.id);
+                          setShowAgentPicker(false);
+                        }
+                      }}
+                      className={cn(
+                        "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors",
+                        isInstalled
+                          ? "hover:bg-surface-hover text-text"
+                          : "opacity-40 cursor-not-allowed text-text-muted"
+                      )}
+                    >
+                      <img src={agent.icon} alt="" className="h-4 w-4 shrink-0 object-contain" />
+                      <span className="text-xs font-medium flex-1">{agent.label}</span>
+                      {!isInstalled && (
+                        <span className="text-[10px] text-text-muted">not installed</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <button
             onClick={() => setShowSearch(!showSearch)}
             className="flex h-6 w-6 items-center justify-center rounded-md text-text-muted hover:bg-white/[0.06] hover:text-text transition-colors"
@@ -390,9 +472,7 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
-                if (searchAddonRef.current && e.target.value) {
-                  searchAddonRef.current.findNext(e.target.value, { decorations: SEARCH_DECORATIONS });
-                }
+                if (searchAddonRef.current && e.target.value) searchAddonRef.current.findNext(e.target.value, { decorations: SEARCH_DECORATIONS });
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleSearch(e.shiftKey ? "prev" : "next");
@@ -401,15 +481,9 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
               placeholder="Search..."
               className="h-7 w-28 bg-transparent text-xs text-text placeholder-text-muted outline-none"
             />
-            <button onClick={() => handleSearch("prev")} className="rounded p-1 text-text-muted hover:text-text hover:bg-white/[0.06]">
-              <ChevronUp className="h-3 w-3" />
-            </button>
-            <button onClick={() => handleSearch("next")} className="rounded p-1 text-text-muted hover:text-text hover:bg-white/[0.06]">
-              <ChevronDown className="h-3 w-3" />
-            </button>
-            <button onClick={() => { setShowSearch(false); searchAddonRef.current?.clearDecorations(); xtermRef.current?.focus(); }} className="rounded p-1 text-text-muted hover:text-text hover:bg-white/[0.06]">
-              <X className="h-3 w-3" />
-            </button>
+            <button onClick={() => handleSearch("prev")} className="rounded p-1 text-text-muted hover:text-text hover:bg-white/[0.06]"><ChevronUp className="h-3 w-3" /></button>
+            <button onClick={() => handleSearch("next")} className="rounded p-1 text-text-muted hover:text-text hover:bg-white/[0.06]"><ChevronDown className="h-3 w-3" /></button>
+            <button onClick={() => { setShowSearch(false); searchAddonRef.current?.clearDecorations(); xtermRef.current?.focus(); }} className="rounded p-1 text-text-muted hover:text-text hover:bg-white/[0.06]"><X className="h-3 w-3" /></button>
           </div>
         )}
 
