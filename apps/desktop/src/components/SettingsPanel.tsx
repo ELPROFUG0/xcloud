@@ -1,4 +1,5 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import composioAppsData from "@/data/composio-apps.json";
 import { useTheme, type ThemeName, type ThemeColors } from "@/hooks/use-theme";
 import { RotateCcw } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
@@ -8,7 +9,7 @@ import { useModels } from "@/hooks/use-models";
 import { PROVIDERS } from "@/types/provider";
 import {
   Key, CheckCircle, AlertCircle,
-  Cpu, ChevronLeft, Check, Search, X, Settings2, Radio, Server, Copy, Sparkles,
+  Cpu, ChevronLeft, Check, Search, X, Settings2, Radio, Server, Copy, Sparkles, Plug, Loader2, ExternalLink,
 } from "lucide-react";
 import telegramLogo from "@/assets/channels/telegram.svg";
 import whatsappLogo from "@/assets/channels/whatsapp.svg";
@@ -57,7 +58,7 @@ interface SettingsPanelProps {
   onPreviewOnboarding?: () => void;
 }
 
-type Section = "models" | "keys" | "channels" | "skills" | "engine" | "appearance" | "general";
+type Section = "models" | "keys" | "channels" | "skills" | "integrations" | "engine" | "appearance" | "general";
 type EngineMode = "local" | "mac-mini" | "vps";
 
 interface SkillInfo {
@@ -92,9 +93,19 @@ const SECTIONS: { id: Section; label: string; icon: typeof Cpu }[] = [
   { id: "keys", label: "API Keys", icon: Key },
   { id: "channels", label: "Channels", icon: Radio },
   { id: "skills", label: "Skills", icon: Sparkles },
+  { id: "integrations", label: "Integrations", icon: Plug },
   { id: "engine", label: "Engine", icon: Server },
   { id: "general", label: "General", icon: Settings2 },
 ];
+
+interface ComposioApp {
+  slug: string;
+  name: string;
+  logo: string;
+  description: string;
+  categories: string[];
+  connected: boolean;
+}
 
 interface ChannelField {
   key: string;
@@ -304,6 +315,13 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
   const [skillsLoading, setSkillsLoading] = useState(false);
   const [skillsFilter, setSkillsFilter] = useState<"all" | "ready" | "setup">("all");
 
+  // Integrations (Composio)
+  const [composioKey, setComposioKey] = useState(() => localStorage.getItem("composioApiKey") ?? "");
+  const [composioApps, setComposioApps] = useState<ComposioApp[]>([]);
+  const [composioLoading, setComposioLoading] = useState(false);
+  const [composioError, setComposioError] = useState<string | null>(null);
+  const [composioSearch, setComposioSearch] = useState("");
+
   // Load saved API keys from gateway config
   useEffect(() => {
     if (section !== "keys") return;
@@ -320,6 +338,82 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
       setKeys((prev) => ({ ...loaded, ...prev }));
     }).catch(() => {});
   }, [section, engine]);
+
+  // Full Composio app catalog loaded from JSON + logos from CDN
+  const COMPOSIO_CATALOG: ComposioApp[] = useMemo(() =>
+    composioAppsData.map((a: { slug: string; name: string }) => ({
+      slug: a.slug,
+      name: a.name,
+      logo: `https://logos.composio.dev/api/${a.slug}`,
+      description: "",
+      categories: [],
+      connected: false,
+    })),
+  []);
+
+  // Show apps when key is present
+  useEffect(() => {
+    if (section !== "integrations" || !composioKey.trim()) {
+      setComposioApps([]);
+      return;
+    }
+    setComposioApps(COMPOSIO_CATALOG);
+  }, [section, composioKey, COMPOSIO_CATALOG]);
+
+  const saveComposioKey = useCallback((key: string) => {
+    setComposioKey(key);
+    localStorage.setItem("composioApiKey", key);
+  }, []);
+
+  const filteredComposioApps = useMemo(() => {
+    if (!composioSearch.trim()) return composioApps;
+    const q = composioSearch.toLowerCase();
+    return composioApps.filter(a => a.name.toLowerCase().includes(q) || a.slug.toLowerCase().includes(q));
+  }, [composioApps, composioSearch]);
+
+  const handleComposioConnect = useCallback(async (slug: string) => {
+    if (!composioKey.trim()) return;
+    try {
+      // Use COMPOSIO_MANAGE_CONNECTIONS via MCP to initiate OAuth
+      const res = await fetch("https://connect.composio.dev/mcp", {
+        method: "POST",
+        headers: {
+          "x-consumer-api-key": composioKey.trim(),
+          "Content-Type": "application/json",
+          "Accept": "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: Date.now(),
+          method: "tools/call",
+          params: {
+            name: "COMPOSIO_MANAGE_CONNECTIONS",
+            arguments: {
+              toolkits: [{ name: slug, action: "add" }],
+            },
+          },
+        }),
+      });
+
+      const text = await res.text();
+      // Parse SSE response
+      const dataLine = text.split("\n").find(l => l.startsWith("data:"));
+      if (dataLine) {
+        const data = JSON.parse(dataLine.replace("data: ", ""));
+        const content = data.result?.content?.[0]?.text ?? "";
+        // Extract redirect URL from response
+        const urlMatch = content.match(/https:\/\/[^\s)]+/);
+        if (urlMatch) {
+          window.open(urlMatch[0], "_blank");
+          // Mark as connecting
+          setComposioApps((prev) =>
+            prev.map((a) => a.slug === slug ? { ...a, connected: true } : a)
+          );
+        }
+      }
+    } catch (err) {
+      setComposioError(err instanceof Error ? err.message : "Failed to connect");
+    }
+  }, [composioKey]);
 
   // Load skills by reading SKILL.md files directly (instant, no CLI overhead)
   useEffect(() => {
@@ -1187,6 +1281,122 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Integrations */}
+          {section === "integrations" && (
+            <div className="space-y-4">
+              {/* API Key */}
+              <div className="rounded-lg bg-container p-4">
+                <h4 className="text-[13px] font-medium mb-2">Composio API Key</h4>
+                <p className="text-xs text-text-muted mb-3">
+                  Get your free key at composio.dev — 20K calls/month free.
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={composioKey}
+                    onChange={(e) => saveComposioKey(e.target.value)}
+                    placeholder="Paste your Composio API key"
+                    className="flex-1 rounded-xl bg-[#262626] px-3 py-2 text-sm text-text font-mono placeholder:text-text-muted focus:outline-none"
+                  />
+                  <a
+                    href="https://app.composio.dev/developers"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="shrink-0 flex items-center gap-1.5 rounded-xl bg-white/10 px-3 py-2 text-xs text-text-muted hover:text-text transition-colors"
+                  >
+                    Get Key <ExternalLink size={12} />
+                  </a>
+                </div>
+              </div>
+
+              {!composioKey.trim() ? (
+                <div className="rounded-lg bg-container p-8 text-center">
+                  <Plug size={32} className="mx-auto text-text-muted/30 mb-3" />
+                  <p className="text-sm text-text-muted">Enter your Composio API key to see available integrations</p>
+                </div>
+              ) : composioLoading ? (
+                <div className="space-y-2">
+                  {Array.from({ length: 12 }).map((_, i) => (
+                    <div key={i} className="h-14 rounded-lg bg-container animate-pulse" />
+                  ))}
+                </div>
+              ) : composioError ? (
+                <div className="rounded-lg bg-container p-4 text-center">
+                  <p className="text-xs text-red-400">{composioError}</p>
+                  <button
+                    onClick={() => {
+                      setComposioApps([]);
+                      setComposioError(null);
+                      // Force re-fetch by toggling key
+                      const k = composioKey;
+                      setComposioKey("");
+                      setTimeout(() => setComposioKey(k), 100);
+                    }}
+                    className="mt-2 text-xs text-text-muted hover:text-text transition-colors"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {/* Search */}
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+                    <input
+                      type="text"
+                      value={composioSearch}
+                      onChange={(e) => setComposioSearch(e.target.value)}
+                      placeholder="Search 982 apps..."
+                      className="w-full rounded-xl bg-container pl-8 pr-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="text-xs text-text-muted">
+                    {filteredComposioApps.length} apps
+                  </div>
+
+                  {/* App Grid */}
+                  <div className="grid grid-cols-2 gap-2 max-h-[500px] overflow-y-auto pr-1">
+                    {filteredComposioApps.map((app) => (
+                      <div
+                        key={app.slug}
+                        className={cn(
+                          "flex items-center gap-3 rounded-xl bg-container px-3 py-3 transition-colors",
+                          app.connected && "ring-1 ring-emerald-500/30"
+                        )}
+                      >
+                        {app.logo ? (
+                          <img src={app.logo} alt="" className="h-7 w-7 shrink-0 rounded-lg" />
+                        ) : (
+                          <div className="h-7 w-7 shrink-0 rounded-lg bg-white/10 flex items-center justify-center text-xs text-text-muted">
+                            {app.name[0]?.toUpperCase()}
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm text-text truncate">{app.name}</div>
+                        </div>
+                        {app.connected ? (
+                          <span className="shrink-0 text-[10px] text-emerald-400 font-medium">Connected</span>
+                        ) : (
+                          <button
+                            onClick={() => handleComposioConnect(app.slug)}
+                            className="shrink-0 rounded-lg bg-white/10 px-2.5 py-1 text-[10px] text-text-muted hover:text-text hover:bg-white/15 transition-colors"
+                          >
+                            Connect
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  {filteredComposioApps.length === 0 && (
+                    <div className="text-center py-8 text-xs text-text-muted">No apps found</div>
+                  )}
+                </>
+              )}
             </div>
           )}
 

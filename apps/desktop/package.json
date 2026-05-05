@@ -10,6 +10,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@composio/core": "^0.8.1",
     "@dagrejs/dagre": "^3.0.0",
     "@radix-ui/react-collapsible": "^1.1.12",
     "@radix-ui/react-select": "^2.2.6",
