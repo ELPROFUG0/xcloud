@@ -52,18 +52,19 @@ function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { main
     <div className="shrink-0 px-3 pb-3">
       <button
         onClick={() => setViewIdx((viewIdx + 1) % 3)}
-        className="group relative w-full rounded-2xl border border-white/[0.08] bg-white/[0.03] p-5 text-left transition-all hover:bg-white/[0.05]"
+        className="group relative w-full rounded-2xl border border-white/[0.08] bg-white/[0.03] px-5 py-3.5 text-left transition-all hover:bg-white/[0.05]"
         style={{ transform: "rotate(-1deg)" }}
       >
         {/* Icon */}
-        <div className="mb-4">
+        <div className="mb-3">
           {viewIdx === 0 ? (
             <Letters key="letters-name" text="name me" autoPlay loop loopPauseMs={1000} color="white" strokeWidth={1.5} className="h-6 w-auto" />
           ) : viewIdx === 1 ? (
-            <div className="flex items-center -space-x-1">
-              <img src={gmailIcon} alt="" className="h-6 w-6 rounded" />
-              <img src={slackIcon} alt="" className="h-6 w-6 rounded" />
-              <img src={notionIcon} alt="" className="h-6 w-6 rounded" />
+            <div key={`apps-${viewIdx}`} className="flex items-center -space-x-1">
+              {[gmailIcon, slackIcon, notionIcon].map((icon, i) => (
+                <img key={i} src={icon} alt="" className="h-6 w-6 rounded"
+                  style={{ animation: `bounceIn${i + 1} 0.4s ${i * 0.1}s ease-out both` }} />
+              ))}
             </div>
           ) : (
             <div className="h-8 w-8 rounded-full overflow-hidden border-2 border-white">
@@ -80,20 +81,15 @@ function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { main
           {step.description}
         </p>
 
-        {/* Progress */}
-        <div className="flex items-center gap-2.5 mt-4">
-          <div className="flex flex-1 gap-1">
-            {steps.map((_, i) => (
-              <div
-                key={i}
-                className={cn(
-                  "h-[3px] flex-1 rounded-full transition-all duration-300",
-                  steps[i]!.done ? "bg-white/50" : i === viewIdx ? "bg-white/25" : "bg-white/[0.08]"
-                )}
-              />
-            ))}
-          </div>
-          <span className="text-[10px] text-white/30 font-medium">{completed}/3</span>
+        {/* Circular progress */}
+        <div className="absolute top-3.5 right-4">
+          <svg className="h-7 w-7 -rotate-90" viewBox="0 0 28 28">
+            <circle cx="14" cy="14" r="11" fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="2" />
+            <circle cx="14" cy="14" r="11" fill="none" stroke="white" strokeWidth="2"
+              strokeDasharray={2 * Math.PI * 11} strokeDashoffset={2 * Math.PI * 11 - (completed / 3) * 2 * Math.PI * 11}
+              strokeLinecap="round" className="transition-all duration-500" />
+          </svg>
+          <span className="absolute inset-0 flex items-center justify-center text-[8px] font-bold text-white/50">{completed}/3</span>
         </div>
       </button>
 
@@ -103,7 +99,7 @@ function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { main
           onClick={step.action}
           className="w-full mt-2 rounded-xl bg-white/[0.06] py-2 text-[11px] text-white/60 font-medium hover:bg-white/[0.1] hover:text-white/80 transition-colors"
         >
-          {viewIdx === 1 ? "Open integrations" : "Open chat"}
+          {viewIdx === 1 ? "Open Settings" : "Open chat"}
         </button>
       )}
     </div>

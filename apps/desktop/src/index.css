@@ -202,3 +202,22 @@ html, body {
   0%, 100% { opacity: 0; }
   50% { opacity: 1; }
 }
+
+@keyframes bounceIn1 {
+  0% { transform: translateY(8px) scale(0.6); opacity: 0; }
+  50% { transform: translateY(-2px) scale(1.05); opacity: 1; }
+  75% { transform: translateY(1px) scale(0.98); }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes bounceIn2 {
+  0% { transform: translateY(8px) scale(0.6); opacity: 0; }
+  50% { transform: translateY(-3px) scale(1.06); opacity: 1; }
+  75% { transform: translateY(1px) scale(0.97); }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes bounceIn3 {
+  0% { transform: translateY(8px) scale(0.6); opacity: 0; }
+  50% { transform: translateY(-2px) scale(1.04); opacity: 1; }
+  75% { transform: translateY(1px) scale(0.99); }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
