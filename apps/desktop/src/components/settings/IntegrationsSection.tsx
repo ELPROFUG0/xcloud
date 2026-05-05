@@ -191,122 +191,106 @@ export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProp
 
   return (
     <div className="flex-1 min-w-0 flex flex-col">
-      <div className="flex items-center gap-3 px-6 pt-6 pb-4">
-        <h3 className="text-base font-semibold">Integrations</h3>
-      </div>
-      <div className="flex-1 overflow-y-auto px-6 pb-6">
-        <div className="space-y-4">
-          {/* API Key */}
-          <div className="rounded-lg bg-container p-4">
-            <h4 className="text-[13px] font-medium mb-2">Composio API Key</h4>
-            <p className="text-xs text-text-muted mb-3">
-              Get your free key at composio.dev — 20K calls/month free.
-            </p>
-            <div className="flex gap-2">
-              <input
-                type="password"
-                value={composioKey}
-                onChange={(e) => saveComposioKey(e.target.value)}
-                placeholder="Paste your Composio API key"
-                className="flex-1 rounded-xl bg-[#262626] px-3 py-2 text-sm text-text font-mono placeholder:text-text-muted focus:outline-none"
-              />
-              <a
-                href="https://app.composio.dev/developers"
-                target="_blank"
-                rel="noreferrer"
-                className="shrink-0 flex items-center gap-1.5 rounded-xl bg-white/10 px-3 py-2 text-xs text-text-muted hover:text-text transition-colors"
-              >
-                Get Key <ExternalLink size={12} />
-              </a>
-            </div>
-          </div>
-
-          {!composioKey.trim() ? (
-            <div className="rounded-lg bg-container p-8 text-center">
-              <Plug size={32} className="mx-auto text-text-muted/30 mb-3" />
-              <p className="text-sm text-text-muted">Enter your Composio API key to see available integrations</p>
-            </div>
-          ) : composioLoading ? (
-            <div className="space-y-2">
-              {Array.from({ length: 12 }).map((_, i) => (
-                <div key={i} className="h-14 rounded-lg bg-container animate-pulse" />
-              ))}
-            </div>
-          ) : composioError ? (
-            <div className="rounded-lg bg-container p-4 text-center">
-              <p className="text-xs text-red-400">{composioError}</p>
-              <button
-                onClick={() => {
-                  setComposioApps([]);
-                  setComposioError(null);
-                  const k = composioKey;
-                  setComposioKey("");
-                  setTimeout(() => setComposioKey(k), 100);
-                }}
-                className="mt-2 text-xs text-text-muted hover:text-text transition-colors"
-              >
-                Retry
-              </button>
-            </div>
-          ) : (
-            <>
-              {/* Search */}
-              <div className="relative">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-                <input
-                  type="text"
-                  value={composioSearch}
-                  onChange={(e) => setComposioSearch(e.target.value)}
-                  placeholder="Search 982 apps..."
-                  className="w-full rounded-xl bg-container pl-8 pr-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none"
-                />
-              </div>
-
-              <div className="text-xs text-text-muted">
-                {filteredComposioApps.length} apps
-              </div>
-
-              {/* App Grid */}
-              <div className="grid grid-cols-2 gap-2 max-h-[500px] overflow-y-auto pr-1">
-                {filteredComposioApps.map((app) => (
-                  <div
-                    key={app.slug}
-                    className="flex items-center gap-3 rounded-xl bg-container px-3 py-3 transition-colors"
-                  >
-                    {app.logo ? (
-                      <img src={app.logo} alt="" className="h-7 w-7 shrink-0 rounded-lg" />
-                    ) : (
-                      <div className="h-7 w-7 shrink-0 rounded-lg bg-white/10 flex items-center justify-center text-xs text-text-muted">
-                        {app.name[0]?.toUpperCase()}
-                      </div>
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm text-text truncate">{app.name}</div>
-                    </div>
-                    {app.connected ? (
-                      <span className="shrink-0 rounded-md px-2 py-0.5 text-[10px] text-white font-semibold" style={{ backgroundColor: "#4EDD44" }}>Connected</span>
-                    ) : app.connecting ? (
-                      <span className="shrink-0 flex items-center gap-1 text-[10px] text-amber-400 font-medium">
-                        <Loader2 size={10} className="animate-spin" /> Waiting...
-                      </span>
-                    ) : (
-                      <button
-                        onClick={() => handleComposioConnect(app.slug)}
-                        className="shrink-0 rounded-lg bg-white/10 px-2.5 py-1 text-[10px] text-text-muted hover:text-text hover:bg-white/15 transition-colors"
-                      >
-                        Connect
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              {filteredComposioApps.length === 0 && (
-                <div className="text-center py-8 text-xs text-text-muted">No apps found</div>
-              )}
-            </>
-          )}
+      {/* Header */}
+      <div className="shrink-0 px-6 pt-6 pb-4">
+        <h3 className="text-base font-semibold text-text mb-1">Integrations</h3>
+        <p className="text-xs text-text-muted mb-3">Connect apps to your agents via Composio</p>
+        <div className="flex gap-2">
+          <input
+            type="password"
+            value={composioKey}
+            onChange={(e) => saveComposioKey(e.target.value)}
+            placeholder="Composio API key"
+            className="flex-1 rounded-xl bg-container px-4 py-2.5 text-sm text-text font-mono placeholder:text-text-muted focus:outline-none"
+          />
+          <a
+            href="https://app.composio.dev/developers"
+            target="_blank"
+            rel="noreferrer"
+            className="shrink-0 flex items-center gap-1.5 rounded-xl bg-white/10 px-3 py-2 text-xs text-text-muted hover:text-text transition-colors"
+          >
+            Get Key <ExternalLink size={12} />
+          </a>
         </div>
+        {composioKey.trim() && (
+          <div className="mt-3 relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+            <input
+              type="text"
+              value={composioSearch}
+              onChange={(e) => setComposioSearch(e.target.value)}
+              placeholder={`Search ${filteredComposioApps.length} apps...`}
+              className="w-full rounded-xl bg-container pl-8 pr-3 py-2.5 text-sm text-text placeholder:text-text-muted focus:outline-none"
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Apps */}
+      <div className="flex-1 overflow-y-auto px-6 pb-6">
+        {!composioKey.trim() ? (
+          <div className="flex flex-col items-center justify-center h-full text-center">
+            <Plug size={32} className="text-text-muted/20 mb-3" />
+            <p className="text-sm text-text-muted">Enter your API key to browse integrations</p>
+            <p className="text-xs text-text-muted/50 mt-1">Free tier — 20K calls/month</p>
+          </div>
+        ) : composioLoading ? (
+          <div className="grid grid-cols-2 gap-2">
+            {Array.from({ length: 12 }).map((_, i) => (
+              <div key={i} className="h-14 rounded-xl bg-container animate-pulse" />
+            ))}
+          </div>
+        ) : composioError ? (
+          <div className="flex flex-col items-center justify-center h-full text-center">
+            <p className="text-xs text-red-400">{composioError}</p>
+            <button
+              onClick={() => {
+                setComposioApps([]);
+                setComposioError(null);
+                const k = composioKey;
+                setComposioKey("");
+                setTimeout(() => setComposioKey(k), 100);
+              }}
+              className="mt-2 text-xs text-text-muted hover:text-text transition-colors"
+            >
+              Retry
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            {filteredComposioApps.map((app) => (
+              <div
+                key={app.slug}
+                className="flex items-center gap-3 rounded-xl bg-container px-3 py-3 transition-colors"
+              >
+                {app.logo ? (
+                  <img src={app.logo} alt="" className="h-7 w-7 shrink-0 rounded-lg" />
+                ) : (
+                  <div className="h-7 w-7 shrink-0 rounded-lg bg-white/10 flex items-center justify-center text-xs text-text-muted">
+                    {app.name[0]?.toUpperCase()}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-text truncate">{app.name}</div>
+                </div>
+                {app.connected ? (
+                  <span className="shrink-0 rounded-md px-2 py-0.5 text-[10px] text-white font-semibold" style={{ backgroundColor: "#4EDD44" }}>Connected</span>
+                ) : app.connecting ? (
+                  <span className="shrink-0 flex items-center gap-1 text-[10px] text-amber-400 font-medium">
+                    <Loader2 size={10} className="animate-spin" /> Waiting...
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => handleComposioConnect(app.slug)}
+                    className="shrink-0 rounded-lg bg-white/10 px-2.5 py-1 text-[10px] text-white font-medium hover:bg-white/15 transition-colors"
+                  >
+                    Connect
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
