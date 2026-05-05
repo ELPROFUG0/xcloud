@@ -187,9 +187,9 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail }: Agen
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Refresh on agent lifecycle end
+  // Refresh on agent lifecycle end, config change, or reconnect
   useEffect(() => {
-    const unsub = engine.onEvent((frame) => {
+    const unsubEvent = engine.onEvent((frame) => {
       const event = frame.event as string;
       const payload = frame.payload as Record<string, unknown>;
       if (event === "agent") {
@@ -197,8 +197,24 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail }: Agen
         const data = payload.data as Record<string, unknown> | undefined;
         if (stream === "lifecycle" && data?.phase === "end") loadData();
       }
+      if (event === "config.changed" || event === "config.patched") {
+        loadData();
+      }
     });
-    return unsub;
+    // Reload data when engine reconnects
+    const unsubState = engine.onStateChange((state) => {
+      if (state === "connected") loadData();
+    });
+    // Update model node instantly when model changes (without waiting for gateway)
+    const onModelChanged = (e: Event) => {
+      const modelId = (e as CustomEvent).detail as string;
+      setAgentData((prev) => ({
+        ...prev,
+        model: { ...prev.model, model: modelId, provider: modelId.split("/")[0] ?? "" },
+      }));
+    };
+    window.addEventListener("xcloud-model-changed", onModelChanged);
+    return () => { unsubEvent(); unsubState(); window.removeEventListener("xcloud-model-changed", onModelChanged); };
   }, [engine, loadData]);
 
   // Node click handler — sends detail to sidebar via callback

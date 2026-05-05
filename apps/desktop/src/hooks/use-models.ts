@@ -107,19 +107,18 @@ export function useModels(engine: BrowserEngine): UseModelsReturn {
   // Change model via config.patch
   const setModel = useCallback(async (modelId: string) => {
     try {
-      // Get fresh config hash
       const configResult = await engine.rpc("config.get", {});
       const hash = (configResult as { hash?: string }).hash ?? "";
-
       const patch = JSON.stringify({
         agents: { defaults: { model: { primary: modelId } } },
       });
-
       await engine.patchConfig(patch, hash);
-      setCurrentModel(modelId);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to change model");
+    } catch {
+      // Gateway restarts after config patch — expected
     }
+    // Always update locally and notify canvas
+    setCurrentModel(modelId);
+    window.dispatchEvent(new CustomEvent("xcloud-model-changed", { detail: modelId }));
   }, [engine]);
 
   return { models, providers, currentModel, loading, error, setModel };
