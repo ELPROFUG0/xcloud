@@ -41,9 +41,19 @@ function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { main
   if (completed >= 3) return null;
 
   const steps = [
-    { done: hasName, title: "Name your agent", description: "Ask it to pick a name and personality", action: () => onSelectAgent(mainAgent.id) },
+    { done: hasName, title: "Name your agent", description: "Ask it to pick a name and personality", action: () => {
+      onSelectAgent(mainAgent.id);
+      setTimeout(() => window.dispatchEvent(new CustomEvent("xcloud-prefill-prompt", {
+        detail: "Hey! I'd like to finish setting up your identity. Can you pick a name for yourself, choose an emoji, and describe your personality? Update your IDENTITY.md with a name, creature type, vibe, and emoji that feels right for you."
+      })), 200);
+    }},
     { done: hasIntegrations, title: "Connect your apps", description: "Link Gmail, Notion, Slack and more", action: () => onOpenSettings?.() },
-    { done: hasSubAgents, title: "Create a sub-agent", description: "Ask your agent to create a specialist", action: () => onSelectAgent(mainAgent.id) },
+    { done: hasSubAgents, title: "Create a sub-agent", description: "Ask your agent to create a specialist", action: () => {
+      onSelectAgent(mainAgent.id);
+      setTimeout(() => window.dispatchEvent(new CustomEvent("xcloud-prefill-prompt", {
+        detail: "I want you to create a new sub-agent. It should be a specialized assistant — pick a role that would be useful (like a researcher, coder, writer, or data analyst). Give it a unique name, personality, and configure its IDENTITY.md, SOUL.md, and workspace. Make it good!"
+      })), 200);
+    }},
   ];
 
   const step = steps[viewIdx] ?? steps[0]!;

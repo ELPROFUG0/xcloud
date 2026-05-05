@@ -75,6 +75,33 @@ export function ChatInput({
   engine,
 }: ChatInputProps) {
   const [value, setValue] = useState("");
+
+  // Listen for prefill prompt from setup guide
+  const [pendingResize, setPendingResize] = useState(false);
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const prompt = (e as CustomEvent).detail as string;
+      if (prompt) {
+        setValue(prompt);
+        setPendingResize(true);
+      }
+    };
+    window.addEventListener("xcloud-prefill-prompt", handler);
+    return () => window.removeEventListener("xcloud-prefill-prompt", handler);
+  }, []);
+  // Resize after React renders the new value
+  useEffect(() => {
+    if (!pendingResize) return;
+    setPendingResize(false);
+    const el = textareaRef.current;
+    if (el) {
+      el.focus();
+      el.style.height = "auto";
+      el.style.height = Math.min(el.scrollHeight, 80) + "px";
+      el.style.overflowY = el.scrollHeight > 80 ? "auto" : "hidden";
+    }
+  }, [pendingResize]);
+
   const [showModels, setShowModels] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [search, setSearch] = useState("");
