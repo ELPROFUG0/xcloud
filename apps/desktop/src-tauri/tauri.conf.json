@@ -14,8 +14,8 @@
     "windows": [
       {
         "title": "xCloud",
-        "width": 1100,
-        "height": 700,
+        "width": 1440,
+        "height": 900,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "transparent": true,
