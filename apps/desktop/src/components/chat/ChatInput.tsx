@@ -3,10 +3,11 @@ import { cn } from "@/lib/cn";
 import type { BrowserEngine, SlashCommand } from "@/lib/engine";
 import { useModels } from "@/hooks/use-models";
 import {
-  ArrowUp, Mic, Paperclip, ChevronDown, Check, ChevronLeft, Search, X,
-  Slash, Info, Wrench, Settings, MessageSquare, LayoutGrid, Volume2, Eye,
+  ArrowUp, Mic, Paperclip, ChevronDown, ChevronUp, Check, ChevronLeft, Search, X,
+  Slash, Info, Wrench, Settings, MessageSquare, LayoutGrid, Volume2, Eye, Square,
   type LucideIcon,
 } from "lucide-react";
+import { LiveMicrophoneWaveform } from "../ui/waveform";
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
   status: Info,
@@ -105,6 +106,11 @@ export function ChatInput({
   const [showModels, setShowModels] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [recording, setRecording] = useState(false);
+  const [showMicMenu, setShowMicMenu] = useState(false);
+  const [micDevices, setMicDevices] = useState<{ deviceId: string; label: string }[]>([]);
+  const [selectedMic, setSelectedMic] = useState("");
+  const micMenuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const { providers, currentModel, setModel } = useModels(engine);
@@ -115,6 +121,49 @@ export function ChatInput({
   const [showSlash, setShowSlash] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const slashRef = useRef<HTMLDivElement>(null);
+
+  // Load mic devices
+  useEffect(() => {
+    navigator.mediaDevices.enumerateDevices().then((list) => {
+      const inputs = list.filter(d => d.kind === "audioinput").map(d => ({
+        deviceId: d.deviceId,
+        label: d.label ? d.label.replace(/\s*\([^)]*\)/g, "").trim() : `Mic ${d.deviceId.slice(0, 8)}`,
+      }));
+      setMicDevices(inputs);
+      if (inputs[0] && !selectedMic) setSelectedMic(inputs[0].deviceId);
+    }).catch(() => {});
+  }, []);
+
+  // Close mic menu on click outside
+  useEffect(() => {
+    if (!showMicMenu) return;
+    function handleClick(e: MouseEvent) {
+      if (micMenuRef.current && !micMenuRef.current.contains(e.target as Node)) setShowMicMenu(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showMicMenu]);
+
+  // Request mic permission when starting recording
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: selectedMic ? { deviceId: { exact: selectedMic } } : true });
+      stream.getTracks().forEach(t => t.stop()); // just for permission
+      // Reload devices with labels
+      const list = await navigator.mediaDevices.enumerateDevices();
+      const inputs = list.filter(d => d.kind === "audioinput").map(d => ({
+        deviceId: d.deviceId,
+        label: d.label ? d.label.replace(/\s*\([^)]*\)/g, "").trim() : `Mic ${d.deviceId.slice(0, 8)}`,
+      }));
+      setMicDevices(inputs);
+      if (inputs[0] && !selectedMic) setSelectedMic(inputs[0].deviceId);
+    } catch {}
+    setRecording(true);
+  }, [selectedMic]);
+
+  const stopRecording = useCallback(() => {
+    setRecording(false);
+  }, []);
 
   // Load commands once
   useEffect(() => {
@@ -366,14 +415,15 @@ export function ChatInput({
 
       {/* Input container */}
       <div className="rounded-2xl bg-container border border-[#444] px-2.5 py-2">
+        {/* Textarea — always same size */}
         <textarea
           ref={textareaRef}
           value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onInput={handleInput}
-          placeholder={placeholder}
-          disabled={disabled}
+          onChange={(e) => { if (!recording) setValue(e.target.value); }}
+          onKeyDown={(e) => { if (!recording) handleKeyDown(e); }}
+          onInput={() => { if (!recording) handleInput(); }}
+          placeholder={recording ? "Listening..." : placeholder}
+          disabled={disabled || recording}
           rows={1}
           className={cn(
             "w-full resize-none bg-transparent px-1 py-0.5",
@@ -385,44 +435,121 @@ export function ChatInput({
         />
 
         {/* Bottom bar */}
-        <div className="flex items-center justify-between mt-1.5">
-          <button
-            ref={toggleBtnRef}
-            onClick={() => { setShowModels(!showModels); setSelectedProvider(null); setSearch(""); }}
-            className={cn(
-              "flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] transition-all",
-              "bg-[#333] text-[#999] hover:text-[#bbb]",
-            )}
-          >
-            <span className="max-w-[120px] truncate">{modelDisplay}</span>
-            <ChevronDown className={cn("h-2.5 w-2.5 transition-transform", showModels && "rotate-180")} />
-          </button>
+        <div className="relative flex items-center justify-between mt-1.5" style={{ height: 28 }}>
+          {/* Waveform — absolute behind buttons, only when recording */}
+          {recording && (
+            <div className="absolute inset-0 z-0">
+              <LiveMicrophoneWaveform
+                active={recording}
+                height={28}
+                barWidth={5}
+                barHeight={3}
+                barGap={3}
+                barRadius={3}
+                barColor="rgba(170, 170, 170, 0.7)"
+                sensitivity={3.5}
+                fadeEdges={true}
+                fadeWidth={60}
+                fftSize={128}
+                smoothingTimeConstant={0.5}
+                updateRate={80}
+                enableAudioPlayback={false}
+              />
+            </div>
+          )}
 
-          <div className="flex items-center gap-1">
-            <button
-              disabled={disabled}
-              className="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:text-text disabled:opacity-30"
-              title="Attach"
-            >
-              <Paperclip className="h-3.5 w-3.5" />
-            </button>
-
-            {hasText ? (
-              <button
-                onClick={handleSend}
-                disabled={disabled}
-                className="flex h-6 w-6 items-center justify-center rounded-full bg-accent text-white transition-all hover:bg-accent-hover disabled:opacity-30"
-              >
-                <ArrowUp className="h-3 w-3" />
-              </button>
+          {/* Left side */}
+          <div className="relative z-10">
+            {recording ? (
+              <div />
             ) : (
               <button
-                disabled={disabled}
-                className="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:text-text disabled:opacity-30"
-                title="Voice"
+                ref={toggleBtnRef}
+                onClick={() => { setShowModels(!showModels); setSelectedProvider(null); setSearch(""); }}
+                className={cn(
+                  "flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] transition-all",
+                  "bg-[#333] text-[#999] hover:text-[#bbb]",
+                )}
               >
-                <Mic className="h-3.5 w-3.5" />
+                <span className="max-w-[120px] truncate">{modelDisplay}</span>
+                <ChevronDown className={cn("h-2.5 w-2.5 transition-transform", showModels && "rotate-180")} />
               </button>
+            )}
+          </div>
+
+          {/* Right side */}
+          <div className="relative z-10 flex items-center gap-1">
+            {recording ? (
+              <button
+                onClick={stopRecording}
+                className="flex h-6 w-6 items-center justify-center rounded-full bg-red-500 text-white transition-all hover:bg-red-600"
+                title="Stop recording"
+              >
+                <Square className="h-2.5 w-2.5 fill-current" />
+              </button>
+            ) : (
+              <>
+                <button
+                  disabled={disabled}
+                  className="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:text-text disabled:opacity-30"
+                  title="Attach"
+                >
+                  <Paperclip className="h-3.5 w-3.5" />
+                </button>
+
+                {hasText ? (
+                  <button
+                    onClick={handleSend}
+                    disabled={disabled}
+                    className="flex h-6 w-6 items-center justify-center rounded-full bg-accent text-white transition-all hover:bg-accent-hover disabled:opacity-30"
+                  >
+                    <ArrowUp className="h-3 w-3" />
+                  </button>
+                ) : (
+                  <div className="relative flex items-center gap-0">
+                    <button
+                      onClick={startRecording}
+                      disabled={disabled}
+                      className="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:text-text disabled:opacity-30"
+                      title="Voice"
+                    >
+                      <Mic className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setShowMicMenu(!showMicMenu)}
+                      disabled={disabled}
+                      className="flex h-5 w-4 items-center justify-center text-text-muted/50 hover:text-text-muted transition-colors disabled:opacity-30"
+                      title="Select microphone"
+                    >
+                      <ChevronUp className="h-2.5 w-2.5" />
+                    </button>
+
+                    {showMicMenu && (
+                      <div
+                        ref={micMenuRef}
+                        className="absolute bottom-full right-0 mb-2 w-64 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl animate-[slideUp_120ms_ease-out]"
+                      >
+                        <div className="max-h-40 overflow-y-auto p-1">
+                          {micDevices.length === 0 ? (
+                            <div className="px-3 py-2 text-xs text-text-muted">No microphones found</div>
+                          ) : (
+                            micDevices.map((device) => (
+                              <button
+                                key={device.deviceId}
+                                onClick={() => { setSelectedMic(device.deviceId); setShowMicMenu(false); }}
+                                className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-hover"
+                              >
+                                <span className="truncate text-text">{device.label}</span>
+                                {selectedMic === device.deviceId && <Check className="h-3.5 w-3.5 shrink-0 text-accent" />}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
