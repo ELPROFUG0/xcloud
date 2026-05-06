@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Cpu, Key, Radio, Sparkles, Plug, Server, Settings2 } from "lucide-react";
+import { Cpu, Key, Radio, Sparkles, Plug, Server, Settings2, Brain } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { BrowserEngine } from "@/lib/engine";
 import {
@@ -8,6 +8,7 @@ import {
   ChannelsSection,
   SkillsSection,
   IntegrationsSection,
+  MemorySection,
   EngineSection,
   AppearanceSection,
   GeneralSection,
@@ -30,6 +31,7 @@ const SECTIONS: { id: Section; label: string; icon: typeof Cpu }[] = [
   { id: "channels", label: "Channels", icon: Radio },
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "integrations", label: "Integrations", icon: Plug },
+  { id: "memory", label: "Memory", icon: Brain },
   { id: "engine", label: "Engine", icon: Server },
   { id: "general", label: "General", icon: Settings2 },
 ];
@@ -50,6 +52,8 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
         return <SkillsSection engine={engine} />;
       case "integrations":
         return <IntegrationsSection engine={engine} />;
+      case "memory":
+        return <MemorySection engine={engine} />;
       case "engine":
         return <EngineSection engine={engine} />;
       case "appearance":

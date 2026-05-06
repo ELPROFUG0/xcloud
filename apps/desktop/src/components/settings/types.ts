@@ -1,4 +1,4 @@
-export type Section = "models" | "keys" | "channels" | "skills" | "integrations" | "engine" | "appearance" | "general";
+export type Section = "models" | "keys" | "channels" | "skills" | "integrations" | "memory" | "engine" | "appearance" | "general";
 export type EngineMode = "local" | "mac-mini" | "vps";
 
 export interface SkillInfo {

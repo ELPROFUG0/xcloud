@@ -6,4 +6,5 @@ export { IntegrationsSection } from "./IntegrationsSection";
 export { EngineSection } from "./EngineSection";
 export { AppearanceSection } from "./AppearanceSection";
 export { GeneralSection } from "./GeneralSection";
+export { MemorySection } from "./MemorySection";
 export type { Section, EngineMode, SkillInfo, KeyState, ComposioApp, ChannelField, ChannelConfig } from "./types";

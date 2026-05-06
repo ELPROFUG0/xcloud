@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, lazy, Suspense } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
-import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, Sparkles, Plug, Terminal } from "lucide-react";
+import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, Sparkles, Plug, Terminal, Brain } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { HomeScreen } from "./home/HomeScreen";
 import { useSessions } from "@/hooks/use-sessions";
@@ -32,7 +32,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
   const [activeSessionKey, setActiveSessionKey] = useState<string | null>(null);
   const [showCanvas, setShowCanvas] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
-  const [settingsSection, setSettingsSection] = useState<"models" | "keys" | "channels" | "skills" | "integrations" | "appearance" | "engine" | "general">("models");
+  const [settingsSection, setSettingsSection] = useState<"models" | "keys" | "channels" | "skills" | "integrations" | "memory" | "appearance" | "engine" | "general">("models");
   const [showPreview, setShowPreview] = useState(false);
   const [nodeDetail, setNodeDetail] = useState<DetailPanel | null>(null);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
@@ -261,6 +261,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
                   { id: "channels" as const, label: "Channels", icon: Globe },
                   { id: "skills" as const, label: "Skills", icon: Sparkles },
                   { id: "integrations" as const, label: "Integrations", icon: Plug },
+                  { id: "memory" as const, label: "Memory", icon: Brain },
                   { id: "engine" as const, label: "Engine", icon: Server },
                   { id: "appearance" as const, label: "Appearance", icon: Palette },
                   { id: "general" as const, label: "General", icon: SlidersHorizontal },
