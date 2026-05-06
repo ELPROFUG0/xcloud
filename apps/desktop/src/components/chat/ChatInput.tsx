@@ -3,25 +3,12 @@ import { cn } from "@/lib/cn";
 import type { BrowserEngine, SlashCommand } from "@/lib/engine";
 import { useModels } from "@/hooks/use-models";
 import {
-  ArrowUp, Mic, Paperclip, ChevronDown, ChevronUp, Check, ChevronLeft, Search, X,
+  ArrowUp, Mic, Paperclip, ChevronUp, Check,
   Slash, Info, Wrench, Settings, MessageSquare, LayoutGrid, Volume2, Eye, Square,
   type LucideIcon,
 } from "lucide-react";
 import { LiveMicrophoneWaveform } from "../ui/waveform";
-import {
-  Anthropic, OpenAI, Google, Gemini, Mistral, Groq, DeepSeek, Fireworks,
-  OpenRouter, XAI, Cerebras, HuggingFace, GithubCopilot, Ollama, Bedrock,
-  Azure, Together, Perplexity, Cohere, Replicate, Meta, Nvidia, Cloudflare,
-  SambaNova, DeepInfra, Minimax, Moonshot, Baichuan, Yi, Zhipu, Qwen,
-  AlibabaCloud, Kimi, Doubao, Stepfun, SiliconCloud, Novita, LeptonAI,
-  Hyperbolic, Lambda, OpenCode, OpenClaw, Aws, Claude, Codex, Stability,
-  Inception, Inflection, Ai21, Voyage, Jina, Upstage, Nebius, Featherless,
-  Inference, LmStudio, Anyscale, Baseten, CentML, Friendli, Parasail, PPIO,
-  Venice, Kluster, Straico, SpeedAI, WorkersAI, VertexAI, Spark,
-  Vercel, ByteDance, Volcengine, Wenxin, Baidu, BaiduCloud, Tencent, TencentCloud,
-  Huawei, HuaweiCloud, SenseNova, Tiangong, ChatGLM, InternLM, Grok, Microsoft,
-  IBM, Apple, Snowflake, Nova, PaLM, Dbrx, Antigravity,
-} from "@lobehub/icons";
+import { ModelSelector, ModelSelectorTrigger } from "./ModelSelector";
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
   status: Info,
@@ -40,88 +27,6 @@ interface ChatInputProps {
   engine: BrowserEngine;
 }
 
-/** Convert raw model ID to a clean display name */
-function formatModelName(raw: string): string {
-  // "claude-haiku-4-5-20251001" → "Haiku 4.5"
-  // "claude-opus-4-6" → "Opus 4.6"
-  // "claude-sonnet-4-6" → "Sonnet 4.6"
-  // "gpt-4o-mini" → "GPT-4o Mini"
-  const id = raw.split("/").pop() ?? raw;
-
-  // Anthropic models
-  const claudeMatch = id.match(/claude-(\w+)-([\d]+)-([\d]+)/);
-  if (claudeMatch) {
-    const family = claudeMatch[1]!;
-    const major = claudeMatch[2]!;
-    const minor = claudeMatch[3]!;
-    const name = family.charAt(0).toUpperCase() + family.slice(1);
-    return `${name} ${major}.${minor}`;
-  }
-
-  // GPT models
-  if (id.startsWith("gpt-")) {
-    return id.replace("gpt-", "GPT-").split("-").map(w =>
-      w === "mini" ? "Mini" : w === "turbo" ? "Turbo" : w
-    ).join(" ").replace("GPT ", "GPT-");
-  }
-
-  // Gemini
-  if (id.startsWith("gemini-")) {
-    return id.replace("gemini-", "Gemini ").replace(/-/g, " ");
-  }
-
-  // Fallback: capitalize first letter of each segment
-  return id.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-}
-
-const PROVIDER_NAMES: Record<string, string> = {
-  anthropic: "Anthropic", openai: "OpenAI", google: "Google", "amazon-bedrock": "AWS Bedrock",
-  "azure-openai-responses": "Azure OpenAI", mistral: "Mistral", groq: "Groq", deepseek: "DeepSeek",
-  fireworks: "Fireworks", openrouter: "OpenRouter", "github-copilot": "GitHub Copilot", xai: "xAI",
-  cerebras: "Cerebras", huggingface: "Hugging Face", ollama: "Ollama",
-};
-
-const PROVIDER_ICONS: Record<string, React.ComponentType<{ size?: number }>> = {
-  // Major providers
-  anthropic: Anthropic, openai: OpenAI, google: Gemini, gemini: Gemini,
-  "google-vertex": VertexAI, mistral: Mistral, groq: Groq, deepseek: DeepSeek,
-  fireworks: Fireworks, openrouter: OpenRouter, xai: XAI, cerebras: Cerebras,
-  huggingface: HuggingFace, "github-copilot": GithubCopilot, ollama: Ollama,
-  "amazon-bedrock": Bedrock, aws: Aws, "azure-openai-responses": Azure, azure: Azure,
-  // Cloud & inference
-  together: Together, perplexity: Perplexity, cohere: Cohere, replicate: Replicate,
-  meta: Meta, nvidia: Nvidia, cloudflare: Cloudflare, sambanova: SambaNova,
-  "deep-infra": DeepInfra, deepinfra: DeepInfra, novita: Novita, "lepton-ai": LeptonAI,
-  hyperbolic: Hyperbolic, lambda: Lambda, nebius: Nebius, featherless: Featherless,
-  inference: Inference, baseten: Baseten, centml: CentML, friendli: Friendli,
-  parasail: Parasail, ppio: PPIO, venice: Venice, kluster: Kluster, straico: Straico,
-  "speed-ai": SpeedAI, "workers-ai": WorkersAI, anyscale: Anyscale,
-  // Chinese providers
-  minimax: Minimax, moonshot: Moonshot, baichuan: Baichuan, yi: Yi, zhipu: Zhipu,
-  qwen: Qwen, "alibaba-cloud": AlibabaCloud, alibabacloud: AlibabaCloud, kimi: Kimi,
-  doubao: Doubao, stepfun: Stepfun, "silicon-cloud": SiliconCloud, siliconcloud: SiliconCloud,
-  spark: Spark,
-  // Specialty
-  stability: Stability, inception: Inception, inflection: Inflection,
-  ai21: Ai21, voyage: Voyage, jina: Jina, upstage: Upstage,
-  "lm-studio": LmStudio, lmstudio: LmStudio,
-  // More cloud & regional
-  vercel: Vercel, "vercel-ai": Vercel, bytedance: ByteDance, byteplus: ByteDance,
-  volcengine: Volcengine, wenxin: Wenxin, qianfan: Wenxin, baidu: Baidu,
-  "baidu-cloud": BaiduCloud, tencent: Tencent, "tencent-cloud": TencentCloud,
-  huawei: Huawei, "huawei-cloud": HuaweiCloud, sensenova: SenseNova,
-  tiangong: Tiangong, chatglm: ChatGLM, internlm: InternLM, grok: Grok,
-  microsoft: Microsoft, ibm: IBM, apple: Apple, snowflake: Snowflake,
-  nova: Nova, palm: PaLM, dbrx: Dbrx,
-  // Variant IDs (gateway uses suffixed names)
-  "byteplus-plan": ByteDance, "google-antigravity": Antigravity, "kimi-coding": Kimi,
-  "opencode-go": OpenCode, "stepfun-plan": Stepfun, "tencent-tokenhub": Tencent,
-  "vercel-ai-gateway": Vercel,
-  // Tools & agents
-  opencode: OpenCode, openclaw: OpenClaw, claude: Claude, codex: Codex,
-};
-const fmtProvider = (id: string) =>
-  PROVIDER_NAMES[id] ?? id.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 
 export function ChatInput({
   onSend,
@@ -158,19 +63,14 @@ export function ChatInput({
   }, [pendingResize]);
 
   const [showModels, setShowModels] = useState(false);
-  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
   const [recording, setRecording] = useState(false);
   const [showMicMenu, setShowMicMenu] = useState(false);
   const [micDevices, setMicDevices] = useState<{ deviceId: string; label: string }[]>([]);
   const [selectedMic, setSelectedMic] = useState("");
   const micMenuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const modalRef = useRef<HTMLDivElement>(null);
   const { providers, currentModel, setModel } = useModels(engine);
   const hasText = value.trim().length > 0;
-
-  const toggleBtnRef = useRef<HTMLButtonElement>(null);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [showSlash, setShowSlash] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
@@ -239,20 +139,6 @@ export function ChatInput({
     setSlashIndex(0);
   }, [slashQuery, filteredCommands.length]);
 
-  // Close modal on click outside (but not on the toggle button itself)
-  useEffect(() => {
-    if (!showModels) return;
-    function handleClick(e: MouseEvent) {
-      if (toggleBtnRef.current?.contains(e.target as Node)) return;
-      if (modalRef.current && !modalRef.current.contains(e.target as Node)) {
-        setShowModels(false);
-        setSelectedProvider(null);
-        setSearch("");
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [showModels]);
 
   const handleSend = useCallback(() => {
     const trimmed = value.trim();
@@ -311,25 +197,6 @@ export function ChatInput({
     el.style.overflowY = el.scrollHeight > maxHeight ? "auto" : "hidden";
   }, []);
 
-  const filteredProviders = useMemo(() => {
-    if (!search.trim()) return providers;
-    const q = search.toLowerCase();
-    return providers.filter(g =>
-      fmtProvider(g.provider).toLowerCase().includes(q) ||
-      g.models.some(m => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q))
-    );
-  }, [providers, search]);
-
-  const filteredModels = useMemo(() => {
-    if (!selectedProvider) return [];
-    const group = providers.find(g => g.provider === selectedProvider);
-    if (!group) return [];
-    if (!search.trim()) return group.models;
-    const q = search.toLowerCase();
-    return group.models.filter(m => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q));
-  }, [providers, selectedProvider, search]);
-
-  const modelDisplay = currentModel ? formatModelName(currentModel) : "Model";
 
   return (
     <div className="relative px-4 pb-4 pt-2">
@@ -370,104 +237,14 @@ export function ChatInput({
         </div>
       )}
 
-      {/* Model selector modal */}
-      {showModels && (
-        <div
-          ref={modalRef}
-          className="absolute bottom-full left-6 right-6 mb-2 rounded-xl border border-border bg-surface shadow-2xl max-h-[45vh] flex flex-col overflow-hidden animate-[slideUp_150ms_ease-out]"
-        >
-          {/* Header */}
-          <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border">
-            {selectedProvider ? (
-              <>
-                <button
-                  onClick={() => { setSelectedProvider(null); setSearch(""); }}
-                  className="text-text-muted hover:text-text"
-                >
-                  <ChevronLeft className="h-3.5 w-3.5" />
-                </button>
-                {PROVIDER_ICONS[selectedProvider] && (() => { const Icon = PROVIDER_ICONS[selectedProvider]!; return <Icon size={14} />; })()}
-                <span className="text-xs font-medium">{fmtProvider(selectedProvider)}</span>
-                <span className="text-[10px] text-text-muted">{filteredModels.length}</span>
-              </>
-            ) : (
-              <span className="text-xs font-medium">Select Model</span>
-            )}
-          </div>
-
-          {/* Search */}
-          <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
-            <Search className="h-3 w-3 text-text-muted" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={selectedProvider ? "Search models..." : "Search providers..."}
-              className="flex-1 bg-transparent text-[11px] text-text placeholder:text-text-muted focus:outline-none"
-              autoFocus
-            />
-            {search && (
-              <button onClick={() => setSearch("")} className="text-text-muted hover:text-text">
-                <X className="h-3 w-3" />
-              </button>
-            )}
-          </div>
-
-          {/* List */}
-          <div className="overflow-y-auto">
-            {!selectedProvider && filteredProviders.map((group) => {
-              const hasActive = group.models.some(
-                m => currentModel === `${m.provider}/${m.id}` || currentModel === m.id
-              );
-              const ProviderIcon = PROVIDER_ICONS[group.provider];
-              return (
-                <button
-                  key={group.provider}
-                  onClick={() => { setSelectedProvider(group.provider); setSearch(""); }}
-                  className="flex w-full items-center justify-between px-3 py-2.5 text-left text-[11px] transition-colors hover:bg-surface-hover"
-                >
-                  <div className="flex items-center gap-2">
-                    {ProviderIcon ? <ProviderIcon size={14} /> : <div className="h-3.5 w-3.5" />}
-                    <span className={hasActive ? "text-accent font-medium" : "text-text"}>{fmtProvider(group.provider)}</span>
-                  </div>
-                  <span className="text-text-muted">{group.models.length}</span>
-                </button>
-              );
-            })}
-
-            {selectedProvider && filteredModels.map((model) => {
-              const fullId = model.id.includes("/") ? model.id : `${model.provider}/${model.id}`;
-              const isActive = currentModel === fullId || currentModel === model.id;
-              return (
-                <button
-                  key={model.id}
-                  onClick={async () => {
-                    await setModel(fullId);
-                    setShowModels(false);
-                    setSelectedProvider(null);
-                    setSearch("");
-                  }}
-                  className={cn(
-                    "flex w-full items-center gap-2 px-3 py-2.5 text-left text-[11px] transition-colors hover:bg-surface-hover",
-                    isActive && "bg-accent/5",
-                  )}
-                >
-                  {isActive ? <Check className="h-3 w-3 shrink-0 text-accent" /> : <div className="h-3 w-3 shrink-0" />}
-                  <span className={cn("flex-1 truncate", isActive ? "text-accent font-medium" : "text-text")}>
-                    {formatModelName(model.name || model.id)}
-                  </span>
-                  {model.contextWindow && (
-                    <span className="text-[9px] text-text-muted">
-                      {model.contextWindow >= 1_000_000
-                        ? `${(model.contextWindow / 1_000_000).toFixed(0)}M`
-                        : `${Math.round(model.contextWindow / 1000)}k`}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {/* Model selector */}
+      <ModelSelector
+        open={showModels}
+        onClose={() => setShowModels(false)}
+        providers={providers}
+        currentModel={currentModel}
+        onSelectModel={async (id) => { await setModel(id); }}
+      />
 
       {/* Input container */}
       <div className="rounded-2xl bg-container border border-[#444] px-2.5 py-2">
@@ -519,17 +296,11 @@ export function ChatInput({
             {recording ? (
               <div />
             ) : (
-              <button
-                ref={toggleBtnRef}
-                onClick={() => { setShowModels(!showModels); setSelectedProvider(null); setSearch(""); }}
-                className={cn(
-                  "flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] transition-all",
-                  "bg-[#333] text-[#999] hover:text-[#bbb]",
-                )}
-              >
-                <span className="max-w-[120px] truncate">{modelDisplay}</span>
-                <ChevronDown className={cn("h-2.5 w-2.5 transition-transform", showModels && "rotate-180")} />
-              </button>
+              <ModelSelectorTrigger
+                currentModel={currentModel}
+                onClick={() => setShowModels(!showModels)}
+                open={showModels}
+              />
             )}
           </div>
 
