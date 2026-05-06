@@ -113,7 +113,7 @@ export default function App() {
             } catch { /* keep trying */ }
           }
         }
-        if (!identity) throw new Error("No identity found. Please reconfigure.");
+        if (!identity) throw new Error("Waiting for identity — the gateway may still be starting. Try again in a few seconds.");
         setAppState({ kind: "connecting" });
 
         const client = new BrowserEngine({ url: wsUrl, ...identity });
@@ -149,25 +149,30 @@ export default function App() {
             // Pairing required → write a script, spawn it, wait, retry
             if (msg.includes("pairing")) {
               setAppState({ kind: "pairing" });
-              // Write approve script to tmp and run it (avoids quoting hell)
-              await invoke<number>("spawn_shell", {
-                cmd: [
-                  "cat > /tmp/xcloud-pair.py << 'XEOF'",
-                  "import json, subprocess, os",
-                  "home = os.path.expanduser('~')",
-                  "try:",
-                  "  cfg = json.load(open(f'{home}/.openclaw/openclaw.json'))",
-                  "  token = cfg['gateway']['auth']['token']",
-                  "  pending = json.load(open(f'{home}/.openclaw/devices/pending.json'))",
-                  "  for v in pending.values():",
-                  "    rid = v.get('requestId', '')",
-                  "    if rid:",
-                  "      subprocess.run(['sh', '-lc', f'openclaw devices approve {rid} --token {token}'], capture_output=True)",
-                  "except: pass",
-                  "XEOF",
-                  "sleep 1 && python3 /tmp/xcloud-pair.py",
-                ].join("\n"),
-              }).catch(() => {});
+              // Try Rust auto-pair first, then fallback to python script
+              try {
+                await invoke("engine_auto_pair");
+              } catch {
+                // Fallback: python script
+                await invoke<number>("spawn_shell", {
+                  cmd: [
+                    "cat > /tmp/xcloud-pair.py << 'XEOF'",
+                    "import json, subprocess, os",
+                    "home = os.path.expanduser('~')",
+                    "try:",
+                    "  cfg = json.load(open(f'{home}/.openclaw/openclaw.json'))",
+                    "  token = cfg['gateway']['auth']['token']",
+                    "  pending = json.load(open(f'{home}/.openclaw/devices/pending.json'))",
+                    "  for v in pending.values():",
+                    "    rid = v.get('requestId', '')",
+                    "    if rid:",
+                    "      subprocess.run(['sh', '-lc', f'openclaw devices approve {rid} --token {token}'], capture_output=True)",
+                    "except: pass",
+                    "XEOF",
+                    "sleep 1 && python3 /tmp/xcloud-pair.py",
+                  ].join("\n"),
+                }).catch(() => {});
+              }
               await new Promise((r) => setTimeout(r, 5000));
               continue;
             }
@@ -321,16 +326,26 @@ export default function App() {
 
     case "error":
       return (
-        <div className="flex h-full items-center justify-center bg-bg">
+        <div className="flex h-full items-center justify-center bg-bg" onMouseDown={async (e) => { if (e.button === 0 && !(e.target as HTMLElement).closest("button")) { try { await getCurrentWindow().startDragging(); } catch {} } }}>
           <div className="text-center max-w-sm px-4">
             <div className="text-lg font-medium text-text">Connection Failed</div>
-            <div className="mt-2 text-xs text-red-400">{appState.message}</div>
-            <button
-              onClick={handleRetry}
-              className="mt-4 rounded-xl bg-white/10 px-4 py-2 text-xs text-text hover:bg-white/15 transition-colors"
-            >
-              Retry
-            </button>
+            <div className="mt-2 text-xs text-text-muted leading-relaxed">{appState.message}</div>
+            <div className="mt-4 flex items-center justify-center gap-2">
+              <button
+                onClick={handleRetry}
+                className="rounded-xl bg-white/10 px-4 py-2 text-xs text-text hover:bg-white/15 transition-colors"
+              >
+                Retry
+              </button>
+              {appState.message.includes("identity") && (
+                <button
+                  onClick={() => setAppState({ kind: "onboarding" })}
+                  className="rounded-xl bg-white/5 px-4 py-2 text-xs text-text-muted hover:bg-white/10 hover:text-text transition-colors"
+                >
+                  Reconfigure
+                </button>
+              )}
+            </div>
           </div>
         </div>
       );
