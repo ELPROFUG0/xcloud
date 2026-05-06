@@ -278,14 +278,7 @@ export default function App() {
       return <AppLayout engine={appState.engine} />;
 
     case "reconnecting":
-      return (
-        <>
-          <AppLayout engine={appState.engine} />
-          <div className="fixed top-0 left-0 right-0 z-50 bg-amber-500/90 px-4 py-1.5 text-center text-xs text-black font-medium">
-            Reconnecting...
-          </div>
-        </>
-      );
+      return <AppLayout engine={appState.engine} reconnecting />;
 
     case "error":
       return (

@@ -19,13 +19,14 @@ import { CommandPalette } from "./CommandPalette";
 
 interface AppLayoutProps {
   engine: BrowserEngine;
+  reconnecting?: boolean;
 }
 
 const MIN_WIDTH = 240;
 const MAX_WIDTH = 400;
 const DEFAULT_WIDTH = 280;
 
-export function AppLayout({ engine }: AppLayoutProps) {
+export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   useTheme(); // Initialize theme CSS variables
   const { agents, refresh: refreshAgents } = useAgents(engine);
   const { getAgentSessions } = useSessions(engine);
@@ -229,7 +230,8 @@ export function AppLayout({ engine }: AppLayoutProps) {
   const showThirdPanel = showPreview || showSettings || showCanvas;
 
   return (
-    <div className="flex h-full">
+    <div className="flex flex-col h-full">
+      <div className="flex flex-1 min-h-0">
       {/* Toggle sidebar — fixed next to macOS traffic lights */}
       <button
         onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -613,6 +615,21 @@ export function AppLayout({ engine }: AppLayoutProps) {
         }}
         onOpenTerminal={() => setShowTerminal(true)}
       />
+      </div>
+
+      {/* Reconnecting banner — bottom, pushes layout up */}
+      {reconnecting && (
+        <div className="shrink-0 flex items-center justify-center gap-2 px-4 pb-1.5">
+          <div className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+          <span className="text-[11px] text-amber-400 font-medium">Reconnecting...</span>
+          <button
+            onClick={() => window.location.reload()}
+            className="ml-1 rounded-md bg-white/10 px-2.5 py-0.5 text-[10px] text-text font-medium hover:bg-white/15 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      )}
     </div>
   );
 }
