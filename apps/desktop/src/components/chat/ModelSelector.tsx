@@ -254,8 +254,9 @@ function ModelInfoTooltip({ model, provider, anchorRect }: { model: ModelInfo | 
 export function ModelSelector({ open, onClose, providers, currentModel, onSelectModel }: ModelSelectorProps) {
   const [search, setSearch] = useState("");
   const [activeProvider, setActiveProvider] = useState<string | null>(null);
-  const [hoveredModel, setHoveredModel] = useState<{ model: ModelInfo; provider: string } | null>(null);
-  const [hoverRect, setHoverRect] = useState<DOMRect | null>(null);
+  const [hoverY, setHoverY] = useState(0);
+  const [hoveredModel, setHoveredModel] = useState<ModelInfo | null>(null);
+  const [hoveredProvider, setHoveredProvider] = useState("");
   const [favorites, setFavorites] = useState<Set<string>>(() => {
     try { return new Set(JSON.parse(localStorage.getItem("modelFavorites") ?? "[]")); } catch { return new Set(); }
   });
@@ -340,11 +341,12 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
   if (!open) return null;
 
   return (
-    <div
-      ref={ref}
-      className="absolute bottom-full left-6 mb-2 rounded-xl border border-border shadow-2xl backdrop-blur-md animate-[slideUp_150ms_ease-out]"
-      style={{ background: "rgba(20, 20, 20, 0.88)", maxHeight: "min(460px, calc(100dvh - 14rem))", width: 340, overflow: "hidden" }}
-    >
+    <div ref={ref} className="absolute bottom-full left-6 mb-2" style={{ position: "relative" }}>
+      {/* Modal */}
+      <div
+        className="rounded-xl border border-border shadow-2xl animate-[slideUp_150ms_ease-out]"
+        style={{ background: "#141414", maxHeight: "min(460px, calc(100dvh - 14rem))", width: 340, overflow: "hidden" }}
+      >
       {/* Search bar */}
       <div className="flex items-center gap-2 px-4 pt-3 pb-2">
         <div className="flex flex-1 items-center border-b border-border/50 pb-1">
@@ -450,6 +452,16 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
                 <div key={model.id} className="group/item">
                   <button
                     onClick={() => { onSelectModel(fullId); onClose(); }}
+                    onMouseEnter={(e) => {
+                      const btn = e.currentTarget;
+                      const container = ref.current;
+                      if (container) {
+                        setHoverY(btn.getBoundingClientRect().top - container.getBoundingClientRect().top);
+                      }
+                      setHoveredModel(model);
+                      setHoveredProvider(model._provider);
+                    }}
+                    onMouseLeave={() => setHoveredModel(null)}
                     className={cn(
                       "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-all hover:bg-white/[0.05]",
                       isActive && "bg-accent/5",
@@ -483,7 +495,53 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
           </div>
         </div>
       </div>
+      </div>
 
+      {/* Tooltip — sibling of modal, NOT child of overflow:hidden */}
+      {hoveredModel && (() => {
+        const st = getModelStats(hoveredModel);
+        const v = hasVision(hoveredModel), r = hasReasoning(hoveredModel), p = hasPDF(hoveredModel);
+        const Icon = PROVIDER_ICONS[hoveredProvider];
+        return (
+          <div
+            className="absolute pointer-events-none"
+            style={{ top: hoverY, left: 348, width: 230 }}
+          >
+            <div className="rounded-lg border border-border p-3 shadow-xl text-xs" style={{ background: "#1a1a1a" }}>
+              <div className="flex items-center gap-2">
+                {Icon && <Icon size={14} />}
+                <span className="font-semibold text-text">{formatModelName(hoveredModel.name || hoveredModel.id)}</span>
+              </div>
+              <p className="mt-1.5 text-text-muted/70 leading-relaxed">{st.description}</p>
+              {(v || r || p) && (
+                <div className="mt-2 flex items-center gap-2 flex-wrap">
+                  {v && <span className="flex items-center gap-1 text-teal-400/80"><Eye className="h-2.5 w-2.5" /><span className="text-[9px]">Vision</span></span>}
+                  {r && <span className="flex items-center gap-1 text-purple-400/80"><Brain className="h-2.5 w-2.5" /><span className="text-[9px]">Reasoning</span></span>}
+                  {p && <span className="flex items-center gap-1 text-blue-400/80"><FileText className="h-2.5 w-2.5" /><span className="text-[9px]">PDF</span></span>}
+                </div>
+              )}
+              <div className="mt-2 grid gap-1">
+                {[{ l: "Speed", v: st.speed }, { l: "Intelligence", v: st.intelligence }, { l: "Token usage", v: st.tokenUsage }].map(({ l, v: val }) => (
+                  <div key={l} className="flex items-center justify-between">
+                    <span className="text-text-muted/60">{l}</span>
+                    <div className="flex gap-1">
+                      {[1, 2, 3, 4, 5].map(i => (
+                        <div key={i} className={cn("w-4 h-1 rounded-full", i <= val ? "bg-accent" : "bg-white/8")} />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {hoveredModel.contextWindow && (
+                <div className="mt-1.5 flex items-center justify-between text-text-muted/60">
+                  <span>Context</span>
+                  <span className="font-mono">{hoveredModel.contextWindow >= 1_000_000 ? `${(hoveredModel.contextWindow / 1_000_000).toFixed(0)}M` : `${Math.round(hoveredModel.contextWindow / 1000)}k`}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
