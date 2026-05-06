@@ -345,6 +345,22 @@ function CopyButton({ text }: { text: string }) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const markdownComponents: any = {
+  a({ href, children }: { href?: string; children?: React.ReactNode }) {
+    return (
+      <a
+        href={href}
+        onClick={(e) => {
+          e.preventDefault();
+          if (href) {
+            import("@tauri-apps/plugin-opener").then(({ openUrl }) => openUrl(href));
+          }
+        }}
+        className="text-accent underline underline-offset-2 hover:text-accent-hover cursor-pointer"
+      >
+        {children}
+      </a>
+    );
+  },
   pre({ children }: { children: React.ReactNode }) {
     return <>{children}</>;
   },
