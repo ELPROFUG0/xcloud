@@ -22,6 +22,7 @@ interface HomeScreenProps {
   isFullscreen?: boolean;
   onRefresh?: () => Promise<void>;
   onOpenSettings?: () => void;
+  onSearch?: () => void;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -128,7 +129,7 @@ function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { main
   );
 }
 
-export function HomeScreen({ agents, activeAgentId, onSelectAgent, onSelectSession, getAgentSessions, isFullscreen, onRefresh, onOpenSettings }: HomeScreenProps) {
+export function HomeScreen({ agents, activeAgentId, onSelectAgent, onSelectSession, getAgentSessions, isFullscreen, onRefresh, onOpenSettings, onSearch }: HomeScreenProps) {
   const mainAgent = agents.find((a) => a.isDefault) ?? agents[0];
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem("pinnedAgents") ?? "[]"); } catch { return []; }
@@ -247,7 +248,7 @@ export function HomeScreen({ agents, activeAgentId, onSelectAgent, onSelectSessi
           <MessageSquarePlus className="h-4 w-4" />
           <span className="text-[13px] font-medium">New chat</span>
         </button>
-        <button className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text transition-colors hover:bg-white/6">
+        <button onClick={onSearch} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text transition-colors hover:bg-white/6">
           <Search className="h-4 w-4" />
           <span className="text-[13px] font-medium">Search</span>
         </button>

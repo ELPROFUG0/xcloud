@@ -15,6 +15,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTheme } from "@/hooks/use-theme";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { CommandPalette } from "./CommandPalette";
 
 interface AppLayoutProps {
   engine: BrowserEngine;
@@ -49,6 +50,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
   const [canvasLabels, setCanvasLabels] = useState(() => localStorage.getItem("canvasShowLabels") !== "false");
   const [canvasOrbs, setCanvasOrbs] = useState(() => localStorage.getItem("canvasUseOrbs") === "true");
   const [showOnboardingPreview, setShowOnboardingPreview] = useState(false);
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(() => {
     const saved = localStorage.getItem("terminalHeight");
@@ -69,9 +71,14 @@ export function AppLayout({ engine }: AppLayoutProps) {
     return () => { unlisten.then(fn => fn()); };
   }, []);
 
+  // Cmd+K to open command palette
   // Cmd+Shift+P to toggle dev preview
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
+      if (e.metaKey && e.key === "k") {
+        e.preventDefault();
+        setShowCommandPalette((v) => !v);
+      }
       if (e.metaKey && e.shiftKey && e.key === "p") {
         e.preventDefault();
         setShowPreview((v) => !v);
@@ -368,6 +375,7 @@ export function AppLayout({ engine }: AppLayoutProps) {
               isFullscreen={isFullscreen}
               onRefresh={refreshAgents}
               onOpenSettings={() => { setShowSettings(true); setSettingsSection("integrations"); }}
+              onSearch={() => setShowCommandPalette(true)}
             />
           )}
         </div>
@@ -590,6 +598,21 @@ export function AppLayout({ engine }: AppLayoutProps) {
           <OnboardingScreen onComplete={() => setShowOnboardingPreview(false)} preview />
         </div>
       )}
+
+      {/* Command Palette */}
+      <CommandPalette
+        open={showCommandPalette}
+        onClose={() => setShowCommandPalette(false)}
+        agents={agents}
+        getAgentSessions={getAgentSessions}
+        onSelectAgent={(id) => { handleSelectAgent(id); }}
+        onSelectSession={handleSelectSession}
+        onOpenSettings={(section) => {
+          setShowSettings(true);
+          setSettingsSection(section as typeof settingsSection);
+        }}
+        onOpenTerminal={() => setShowTerminal(true)}
+      />
     </div>
   );
 }
