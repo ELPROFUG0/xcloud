@@ -505,7 +505,13 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
         return (
           <div
             className="absolute pointer-events-none"
-            style={{ top: hoverY, left: 348, width: 230 }}
+            ref={(el) => {
+              if (!el) return;
+              const modalH = ref.current?.firstElementChild?.getBoundingClientRect().height ?? 400;
+              const tooltipH = el.getBoundingClientRect().height;
+              el.style.top = Math.min(hoverY, modalH - tooltipH) + "px";
+            }}
+            style={{ left: 348, width: 230 }}
           >
             <div className="rounded-lg border border-border p-3 shadow-xl text-xs" style={{ background: "#1a1a1a" }}>
               <div className="flex items-center gap-2">
