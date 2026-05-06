@@ -8,6 +8,20 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { LiveMicrophoneWaveform } from "../ui/waveform";
+import {
+  Anthropic, OpenAI, Google, Gemini, Mistral, Groq, DeepSeek, Fireworks,
+  OpenRouter, XAI, Cerebras, HuggingFace, GithubCopilot, Ollama, Bedrock,
+  Azure, Together, Perplexity, Cohere, Replicate, Meta, Nvidia, Cloudflare,
+  SambaNova, DeepInfra, Minimax, Moonshot, Baichuan, Yi, Zhipu, Qwen,
+  AlibabaCloud, Kimi, Doubao, Stepfun, SiliconCloud, Novita, LeptonAI,
+  Hyperbolic, Lambda, OpenCode, OpenClaw, Aws, Claude, Codex, Stability,
+  Inception, Inflection, Ai21, Voyage, Jina, Upstage, Nebius, Featherless,
+  Inference, LmStudio, Anyscale, Baseten, CentML, Friendli, Parasail, PPIO,
+  Venice, Kluster, Straico, SpeedAI, WorkersAI, VertexAI, Spark,
+  Vercel, ByteDance, Volcengine, Wenxin, Baidu, BaiduCloud, Tencent, TencentCloud,
+  Huawei, HuaweiCloud, SenseNova, Tiangong, ChatGLM, InternLM, Grok, Microsoft,
+  IBM, Apple, Snowflake, Nova, PaLM, Dbrx, Antigravity,
+} from "@lobehub/icons";
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
   status: Info,
@@ -65,6 +79,46 @@ const PROVIDER_NAMES: Record<string, string> = {
   "azure-openai-responses": "Azure OpenAI", mistral: "Mistral", groq: "Groq", deepseek: "DeepSeek",
   fireworks: "Fireworks", openrouter: "OpenRouter", "github-copilot": "GitHub Copilot", xai: "xAI",
   cerebras: "Cerebras", huggingface: "Hugging Face", ollama: "Ollama",
+};
+
+const PROVIDER_ICONS: Record<string, React.ComponentType<{ size?: number }>> = {
+  // Major providers
+  anthropic: Anthropic, openai: OpenAI, google: Gemini, gemini: Gemini,
+  "google-vertex": VertexAI, mistral: Mistral, groq: Groq, deepseek: DeepSeek,
+  fireworks: Fireworks, openrouter: OpenRouter, xai: XAI, cerebras: Cerebras,
+  huggingface: HuggingFace, "github-copilot": GithubCopilot, ollama: Ollama,
+  "amazon-bedrock": Bedrock, aws: Aws, "azure-openai-responses": Azure, azure: Azure,
+  // Cloud & inference
+  together: Together, perplexity: Perplexity, cohere: Cohere, replicate: Replicate,
+  meta: Meta, nvidia: Nvidia, cloudflare: Cloudflare, sambanova: SambaNova,
+  "deep-infra": DeepInfra, deepinfra: DeepInfra, novita: Novita, "lepton-ai": LeptonAI,
+  hyperbolic: Hyperbolic, lambda: Lambda, nebius: Nebius, featherless: Featherless,
+  inference: Inference, baseten: Baseten, centml: CentML, friendli: Friendli,
+  parasail: Parasail, ppio: PPIO, venice: Venice, kluster: Kluster, straico: Straico,
+  "speed-ai": SpeedAI, "workers-ai": WorkersAI, anyscale: Anyscale,
+  // Chinese providers
+  minimax: Minimax, moonshot: Moonshot, baichuan: Baichuan, yi: Yi, zhipu: Zhipu,
+  qwen: Qwen, "alibaba-cloud": AlibabaCloud, alibabacloud: AlibabaCloud, kimi: Kimi,
+  doubao: Doubao, stepfun: Stepfun, "silicon-cloud": SiliconCloud, siliconcloud: SiliconCloud,
+  spark: Spark,
+  // Specialty
+  stability: Stability, inception: Inception, inflection: Inflection,
+  ai21: Ai21, voyage: Voyage, jina: Jina, upstage: Upstage,
+  "lm-studio": LmStudio, lmstudio: LmStudio,
+  // More cloud & regional
+  vercel: Vercel, "vercel-ai": Vercel, bytedance: ByteDance, byteplus: ByteDance,
+  volcengine: Volcengine, wenxin: Wenxin, qianfan: Wenxin, baidu: Baidu,
+  "baidu-cloud": BaiduCloud, tencent: Tencent, "tencent-cloud": TencentCloud,
+  huawei: Huawei, "huawei-cloud": HuaweiCloud, sensenova: SenseNova,
+  tiangong: Tiangong, chatglm: ChatGLM, internlm: InternLM, grok: Grok,
+  microsoft: Microsoft, ibm: IBM, apple: Apple, snowflake: Snowflake,
+  nova: Nova, palm: PaLM, dbrx: Dbrx,
+  // Variant IDs (gateway uses suffixed names)
+  "byteplus-plan": ByteDance, "google-antigravity": Antigravity, "kimi-coding": Kimi,
+  "opencode-go": OpenCode, "stepfun-plan": Stepfun, "tencent-tokenhub": Tencent,
+  "vercel-ai-gateway": Vercel,
+  // Tools & agents
+  opencode: OpenCode, openclaw: OpenClaw, claude: Claude, codex: Codex,
 };
 const fmtProvider = (id: string) =>
   PROVIDER_NAMES[id] ?? id.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
@@ -332,6 +386,7 @@ export function ChatInput({
                 >
                   <ChevronLeft className="h-3.5 w-3.5" />
                 </button>
+                {PROVIDER_ICONS[selectedProvider] && (() => { const Icon = PROVIDER_ICONS[selectedProvider]!; return <Icon size={14} />; })()}
                 <span className="text-xs font-medium">{fmtProvider(selectedProvider)}</span>
                 <span className="text-[10px] text-text-muted">{filteredModels.length}</span>
               </>
@@ -363,6 +418,7 @@ export function ChatInput({
               const hasActive = group.models.some(
                 m => currentModel === `${m.provider}/${m.id}` || currentModel === m.id
               );
+              const ProviderIcon = PROVIDER_ICONS[group.provider];
               return (
                 <button
                   key={group.provider}
@@ -370,7 +426,7 @@ export function ChatInput({
                   className="flex w-full items-center justify-between px-3 py-2.5 text-left text-[11px] transition-colors hover:bg-surface-hover"
                 >
                   <div className="flex items-center gap-2">
-                    {hasActive ? <Check className="h-3 w-3 text-accent" /> : <div className="h-3 w-3" />}
+                    {ProviderIcon ? <ProviderIcon size={14} /> : <div className="h-3.5 w-3.5" />}
                     <span className={hasActive ? "text-accent font-medium" : "text-text"}>{fmtProvider(group.provider)}</span>
                   </div>
                   <span className="text-text-muted">{group.models.length}</span>
