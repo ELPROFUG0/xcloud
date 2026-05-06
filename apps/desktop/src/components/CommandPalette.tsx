@@ -196,10 +196,12 @@ export function CommandPalette({
   return (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
-      style={{ background: "rgba(0, 0, 0, 0.5)" }}
+      className="fixed inset-0 z-50 flex items-center justify-center"
     >
-      <div className="w-[480px] rounded-2xl border border-border shadow-2xl overflow-hidden" style={{ background: "#181818" }}>
+      <div
+        className="w-[480px] rounded-2xl border border-border shadow-2xl overflow-hidden transition-all duration-150 ease-out"
+        style={{ background: "#181818", animation: "cmdPaletteIn 150ms ease-out" }}
+      >
         {/* Search input */}
         <div className="flex items-center gap-3 px-4 py-3">
           <Search className="h-4 w-4 shrink-0 text-text-muted" />
@@ -232,7 +234,7 @@ export function CommandPalette({
                     onClick={item.action}
                     onMouseEnter={() => setSelectedIndex(idx)}
                     className={cn(
-                      "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors",
+                      "flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors",
                       idx === selectedIndex ? "bg-white/[0.06]" : "hover:bg-white/[0.03]",
                     )}
                   >
