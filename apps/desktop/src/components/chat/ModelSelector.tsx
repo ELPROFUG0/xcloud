@@ -500,7 +500,6 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
       {/* Tooltip — sibling of modal, NOT child of overflow:hidden */}
       {hoveredModel && (() => {
         const st = getModelStats(hoveredModel);
-        const v = hasVision(hoveredModel), r = hasReasoning(hoveredModel), p = hasPDF(hoveredModel);
         const Icon = PROVIDER_ICONS[hoveredProvider];
         return (
           <div
@@ -518,18 +517,11 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
                 {Icon && <Icon size={14} />}
                 <span className="font-semibold text-text">{formatModelName(hoveredModel.name || hoveredModel.id)}</span>
               </div>
-              <p className="mt-1.5 text-text-muted/70 leading-relaxed">{st.description}</p>
-              {(v || r || p) && (
-                <div className="mt-2 flex items-center gap-2 flex-wrap">
-                  {v && <span className="flex items-center gap-1 text-teal-400/80"><Eye className="h-2.5 w-2.5" /><span className="text-[9px]">Vision</span></span>}
-                  {r && <span className="flex items-center gap-1 text-purple-400/80"><Brain className="h-2.5 w-2.5" /><span className="text-[9px]">Reasoning</span></span>}
-                  {p && <span className="flex items-center gap-1 text-blue-400/80"><FileText className="h-2.5 w-2.5" /><span className="text-[9px]">PDF</span></span>}
-                </div>
-              )}
+              <p className="mt-1.5 text-text-muted leading-relaxed">{st.description}</p>
               <div className="mt-2 grid gap-1">
                 {[{ l: "Speed", v: st.speed }, { l: "Intelligence", v: st.intelligence }, { l: "Token usage", v: st.tokenUsage }].map(({ l, v: val }) => (
                   <div key={l} className="flex items-center justify-between">
-                    <span className="text-text-muted/60">{l}</span>
+                    <span className="text-text-muted">{l}</span>
                     <div className="flex gap-1">
                       {[1, 2, 3, 4, 5].map(i => (
                         <div key={i} className={cn("w-4 h-1 rounded-full", i <= val ? "bg-accent" : "bg-white/8")} />
@@ -539,9 +531,9 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
                 ))}
               </div>
               {hoveredModel.contextWindow && (
-                <div className="mt-1.5 flex items-center justify-between text-text-muted/60">
+                <div className="mt-1.5 flex items-center justify-between text-text-muted">
                   <span>Context</span>
-                  <span className="font-mono">{hoveredModel.contextWindow >= 1_000_000 ? `${(hoveredModel.contextWindow / 1_000_000).toFixed(0)}M` : `${Math.round(hoveredModel.contextWindow / 1000)}k`}</span>
+                  <span className="font-mono text-text/80">{hoveredModel.contextWindow >= 1_000_000 ? `${(hoveredModel.contextWindow / 1_000_000).toFixed(0)}M` : `${Math.round(hoveredModel.contextWindow / 1000)}k`}</span>
                 </div>
               )}
             </div>
