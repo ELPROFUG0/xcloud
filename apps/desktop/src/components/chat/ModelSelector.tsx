@@ -464,13 +464,13 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
                     onMouseLeave={() => setHoveredModel(null)}
                     className={cn(
                       "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-all hover:bg-white/[0.05]",
-                      isActive && "bg-accent/5",
+                      isActive && "bg-white/[0.06]",
                     )}
                   >
-                    <div className={cn("shrink-0 text-text-muted/60", isActive && "text-accent/70")}>
+                    <div className={cn("shrink-0", isActive ? "text-text" : "text-text-muted/60")}>
                       <ProviderIcon provider={model._provider} size={14} />
                     </div>
-                    <span className={cn("text-[12px] truncate flex-1", isActive ? "text-accent font-medium" : "text-text")}>
+                    <span className={cn("text-[12px] truncate flex-1", isActive ? "text-text font-medium" : "text-text")}>
                       {formatModelName(model.name || model.id)}
                     </span>
                     <button
@@ -480,7 +480,7 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
                       <Star className={cn("h-3 w-3", isFav && "fill-yellow-500")} />
                     </button>
                     {isActive && (
-                      <span className="shrink-0 rounded-full bg-accent/15 px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-wider text-accent">Active</span>
+                      <div className="shrink-0 h-1.5 w-1.5 rounded-full bg-emerald-400" />
                     )}
                   </button>
                 </div>
