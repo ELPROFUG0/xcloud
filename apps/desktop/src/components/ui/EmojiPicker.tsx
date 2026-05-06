@@ -5,6 +5,10 @@ import { copyFile, BaseDirectory } from "@tauri-apps/plugin-fs";
 
 import { updateAgentAvatar } from "@/lib/update-identity";
 
+// Gradient avatars
+const avatarModules = import.meta.glob("@/assets/avatars/avatar-*.jpg", { eager: true, query: "?url", import: "default" }) as Record<string, string>;
+const GRADIENT_AVATARS = Object.values(avatarModules).sort();
+
 interface EmojiPickerProps {
   onSelect: (emoji: string) => void;
   onSelectImage?: (path: string) => void;
@@ -235,6 +239,50 @@ export function EmojiPicker({ onSelect, onSelectImage, agentId, onClose }: Emoji
             autoFocus
           />
         </div>
+        {/* Gradient avatars — shown when no search */}
+        {filtered === null && GRADIENT_AVATARS.length > 0 && (
+          <div>
+            <div className="px-2 pt-2 pb-1 text-[10px] font-medium text-text-muted/60">
+              Avatars
+            </div>
+            <div className="grid grid-cols-8 gap-1.5 px-2 pb-2">
+              {GRADIENT_AVATARS.map((src, i) => (
+                <button
+                  key={`avatar-${i}`}
+                  onClick={async () => {
+                    if (agentId) {
+                      try {
+                        const destDir = agentId !== "main" ? `.openclaw/workspace/${agentId}` : ".openclaw/workspace";
+                        const destPath = `${destDir}/avatar.jpg`;
+
+                        // Fetch bundled image → write via Tauri FS
+                        const resp = await fetch(src);
+                        const buffer = new Uint8Array(await (await resp.blob()).arrayBuffer());
+
+                        const { writeFile, mkdir, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+                        try { await mkdir(destDir, { baseDir: BaseDirectory.Home, recursive: true }); } catch {}
+                        await writeFile(destPath, buffer, { baseDir: BaseDirectory.Home });
+                        await updateAgentAvatar(agentId, "avatar.jpg");
+                        onSelectImage?.(destPath);
+                      } catch {
+                        // Fallback: just update IDENTITY.md to point to the bundled URL
+                        try {
+                          await updateAgentAvatar(agentId, src);
+                          onSelectImage?.(src);
+                        } catch {}
+                      }
+                    }
+                    onClose();
+                  }}
+                  className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-full transition-transform hover:scale-110 ring-1 ring-white/10"
+                >
+                  <img src={src} alt="" className="h-full w-full object-cover" />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {filtered !== null ? (
           /* Search results */
           filtered.length > 0 ? (
