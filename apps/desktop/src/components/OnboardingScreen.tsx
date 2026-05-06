@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/cn";
 import xcloudLogo from "@/assets/xcloud-logo.svg?url";
 import { ArrowRight, Loader2 } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 // Provider logos
 import anthropicLogo from "@/assets/providers/anthropic.svg";
@@ -182,6 +183,13 @@ export function OnboardingScreen({ onComplete, preview }: OnboardingScreenProps)
     }
   }
 
+  // Drag handler for Tauri window
+  const handleDrag = async (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest("button, input, select, a, [data-interactive]")) return;
+    try { await getCurrentWindow().startDragging(); } catch {}
+  };
+
   // --- RENDER HELPERS ---
 
   const logoEl = (
@@ -223,28 +231,21 @@ export function OnboardingScreen({ onComplete, preview }: OnboardingScreenProps)
   // Step: Welcome
   if (step === "welcome") {
     return (
-      <div className="flex h-full flex-col items-center justify-center bg-bg px-4">
+      <div onMouseDown={handleDrag} className="flex h-full flex-col items-center justify-center bg-bg px-4">
         <div className="w-full max-w-md text-center">
           {logoEl}
           <h1 className="text-2xl font-semibold text-text">Welcome to xCloud</h1>
-          <p className="mt-2 text-sm text-text-muted">
-            Your AI agents, everywhere. Let's get you set up.
-          </p>
 
           <div className="mt-8">
             <button
               onClick={() => setStep("provider")}
-              className="w-full flex items-center justify-center gap-2 rounded-2xl bg-white text-black px-5 py-4 text-sm font-medium hover:bg-white/90 transition-colors"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-white text-black px-6 py-2.5 text-sm font-medium hover:bg-white/90 transition-colors"
             >
-              Get Started <ArrowRight size={16} />
+              Get Started <ArrowRight size={14} />
             </button>
           </div>
 
           {error && <p className="mt-4 text-xs text-red-400">{error}</p>}
-
-          <div className="mt-6 flex justify-center">
-            {btnSkip}
-          </div>
         </div>
       </div>
     );
@@ -253,7 +254,7 @@ export function OnboardingScreen({ onComplete, preview }: OnboardingScreenProps)
   // Step: Provider selection
   if (step === "provider") {
     return (
-      <div className="flex h-full flex-col items-center justify-center bg-bg px-4">
+      <div onMouseDown={handleDrag} className="flex h-full flex-col items-center justify-center bg-bg px-4">
         <div className="w-full max-w-md">
           {logoEl}
           <h2 className="text-lg font-semibold text-text text-center">Choose your AI provider</h2>
@@ -299,7 +300,7 @@ export function OnboardingScreen({ onComplete, preview }: OnboardingScreenProps)
   // Step: API Key
   if (step === "apikey") {
     return (
-      <div className="flex h-full flex-col items-center justify-center bg-bg px-4">
+      <div onMouseDown={handleDrag} className="flex h-full flex-col items-center justify-center bg-bg px-4">
         <div className="w-full max-w-md">
           {logoEl}
           <div className="flex items-center justify-center gap-3 mb-2">
@@ -354,7 +355,7 @@ export function OnboardingScreen({ onComplete, preview }: OnboardingScreenProps)
   // Step: Agent Identity
   if (step === "identity") {
     return (
-      <div className="flex h-full flex-col items-center justify-center bg-bg px-4">
+      <div onMouseDown={handleDrag} className="flex h-full flex-col items-center justify-center bg-bg px-4">
         <div className="w-full max-w-md">
           {logoEl}
           <h2 className="text-lg font-semibold text-text text-center">Name your agent</h2>
@@ -395,7 +396,7 @@ export function OnboardingScreen({ onComplete, preview }: OnboardingScreenProps)
   // Step: User info
   if (step === "user") {
     return (
-      <div className="flex h-full flex-col items-center justify-center bg-bg px-4">
+      <div onMouseDown={handleDrag} className="flex h-full flex-col items-center justify-center bg-bg px-4">
         <div className="w-full max-w-md">
           {logoEl}
           <h2 className="text-lg font-semibold text-text text-center">About you</h2>
@@ -442,7 +443,6 @@ export function OnboardingScreen({ onComplete, preview }: OnboardingScreenProps)
           <div className="mt-6 flex items-center justify-between">
             {btnBack(() => setStep("identity"))}
             <div className="flex items-center gap-2">
-              {btnSkip}
               {btnContinue(handleFinish, "Finish Setup")}
             </div>
           </div>
@@ -454,7 +454,7 @@ export function OnboardingScreen({ onComplete, preview }: OnboardingScreenProps)
   // Step: Running
   if (step === "running") {
     return (
-      <div className="flex h-full flex-col items-center justify-center bg-bg px-4">
+      <div onMouseDown={handleDrag} className="flex h-full flex-col items-center justify-center bg-bg px-4">
         <div className="w-full max-w-md text-center">
           <div
             className="h-16 w-16 mx-auto mb-6"
@@ -491,7 +491,7 @@ export function OnboardingScreen({ onComplete, preview }: OnboardingScreenProps)
   // Step: Done
   if (step === "done") {
     return (
-      <div className="flex h-full flex-col items-center justify-center bg-bg px-4">
+      <div onMouseDown={handleDrag} className="flex h-full flex-col items-center justify-center bg-bg px-4">
         <div className="w-full max-w-md text-center">
           {logoEl}
           <h2 className="text-xl font-semibold text-text">You're all set</h2>

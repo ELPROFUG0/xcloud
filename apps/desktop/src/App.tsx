@@ -3,6 +3,7 @@ import { BrowserEngine } from "@/lib/engine";
 import { AppLayout } from "@/components/AppLayout";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import xcloudLogo from "@/assets/xcloud-logo.svg?url";
 import { OnboardingScreen } from "@/components/OnboardingScreen";
 
@@ -241,35 +242,73 @@ export default function App() {
     setConnectAttempt((c) => c + 1);
   }
 
-  // ─── Render ─────────────────────────────────────────────────────────────────
+  // ─── Loading status texts ───────────────────────────────────────────────────
+  const STATUS_TEXTS: Record<string, string[]> = {
+    checking: ["Checking setup...", "Looking for gateway..."],
+    starting: ["Starting engine...", "Preparing services...", "Almost there..."],
+    connecting: ["Connecting...", "Establishing connection...", "Handshaking..."],
+    pairing: ["Pairing device...", "Verifying identity...", "Finalizing..."],
+  };
 
-  const shimmer = (
-    <div className="flex h-full items-center justify-center bg-bg">
-      <div
-        className="h-20 w-20"
-        style={{
-          WebkitMaskImage: `url("${xcloudLogo}")`,
-          maskImage: `url("${xcloudLogo}")`,
-          WebkitMaskSize: "contain",
-          maskSize: "contain",
-          WebkitMaskRepeat: "no-repeat",
-          maskRepeat: "no-repeat",
-          WebkitMaskPosition: "center",
-          maskPosition: "center",
-          backgroundImage: "linear-gradient(90deg, #777 0%, #777 35%, #bbb 50%, #777 65%, #777 100%)",
-          backgroundSize: "250% 100%",
-          animation: "shimmerBg 2.7s linear infinite",
-        }}
-      />
-    </div>
-  );
+  const [statusIdx, setStatusIdx] = useState(0);
+  useEffect(() => {
+    const kind = appState.kind;
+    if (!["checking", "starting", "connecting", "pairing"].includes(kind)) return;
+    setStatusIdx(0);
+    const texts = STATUS_TEXTS[kind] ?? ["Loading..."];
+    const interval = setInterval(() => {
+      setStatusIdx(prev => (prev + 1) % texts.length);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [appState.kind]);
+
+  // ─── Render ─────────────────────────────────────────────────────────────────
 
   switch (appState.kind) {
     case "checking":
     case "starting":
     case "connecting":
-    case "pairing":
-      return shimmer;
+    case "pairing": {
+      const texts = STATUS_TEXTS[appState.kind] ?? ["Loading..."];
+      const currentText = texts[statusIdx % texts.length]!;
+      return (
+        <div className="flex h-full flex-col items-center justify-center bg-bg" onMouseDown={async (e) => { if (e.button === 0) { try { await getCurrentWindow().startDragging(); } catch {} } }}>
+          <div
+            className="h-20 w-20"
+            style={{
+              WebkitMaskImage: `url("${xcloudLogo}")`,
+              maskImage: `url("${xcloudLogo}")`,
+              WebkitMaskSize: "contain",
+              maskSize: "contain",
+              WebkitMaskRepeat: "no-repeat",
+              maskRepeat: "no-repeat",
+              WebkitMaskPosition: "center",
+              maskPosition: "center",
+              backgroundImage: "linear-gradient(90deg, #777 0%, #777 35%, #bbb 50%, #777 65%, #777 100%)",
+              backgroundSize: "250% 100%",
+              animation: "shimmerBg 2.7s linear infinite",
+            }}
+          />
+          <div className="mt-5 h-6 overflow-hidden">
+            <p
+              key={currentText}
+              className="font-medium text-text-muted text-center"
+              style={{
+                fontSize: 15,
+                backgroundImage: "linear-gradient(90deg, #555 0%, #555 35%, #999 50%, #555 65%, #555 100%)",
+                backgroundSize: "250% 100%",
+                animation: "shimmerBg 2.7s linear infinite, fadeBlurIn 400ms ease-out",
+                WebkitBackgroundClip: "text",
+                WebkitTextFillColor: "transparent",
+                backgroundClip: "text",
+              }}
+            >
+              {currentText}
+            </p>
+          </div>
+        </div>
+      );
+    }
 
     case "onboarding":
       return <OnboardingScreen onComplete={handleOnboardingComplete} />;
