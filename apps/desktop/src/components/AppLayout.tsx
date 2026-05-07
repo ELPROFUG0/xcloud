@@ -1,11 +1,13 @@
 import { useState, useCallback, useRef, useEffect, lazy, Suspense } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
-import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, Sparkles, Plug, Terminal, Brain } from "lucide-react";
+import type { AgentInfo } from "@/hooks/use-agents";
+import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, Sparkles, Plug, Terminal, Brain, MessageCircle, Search } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { HomeScreen } from "./home/HomeScreen";
 import { useSessions } from "@/hooks/use-sessions";
 import { ChatPanel } from "./chat/ChatPanel";
+import { ChatInput } from "./chat/ChatInput";
 import { AgentCanvas, type DetailPanel } from "./canvas/AgentCanvas";
 import { SettingsPanel } from "./SettingsPanel";
 import { DevPreview } from "./DevPreview";
@@ -26,12 +28,115 @@ const MIN_WIDTH = 240;
 const MAX_WIDTH = 400;
 const DEFAULT_WIDTH = 280;
 
+function NewChatView({
+  agents,
+  engine,
+  sidebarCollapsed,
+  isFullscreen,
+  onStart,
+}: {
+  agents: AgentInfo[];
+  engine: BrowserEngine;
+  sidebarCollapsed?: boolean;
+  isFullscreen?: boolean;
+  onStart: (agentId: string, prompt?: string) => void;
+}) {
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
+  const availableAgents = agents.length > 0 ? agents : [];
+
+  return (
+    <div className="flex h-full flex-col">
+      <header
+        className="flex h-9 shrink-0 items-center border-b border-border px-4"
+        style={{ paddingLeft: sidebarCollapsed ? (isFullscreen ? 50 : 110) : undefined, transition: "padding-left 150ms ease" }}
+      >
+        <span className="text-[13px] font-medium text-text">New chat</span>
+      </header>
+
+      <div className="flex flex-1 overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-[820px] flex-col justify-center px-8 pb-[10vh] pt-8">
+          <div className="animate-[fadeBlurIn_180ms_ease-out]">
+            <h1 className="text-center text-[28px] font-semibold leading-tight tracking-normal text-text">
+              Choose an agent to chat with
+            </h1>
+            <p className="mx-auto mt-2 max-w-md text-center text-[13px] leading-5 text-text-muted">
+              Start a fresh conversation with any agent you have created.
+            </p>
+
+            {availableAgents.length === 0 && (
+              <div className="mt-7 rounded-xl border border-white/[0.06] bg-white/[0.035] px-4 py-6 text-center text-[13px] text-text-muted">
+                No agents found yet.
+              </div>
+            )}
+
+            <div className="mt-7">
+              <ChatInput
+                onSend={(prompt) => {
+                  if (!selectedAgentId) return;
+                  onStart(selectedAgentId, prompt);
+                }}
+                disabled={!engine.connected || !selectedAgentId}
+                engine={engine}
+                variant="hero"
+                contextLabel={selectedAgent ? (selectedAgent.name ?? selectedAgent.id) : "Select an agent"}
+                contextEmoji={selectedAgent?.emoji}
+                contextAvatar={selectedAgent?.avatar}
+                contextIsMain={selectedAgent?.isDefault}
+                agentOptions={availableAgents}
+                selectedAgentId={selectedAgentId}
+                onSelectAgent={setSelectedAgentId}
+                placeholder={selectedAgent ? `Ask ${selectedAgent.name ?? selectedAgent.id} anything` : "Select an agent first"}
+              />
+            </div>
+
+            <div className="mt-4 divide-y divide-white/[0.06]">
+              {[
+                {
+                  icon: MessageCircle,
+                  text: "Start with a blank conversation",
+                  action: () => selectedAgentId && onStart(selectedAgentId),
+                },
+                {
+                  icon: Sparkles,
+                  text: "Ask this agent to suggest a useful next step",
+                  action: () => selectedAgentId && onStart(selectedAgentId, "Suggest the most useful next step for this agent and help me start it."),
+                },
+                {
+                  icon: Search,
+                  text: "Review what this agent can do",
+                  action: () => selectedAgentId && onStart(selectedAgentId, "Review your current capabilities, tools, and workspace. Then suggest what I should ask you to do first."),
+                },
+              ].map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.text}
+                    onClick={item.action}
+                    disabled={!selectedAgentId}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-left text-[13px] text-text-muted transition-colors hover:text-text disabled:opacity-35"
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span>{item.text}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   useTheme(); // Initialize theme CSS variables
   const { agents, refresh: refreshAgents } = useAgents(engine);
   const { getAgentSessions } = useSessions(engine);
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
   const [activeSessionKey, setActiveSessionKey] = useState<string | null>(null);
+  const [showNewChat, setShowNewChat] = useState(false);
+  const [initialChatPrompt, setInitialChatPrompt] = useState<string | undefined>(undefined);
   const [showCanvas, setShowCanvas] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsSection, setSettingsSection] = useState<"models" | "keys" | "channels" | "skills" | "integrations" | "memory" | "appearance" | "engine" | "general">("models");
@@ -213,6 +318,8 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const handleSelectAgent = useCallback((id: string) => {
     setActiveAgentId(id);
     setActiveSessionKey(null);
+    setShowNewChat(false);
+    setInitialChatPrompt(undefined);
     setShowSettings(false);
     setShowPreview(false);
   }, []);
@@ -220,12 +327,37 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const handleSelectSession = useCallback((agentId: string, sessionKey: string) => {
     setActiveAgentId(agentId);
     setActiveSessionKey(sessionKey);
+    setShowNewChat(false);
+    setInitialChatPrompt(undefined);
     setShowSettings(false);
     setShowPreview(false);
   }, []);
 
+  const handleNewChat = useCallback(() => {
+    setShowNewChat(true);
+    setActiveAgentId(null);
+    setActiveSessionKey(null);
+    setInitialChatPrompt(undefined);
+    setShowSettings(false);
+    setShowPreview(false);
+    setShowCanvas(false);
+    setCanvasExpanded(false);
+  }, []);
+
+  const handleStartNewChat = useCallback((agentId: string, prompt?: string) => {
+    const id = crypto.randomUUID().slice(0, 8);
+    setActiveAgentId(agentId);
+    setActiveSessionKey(agentId === "main" ? `main:${id}` : `agent:${agentId}:${id}`);
+    setInitialChatPrompt(prompt?.trim() || undefined);
+    setShowNewChat(false);
+    setShowSettings(false);
+    setShowPreview(false);
+    setShowCanvas(false);
+    setCanvasExpanded(false);
+  }, []);
+
   const currentAgentId = activeAgentId ?? agents.find((a) => a.isDefault)?.id ?? "main";
-  const hasChat = activeAgentId !== null;
+  const hasChat = activeAgentId !== null && !showNewChat;
 
   const showThirdPanel = showPreview || showSettings || showCanvas;
 
@@ -378,6 +510,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
               onRefresh={refreshAgents}
               onOpenSettings={() => { setShowSettings(true); setSettingsSection("integrations"); }}
               onSearch={() => setShowCommandPalette(true)}
+              onNewChat={handleNewChat}
             />
           )}
         </div>
@@ -464,6 +597,15 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                   sidebarCollapsed={sidebarCollapsed}
                   isFullscreen={isFullscreen}
                   onRefresh={refreshAgents}
+                  initialPrompt={initialChatPrompt}
+                />
+              ) : showNewChat ? (
+                <NewChatView
+                  agents={agents}
+                  engine={engine}
+                  sidebarCollapsed={sidebarCollapsed}
+                  isFullscreen={isFullscreen}
+                  onStart={handleStartNewChat}
                 />
               ) : (
                 <div className="flex h-full flex-col items-center justify-center gap-4 text-text-muted">

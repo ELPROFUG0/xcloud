@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback, mem
 import type { BrowserEngine } from "@/lib/engine";
 import { useChat } from "@/hooks/use-chat";
 import { ToolCallBadge } from "./ToolCallBadge";
-import { Check, Clock, Plus } from "lucide-react";
+import { Blocks, Check, Clock, MessageCircle, Plus, Sparkles } from "lucide-react";
 import { ChatInput } from "./ChatInput";
 import { AgentAvatar } from "../ui/AgentAvatar";
 import { Shimmer } from "../ai-elements/shimmer";
@@ -26,6 +26,7 @@ interface ChatPanelProps {
   sidebarCollapsed?: boolean;
   isFullscreen?: boolean;
   onRefresh?: () => Promise<void>;
+  initialPrompt?: string;
 }
 
 interface Page {
@@ -47,7 +48,7 @@ function paginate(messages: ChatMessage[]): Page[] {
   return pages;
 }
 
-export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessionKey, agentName, agents = [], sidebarCollapsed, isFullscreen, onRefresh }: ChatPanelProps) {
+export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessionKey, agentName, agents = [], sidebarCollapsed, isFullscreen, onRefresh, initialPrompt }: ChatPanelProps) {
   const defaultSessionKey = externalSessionKey ?? (agentId === "main" ? "main" : `agent:${agentId}:main`);
   const [activeSession, setActiveSession] = useState(defaultSessionKey);
 
@@ -56,6 +57,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
   }, [defaultSessionKey]);
 
   const { messages, isStreaming, loading, send } = useChat({ engine, sessionKey: activeSession });
+  const sentInitialPromptRef = useRef<string | null>(null);
 
   const pages = useMemo(() => paginate(messages), [messages]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -122,6 +124,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
 
   const currentAgent = agents.find(a => a.id === agentId);
   const displayName = currentAgent?.name ?? agentName ?? agentId;
+  const isEmptyChat = pages.length === 0 && !isStreaming;
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
 
@@ -130,6 +133,12 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
     await updateAgentEmoji(agentId, emoji);
     onRefresh?.();
   }, [agentId, onRefresh]);
+
+  useEffect(() => {
+    if (loading || !initialPrompt || sentInitialPromptRef.current === initialPrompt) return;
+    sentInitialPromptRef.current = initialPrompt;
+    void send(initialPrompt);
+  }, [initialPrompt, loading, send]);
 
   if (loading) {
     return <div className="flex h-full flex-col bg-bg" />;
@@ -147,8 +156,10 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
           >
             <AgentAvatar emoji={currentAgent?.emoji} avatar={currentAgent?.avatar} isMain={currentAgent?.isDefault} />
           </button>
-          <span className="text-[13px] font-medium text-text">{displayName}</span>
-          <span className="text-[13px] font-semibold" style={{ color: "#ffffff" }}>/ {activeSession === "main" ? "Main" : activeSession.split(":").pop() ?? activeSession}</span>
+          <span className="text-[13px] font-medium text-text">{isEmptyChat ? "New chat" : displayName}</span>
+          {!isEmptyChat && (
+            <span className="text-[13px] font-semibold" style={{ color: "#ffffff" }}>/ {activeSession === "main" ? "Main" : activeSession.split(":").pop() ?? activeSession}</span>
+          )}
           {isStreaming && <span className="text-[10px] text-text-muted ml-1">typing...</span>}
 
           {showEmojiPicker && (
@@ -226,12 +237,56 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
 
       {/* Messages — centered like ChatGPT */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
-        {pages.length === 0 && !isStreaming && (
-          <div className="flex h-full flex-col items-center justify-center gap-4 text-text-muted">
-            <AgentAvatar emoji={currentAgent?.emoji} avatar={currentAgent?.avatar} isMain={currentAgent?.isDefault} size="lg" />
-            <div className="text-center">
-              <p className="text-base font-medium text-text">{displayName}</p>
-              <p className="mt-1 text-sm text-text-muted">How can I help you today?</p>
+        {isEmptyChat && (
+          <div className="flex min-h-full items-center justify-center px-8 pb-[10vh] pt-8">
+            <div className="w-full max-w-[760px] animate-[fadeBlurIn_180ms_ease-out]">
+              <h1 className="mb-7 text-center text-[28px] font-semibold leading-tight tracking-normal text-text">
+                What should we build in {displayName}?
+              </h1>
+
+              <ChatInput
+                onSend={send}
+                disabled={!engine.connected}
+                engine={engine}
+                variant="hero"
+                contextLabel={displayName}
+                contextEmoji={currentAgent?.emoji}
+                contextAvatar={currentAgent?.avatar}
+                contextIsMain={currentAgent?.isDefault}
+              />
+
+              <div className="mt-4 divide-y divide-white/[0.06]">
+                {[
+                  {
+                    icon: MessageCircle,
+                    text: "Create a specialist agent for a repeated workflow",
+                    prompt: "Help me create a specialist agent for a workflow I do repeatedly. Ask me the right questions, then configure the agent.",
+                  },
+                  {
+                    icon: Sparkles,
+                    text: "Design the first useful automation for this workspace",
+                    prompt: "Suggest and build a practical first automation for this workspace. Keep it simple and useful.",
+                  },
+                  {
+                    icon: Blocks,
+                    text: "Connect tools and capabilities for this agent",
+                    prompt: "Review this agent and recommend the tools, skills, and integrations it should have. Then help me add them.",
+                  },
+                ].map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.text}
+                      onClick={() => send(item.prompt)}
+                      disabled={!engine.connected}
+                      className="flex w-full items-center gap-3 px-4 py-3 text-left text-[13px] text-text-muted transition-colors hover:text-text disabled:opacity-40"
+                    >
+                      <Icon className="h-4 w-4 shrink-0" />
+                      <span>{item.text}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
         )}
@@ -297,9 +352,11 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
       </div>
 
       {/* Input — centered at bottom */}
-      <div className="mx-auto w-full max-w-3xl">
-        <ChatInput onSend={send} disabled={!engine.connected} engine={engine} />
-      </div>
+      {!isEmptyChat && (
+        <div className="mx-auto w-full max-w-3xl">
+          <ChatInput onSend={send} disabled={!engine.connected} engine={engine} />
+        </div>
+      )}
     </div>
   );
 }

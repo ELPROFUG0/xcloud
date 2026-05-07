@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import type { AgentInfo } from "@/hooks/use-agents";
 import type { SessionInfo } from "@/hooks/use-sessions";
-import { formatRelativeTime } from "@/hooks/use-sessions";
 import { Search, MessageSquarePlus, Download, MoreHorizontal, Pin } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { EmojiPicker } from "../ui/EmojiPicker";
@@ -23,13 +22,8 @@ interface HomeScreenProps {
   onRefresh?: () => Promise<void>;
   onOpenSettings?: () => void;
   onSearch?: () => void;
+  onNewChat?: () => void;
 }
-
-const STATUS_COLORS: Record<string, string> = {
-  working: "bg-blue-400",
-  completed: "bg-emerald-400",
-  idle: "bg-text-muted/40",
-};
 
 function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { mainAgent: AgentInfo; agents: AgentInfo[]; onSelectAgent: (id: string) => void; onOpenSettings?: () => void }) {
   const [viewIdx, setViewIdx] = useState(0);
@@ -129,7 +123,7 @@ function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { main
   );
 }
 
-export function HomeScreen({ agents, activeAgentId, onSelectAgent, onSelectSession, getAgentSessions, isFullscreen, onRefresh, onOpenSettings, onSearch }: HomeScreenProps) {
+export function HomeScreen({ agents, activeAgentId, onSelectAgent, isFullscreen, onRefresh, onOpenSettings, onSearch, onNewChat }: HomeScreenProps) {
   const mainAgent = agents.find((a) => a.isDefault) ?? agents[0];
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem("pinnedAgents") ?? "[]"); } catch { return []; }
@@ -146,10 +140,6 @@ export function HomeScreen({ agents, activeAgentId, onSelectAgent, onSelectSessi
   const [menuAgentId, setMenuAgentId] = useState<string | null>(null);
   const [showEmojiFor, setShowEmojiFor] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-
-  const toggleExpand = (agentId: string) => {
-    setExpanded(prev => ({ ...prev, [agentId]: !prev[agentId] }));
-  };
 
   // Close menu on click outside
   useEffect(() => {
@@ -244,7 +234,7 @@ export function HomeScreen({ agents, activeAgentId, onSelectAgent, onSelectSessi
     <div className="flex h-full flex-col">
       {/* Top actions — padded for macOS traffic lights */}
       <div className={`flex flex-col gap-1 px-3 pb-2 ${isFullscreen ? "pt-12" : "pt-14"}`}>
-        <button className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text transition-colors hover:bg-white/6">
+        <button onClick={onNewChat} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text transition-colors hover:bg-white/6">
           <MessageSquarePlus className="h-4 w-4" />
           <span className="text-[13px] font-medium">New chat</span>
         </button>

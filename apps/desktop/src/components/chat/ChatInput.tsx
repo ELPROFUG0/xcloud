@@ -1,14 +1,16 @@
 import { useState, useCallback, useRef, useEffect, useMemo, type KeyboardEvent } from "react";
 import { cn } from "@/lib/cn";
 import type { BrowserEngine, SlashCommand } from "@/lib/engine";
+import type { AgentInfo } from "@/hooks/use-agents";
 import { useModels } from "@/hooks/use-models";
 import {
-  ArrowUp, Mic, Paperclip, ChevronUp, Check,
+  ArrowUp, Mic, Paperclip, ChevronUp, Check, Plus,
   Slash, Info, Wrench, Settings, MessageSquare, LayoutGrid, Volume2, Eye, Square,
   type LucideIcon,
 } from "lucide-react";
 import { LiveMicrophoneWaveform } from "../ui/waveform";
 import { ModelSelector, ModelSelectorTrigger } from "./ModelSelector";
+import { AgentAvatar } from "../ui/AgentAvatar";
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
   status: Info,
@@ -25,14 +27,30 @@ interface ChatInputProps {
   disabled?: boolean;
   placeholder?: string;
   engine: BrowserEngine;
+  variant?: "dock" | "hero";
+  contextLabel?: string;
+  contextEmoji?: string;
+  contextAvatar?: string;
+  contextIsMain?: boolean;
+  agentOptions?: AgentInfo[];
+  selectedAgentId?: string | null;
+  onSelectAgent?: (id: string) => void;
 }
 
 
 export function ChatInput({
   onSend,
   disabled = false,
-  placeholder = "Message...",
+  placeholder,
   engine,
+  variant = "dock",
+  contextLabel,
+  contextEmoji,
+  contextAvatar,
+  contextIsMain,
+  agentOptions,
+  selectedAgentId,
+  onSelectAgent,
 }: ChatInputProps) {
   const [value, setValue] = useState("");
 
@@ -75,6 +93,9 @@ export function ChatInput({
   const [showSlash, setShowSlash] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const slashRef = useRef<HTMLDivElement>(null);
+  const [showAgentMenu, setShowAgentMenu] = useState(false);
+  const [agentMenuClosing, setAgentMenuClosing] = useState(false);
+  const agentMenuRef = useRef<HTMLDivElement>(null);
 
   // Load mic devices
   useEffect(() => {
@@ -97,6 +118,22 @@ export function ChatInput({
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [showMicMenu]);
+
+  const closeAgentMenu = useCallback(() => {
+    if (!showAgentMenu) return;
+    setAgentMenuClosing(true);
+    setShowAgentMenu(false);
+    window.setTimeout(() => setAgentMenuClosing(false), 140);
+  }, [showAgentMenu]);
+
+  useEffect(() => {
+    if (!showAgentMenu) return;
+    function handleClick(e: MouseEvent) {
+      if (agentMenuRef.current && !agentMenuRef.current.contains(e.target as Node)) closeAgentMenu();
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showAgentMenu, closeAgentMenu]);
 
   // Request mic permission when starting recording
   const startRecording = useCallback(async () => {
@@ -198,8 +235,11 @@ export function ChatInput({
   }, []);
 
 
+  const inputPlaceholder = placeholder ?? (variant === "hero" ? "Ask Unicore anything. @ to use tools or use files" : "Message...");
+  const isHero = variant === "hero";
+
   return (
-    <div className="relative px-4 pb-4 pt-2">
+    <div className={cn("relative", isHero ? "px-0 pb-0 pt-0" : "px-4 pb-4 pt-2")}>
       {/* Slash commands menu */}
       {showSlash && (
         <div
@@ -247,7 +287,12 @@ export function ChatInput({
       />
 
       {/* Input container */}
-      <div className="rounded-2xl bg-container border border-[#444] px-2.5 py-2">
+      <div className={cn(
+        "border px-2.5 py-2 shadow-[0_18px_60px_rgba(0,0,0,0.26)]",
+        isHero
+          ? "rounded-t-[22px] rounded-b-none border-white/[0.06] bg-[#252525]"
+          : "rounded-2xl border-[#444] bg-container",
+      )}>
         {/* Textarea — always same size */}
         <textarea
           ref={textareaRef}
@@ -255,12 +300,13 @@ export function ChatInput({
           onChange={(e) => { if (!recording) setValue(e.target.value); }}
           onKeyDown={(e) => { if (!recording) handleKeyDown(e); }}
           onInput={() => { if (!recording) handleInput(); }}
-          placeholder={recording ? "Listening..." : placeholder}
+          placeholder={recording ? "Listening..." : inputPlaceholder}
           disabled={disabled || recording}
           rows={1}
           className={cn(
-            "w-full resize-none bg-transparent px-1 py-0.5",
-            "text-[13px] text-text placeholder:text-text-muted leading-5",
+            "w-full resize-none bg-transparent px-1",
+            isHero ? "min-h-[54px] py-2 text-[14px]" : "py-0.5 text-[13px]",
+            "text-text placeholder:text-text-muted/55 leading-5",
             "focus:outline-none",
             "disabled:cursor-not-allowed disabled:opacity-50",
           )}
@@ -296,11 +342,22 @@ export function ChatInput({
             {recording ? (
               <div />
             ) : (
-              <ModelSelectorTrigger
-                currentModel={currentModel}
-                onClick={() => setShowModels(!showModels)}
-                open={showModels}
-              />
+                  <div className="flex items-center gap-1.5">
+                    {isHero && (
+                      <button
+                        disabled={disabled}
+                        className="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-white/6 hover:text-text disabled:opacity-30"
+                        title="Add context"
+                      >
+                        <Plus className="h-4 w-4" />
+                      </button>
+                    )}
+                    <ModelSelectorTrigger
+                      currentModel={currentModel}
+                      onClick={() => setShowModels(!showModels)}
+                      open={showModels}
+                    />
+                  </div>
             )}
           </div>
 
@@ -381,6 +438,73 @@ export function ChatInput({
           </div>
         </div>
       </div>
+      {isHero && (
+        <div className="flex h-10 items-center gap-4 rounded-b-[22px] bg-[#1c1c1c] px-4 text-[12px] text-text-muted">
+          <div ref={agentMenuRef} className="relative min-w-0">
+            <button
+              type="button"
+              onClick={() => {
+                if (!agentOptions?.length) return;
+                if (showAgentMenu) closeAgentMenu();
+                else setShowAgentMenu(true);
+              }}
+              className="group flex max-w-[230px] min-w-0 items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-white/[0.06] hover:text-text"
+              title="Selected agent"
+            >
+              {contextEmoji || contextAvatar ? (
+                <AgentAvatar emoji={contextEmoji} avatar={contextAvatar} isMain={contextIsMain} />
+              ) : (
+                <Paperclip className="h-3.5 w-3.5" />
+              )}
+              <span className="truncate">{contextLabel ?? "Select an agent"}</span>
+              <ChevronUp className="h-3 w-3 rotate-180 opacity-50 transition-opacity group-hover:opacity-90" />
+            </button>
+
+            {(showAgentMenu || agentMenuClosing) && agentOptions && agentOptions.length > 0 && (
+              <div
+                className={cn(
+                  "absolute bottom-full left-0 z-40 mb-2 w-64 overflow-hidden rounded-xl border border-border bg-surface p-1.5 shadow-2xl",
+                  agentMenuClosing ? "animate-[popoverOut_140ms_ease-in_forwards]" : "animate-[slideUp_120ms_ease-out]",
+                )}
+              >
+                <div className="max-h-64 space-y-1 overflow-y-auto">
+                  {agentOptions.map((agent) => {
+                    const selected = selectedAgentId === agent.id;
+                    return (
+                      <button
+                        key={agent.id}
+                        type="button"
+                        onClick={() => {
+                          onSelectAgent?.(agent.id);
+                          closeAgentMenu();
+                        }}
+                        className={cn(
+                          "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors",
+                          selected ? "bg-white/10 text-text" : "text-text-muted hover:bg-white/[0.06] hover:text-text",
+                        )}
+                      >
+                        <AgentAvatar emoji={agent.emoji} avatar={agent.avatar} isMain={agent.isDefault} />
+                        <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{agent.name ?? agent.id}</span>
+                        {selected && <Check className="h-3.5 w-3.5 text-text-muted" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+          <button className="group flex items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors hover:bg-white/[0.06] hover:text-text" title="Execution mode">
+            <Wrench className="h-3.5 w-3.5" />
+            <span>Work locally</span>
+            <ChevronUp className="h-3 w-3 rotate-180 opacity-50 transition-opacity group-hover:opacity-90" />
+          </button>
+          <button className="group flex items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors hover:bg-white/[0.06] hover:text-text" title="Branch">
+            <Slash className="h-3.5 w-3.5" />
+            <span>main</span>
+            <ChevronUp className="h-3 w-3 rotate-180 opacity-50 transition-opacity group-hover:opacity-90" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
