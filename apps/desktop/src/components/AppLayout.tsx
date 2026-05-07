@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, lazy, Suspense } from "react"
 import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
 import type { AgentInfo } from "@/hooks/use-agents";
-import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, Sparkles, Plug, Terminal, Brain, MessageCircle, Search, X } from "lucide-react";
+import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, Sparkles, Plug, Brain, MessageCircle, Search, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { HomeScreen } from "./home/HomeScreen";
 import { useSessions } from "@/hooks/use-sessions";
@@ -652,16 +652,6 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
             </button>
             <div className="flex items-center gap-0.5">
               <button
-                onClick={toggleTerminal}
-                className={cn(
-                  "flex h-7 w-7 items-center justify-center rounded-lg transition-colors",
-                  showTerminal ? "bg-white/10 text-text" : "text-text-muted hover:bg-white/6 hover:text-text"
-                )}
-                title="Terminal (⌘`)"
-              >
-                <Terminal className="h-4 w-4" />
-              </button>
-              <button
                 onClick={() => { setShowPreview(!showPreview); setShowSettings(false); }}
                 className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-white/6 hover:text-text"
                 title="Preview"
@@ -748,6 +738,9 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                   onRefresh={refreshAgents}
                   initialPrompt={initialChatPrompt}
                   terminalLift={showTerminal ? terminalHeight : 0}
+                  onToggleTerminal={toggleTerminal}
+                  terminalOpen={showTerminal}
+                  reserveCanvasControlsSpace={!showThirdPanel && !showSettings && !showPreview}
                 />
               ) : showNewChat ? (
                 <NewChatView

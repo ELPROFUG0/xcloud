@@ -28,6 +28,9 @@ interface ChatPanelProps {
   onRefresh?: () => Promise<void>;
   initialPrompt?: string;
   terminalLift?: number;
+  onToggleTerminal?: () => void;
+  terminalOpen?: boolean;
+  reserveCanvasControlsSpace?: boolean;
 }
 
 interface Page {
@@ -49,7 +52,7 @@ function paginate(messages: ChatMessage[]): Page[] {
   return pages;
 }
 
-export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessionKey, agentName, agents = [], sidebarCollapsed, isFullscreen, onRefresh, initialPrompt, terminalLift = 0 }: ChatPanelProps) {
+export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessionKey, agentName, agents = [], sidebarCollapsed, isFullscreen, onRefresh, initialPrompt, terminalLift = 0, onToggleTerminal, terminalOpen = false, reserveCanvasControlsSpace = false }: ChatPanelProps) {
   const defaultSessionKey = externalSessionKey ?? (agentId === "main" ? "main" : `agent:${agentId}:main`);
   const [activeSession, setActiveSession] = useState(defaultSessionKey);
 
@@ -269,64 +272,91 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
           )}
         </div>
 
-        {/* Sessions button */}
-        <div className="relative ml-auto" ref={sessionsRef}>
+        <div className={`ml-auto flex items-center gap-1 transition-[margin] duration-150 ease-out ${reserveCanvasControlsSpace ? "mr-6" : ""}`}>
           <button
-            onClick={() => setShowSessions(!showSessions)}
-            className="flex h-6 w-6 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-white/8 hover:text-text"
-            title="Conversations"
+            onClick={onToggleTerminal}
+            disabled={!onToggleTerminal}
+            className={`flex h-6 w-6 items-center justify-center rounded-md transition-colors disabled:pointer-events-none disabled:opacity-40 ${
+              terminalOpen ? "bg-white/10 text-text" : "text-text-muted hover:bg-white/8 hover:text-text"
+            }`}
+            title="Terminal"
+            aria-label="Terminal"
           >
-            <Clock className="h-3.5 w-3.5" />
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              className="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M7.5 7.5L8.72654 8.55719C9.24218 9.00163 9.5 9.22386 9.5 9.5C9.5 9.77614 9.24218 9.99836 8.72654 10.4428L7.5 11.5" />
+              <path d="M11.5 12.5H15.5" />
+              <path d="M12 21C15.7497 21 17.6246 21 18.9389 20.0451C19.3634 19.7367 19.7367 19.3634 20.0451 18.9389C21 17.6246 21 15.7497 21 12C21 8.25027 21 6.3754 20.0451 5.06107C19.7367 4.6366 19.3634 4.26331 18.9389 3.95491C17.6246 3 15.7497 3 12 3C8.25027 3 6.3754 3 5.06107 3.95491C4.6366 4.26331 4.26331 4.6366 3.95491 5.06107C3 6.3754 3 8.25027 3 12C3 15.7497 3 17.6246 3.95491 18.9389C4.26331 19.3634 4.6366 19.7367 5.06107 20.0451C6.3754 21 8.25027 21 12 21Z" />
+            </svg>
           </button>
 
-          {showSessions && (
-            <div className="absolute right-0 top-full mt-2 z-30 w-60 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl animate-[slideUp_120ms_ease-out]">
-              <div className="max-h-56 overflow-y-auto overscroll-contain p-1.5">
-                <button
-                  onClick={() => {
-                    const id = crypto.randomUUID().slice(0, 8);
-                    const newKey = agentId === "main" ? `main:${id}` : `agent:${agentId}:${id}`;
-                    setActiveSession(newKey);
-                    setShowSessions(false);
-                  }}
-                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-white/6 mb-0.5"
-                >
-                  <Plus className="h-3.5 w-3.5 text-text-muted" />
-                  <span className="text-[11px] font-medium text-text">New conversation</span>
-                </button>
-                {sessionList.length === 0 ? (
-                  <div className="px-3 py-2 text-center text-[10px] text-text-muted/40">No previous conversations</div>
-                ) : (
-                  sessionList.map((s) => {
-                    const label = s.key === "main" ? "Main" : s.key.split(":").pop() ?? s.key;
-                    return (
-                      <button
-                        key={s.key}
-                        onClick={() => { setActiveSession(s.key); setShowSessions(false); }}
-                        className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-white/6 ${activeSession === s.key ? "bg-white/8" : ""}`}
-                      >
-                        <div className={`h-1.5 w-1.5 shrink-0 rounded-full ${activeSession === s.key ? "bg-emerald-400" : "bg-text-muted/40"}`} />
-                        <span className="flex-1 truncate text-[11px] font-medium text-text">{label}</span>
-                        {s.updatedAt > 0 && (
-                          <span className="shrink-0 text-[9px] text-text-muted/30">
-                            {(() => {
-                              const diff = Date.now() - s.updatedAt;
-                              const mins = Math.floor(diff / 60000);
-                              if (mins < 1) return "now";
-                              if (mins < 60) return `${mins}m`;
-                              const hours = Math.floor(mins / 60);
-                              if (hours < 24) return `${hours}h`;
-                              return `${Math.floor(hours / 24)}d`;
-                            })()}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })
-                )}
+          {/* Sessions button */}
+          <div className="relative" ref={sessionsRef}>
+            <button
+              onClick={() => setShowSessions(!showSessions)}
+              className="flex h-6 w-6 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-white/8 hover:text-text"
+              title="Conversations"
+            >
+              <Clock className="h-3.5 w-3.5" />
+            </button>
+
+            {showSessions && (
+              <div className="absolute right-0 top-full mt-2 z-30 w-60 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl animate-[slideUp_120ms_ease-out]">
+                <div className="max-h-56 overflow-y-auto overscroll-contain p-1.5">
+                  <button
+                    onClick={() => {
+                      const id = crypto.randomUUID().slice(0, 8);
+                      const newKey = agentId === "main" ? `main:${id}` : `agent:${agentId}:${id}`;
+                      setActiveSession(newKey);
+                      setShowSessions(false);
+                    }}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-white/6 mb-0.5"
+                  >
+                    <Plus className="h-3.5 w-3.5 text-text-muted" />
+                    <span className="text-[11px] font-medium text-text">New conversation</span>
+                  </button>
+                  {sessionList.length === 0 ? (
+                    <div className="px-3 py-2 text-center text-[10px] text-text-muted/40">No previous conversations</div>
+                  ) : (
+                    sessionList.map((s) => {
+                      const label = s.key === "main" ? "Main" : s.key.split(":").pop() ?? s.key;
+                      return (
+                        <button
+                          key={s.key}
+                          onClick={() => { setActiveSession(s.key); setShowSessions(false); }}
+                          className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-white/6 ${activeSession === s.key ? "bg-white/8" : ""}`}
+                        >
+                          <div className={`h-1.5 w-1.5 shrink-0 rounded-full ${activeSession === s.key ? "bg-emerald-400" : "bg-text-muted/40"}`} />
+                          <span className="flex-1 truncate text-[11px] font-medium text-text">{label}</span>
+                          {s.updatedAt > 0 && (
+                            <span className="shrink-0 text-[9px] text-text-muted/30">
+                              {(() => {
+                                const diff = Date.now() - s.updatedAt;
+                                const mins = Math.floor(diff / 60000);
+                                if (mins < 1) return "now";
+                                if (mins < 60) return `${mins}m`;
+                                const hours = Math.floor(mins / 60);
+                                if (hours < 24) return `${hours}h`;
+                                return `${Math.floor(hours / 24)}d`;
+                              })()}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </header>
 
