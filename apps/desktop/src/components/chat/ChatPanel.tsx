@@ -27,6 +27,7 @@ interface ChatPanelProps {
   isFullscreen?: boolean;
   onRefresh?: () => Promise<void>;
   initialPrompt?: string;
+  terminalLift?: number;
 }
 
 interface Page {
@@ -48,7 +49,7 @@ function paginate(messages: ChatMessage[]): Page[] {
   return pages;
 }
 
-export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessionKey, agentName, agents = [], sidebarCollapsed, isFullscreen, onRefresh, initialPrompt }: ChatPanelProps) {
+export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessionKey, agentName, agents = [], sidebarCollapsed, isFullscreen, onRefresh, initialPrompt, terminalLift = 0 }: ChatPanelProps) {
   const defaultSessionKey = externalSessionKey ?? (agentId === "main" ? "main" : `agent:${agentId}:main`);
   const [activeSession, setActiveSession] = useState(defaultSessionKey);
 
@@ -62,6 +63,8 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
   const pages = useMemo(() => paginate(messages), [messages]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const pinnedToBottomRef = useRef(true);
+  const prevTerminalLiftRef = useRef(0);
   const prevMsgCount = useRef(0);
   const [showSessions, setShowSessions] = useState(false);
   const [sessionList, setSessionList] = useState<Array<{ key: string; preview: string; updatedAt: number }>>([]);
@@ -121,6 +124,59 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
     }
     prevMsgCount.current = messages.length;
   }, [messages.length]);
+
+  useEffect(() => {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl) return;
+
+    const updatePinnedState = () => {
+      const distanceFromBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+      pinnedToBottomRef.current = distanceFromBottom < 96;
+    };
+
+    const keepBottomPinned = () => {
+      if (!pinnedToBottomRef.current) return;
+      scrollEl.scrollTop = scrollEl.scrollHeight;
+    };
+
+    updatePinnedState();
+    scrollEl.addEventListener("scroll", updatePinnedState, { passive: true });
+
+    const observer = new ResizeObserver(() => {
+      requestAnimationFrame(keepBottomPinned);
+    });
+    observer.observe(scrollEl);
+
+    return () => {
+      scrollEl.removeEventListener("scroll", updatePinnedState);
+      observer.disconnect();
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl) return;
+
+    const isOpening = terminalLift > prevTerminalLiftRef.current;
+    prevTerminalLiftRef.current = terminalLift;
+    const distanceFromBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+    const shouldPin = pinnedToBottomRef.current || (isOpening && distanceFromBottom < Math.max(160, terminalLift + 80));
+    if (!shouldPin) return;
+
+    pinnedToBottomRef.current = true;
+    let frameId = 0;
+    const startedAt = performance.now();
+
+    const keepPinnedThroughTerminalAnimation = (now: number) => {
+      scrollEl.scrollTop = scrollEl.scrollHeight;
+      if (now - startedAt < 420) {
+        frameId = requestAnimationFrame(keepPinnedThroughTerminalAnimation);
+      }
+    };
+
+    frameId = requestAnimationFrame(keepPinnedThroughTerminalAnimation);
+    return () => cancelAnimationFrame(frameId);
+  }, [terminalLift]);
 
   const currentAgent = agents.find(a => a.id === agentId);
   const displayName = currentAgent?.name ?? agentName ?? agentId;

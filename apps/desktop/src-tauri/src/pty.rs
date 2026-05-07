@@ -91,6 +91,8 @@ pub fn pty_spawn(
     cmd.env("TERM_PROGRAM", "kitty");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("COLORFGBG", "15;0"); // dark theme
+    cmd.env("CLICOLOR", "1");
+    cmd.env("FORCE_COLOR", "1");
     // Ensure UTF-8 locale
     if std::env::var("LANG").is_err() {
         cmd.env("LANG", "en_US.UTF-8");

@@ -168,12 +168,13 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
     try {
       const agent = CLI_AGENTS.find(a => a.id === agentId) ?? CLI_AGENTS[0]!;
       const launchCmd = command ?? (agent.command ? agent.command : null);
+      const isAuthLaunch = command?.includes("# xcloud-auth-") ?? false;
 
       const ptyId: number = await invoke("pty_spawn", {
         cols: 80,
         rows: 24,
         cwd: null,
-        command: launchCmd,
+        command: isAuthLaunch ? launchCmd : null,
       });
 
       const tab: TerminalTab = {
@@ -216,7 +217,6 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
 
       xterm.onData((data) => { invoke("pty_write", { id: ptyId, data }).catch(() => {}); });
 
-      const isAuthLaunch = command?.includes("# xcloud-auth-") ?? false;
       const unlisten = await listen<{ id: number; data: string }>("pty-output", (event) => {
         if (event.payload.id !== ptyId) return;
         let data = event.payload.data;
@@ -234,6 +234,12 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
 
       setTabs((prev) => [...prev, tab]);
       setActiveTab(ptyId);
+
+      if (launchCmd && !isAuthLaunch) {
+        setTimeout(() => {
+          invoke("pty_write", { id: ptyId, data: `${launchCmd}\n` }).catch(() => {});
+        }, 450);
+      }
 
       return ptyId;
     } catch (err) {

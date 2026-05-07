@@ -684,6 +684,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                   isFullscreen={isFullscreen}
                   onRefresh={refreshAgents}
                   initialPrompt={initialChatPrompt}
+                  terminalLift={showTerminal ? terminalHeight : 0}
                 />
               ) : showNewChat ? (
                 <NewChatView
