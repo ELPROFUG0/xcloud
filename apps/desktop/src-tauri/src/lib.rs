@@ -1,3 +1,4 @@
+mod audio;
 mod engine;
 mod pty;
 
@@ -45,6 +46,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(engine::EngineProcess::default())
+        .manage(audio::AudioState::default())
         .manage(pty::PtyState::default())
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
@@ -77,6 +79,10 @@ pub fn run() {
             greet,
             run_shell,
             spawn_shell,
+            audio::local_speech_status,
+            audio::prepare_local_speech,
+            audio::transcribe_audio,
+            audio::transcribe_audio_background,
             engine::engine_ensure_running,
             engine::engine_status,
             engine::engine_stop,

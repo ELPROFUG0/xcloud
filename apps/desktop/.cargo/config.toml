@@ -1,0 +1,8 @@
+[env]
+CPLUS_INCLUDE_PATH = { value = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1", force = false }
+
+[target.'cfg(target_os = "macos")']
+rustflags = [
+  "-C",
+  "link-arg=-Wl,-rpath,/usr/lib/swift",
+]

@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo, type KeyboardEvent } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/cn";
 import type { BrowserEngine, SlashCommand } from "@/lib/engine";
 import type { AgentInfo } from "@/hooks/use-agents";
@@ -13,6 +14,41 @@ import { ModelSelector, ModelSelectorTrigger } from "./ModelSelector";
 import { AgentAvatar } from "../ui/AgentAvatar";
 import { Shimmer } from "../ai-elements/shimmer";
 import orbVideo from "@/assets/setup-icons/orb-video.mp4";
+
+interface TranscriptionResult {
+  text: string;
+  confidence: number;
+  duration: number;
+  processingTime: number;
+  rtfx: number;
+}
+
+interface AudioStatus {
+  ready: boolean;
+  modelDownloaded: boolean;
+  modelPath: string;
+}
+
+const AUDIO_MIME_CANDIDATES = [
+  "audio/mp4",
+  "audio/aac",
+  "audio/webm;codecs=opus",
+  "audio/webm",
+];
+
+function getRecordingFormat() {
+  if (typeof MediaRecorder === "undefined") return null;
+  return AUDIO_MIME_CANDIDATES.find((mime) => MediaRecorder.isTypeSupported(mime)) ?? null;
+}
+
+function extensionFromMime(mime: string) {
+  if (mime.includes("mp4")) return "m4a";
+  if (mime.includes("aac")) return "aac";
+  if (mime.includes("wav")) return "wav";
+  if (mime.includes("mpeg") || mime.includes("mp3")) return "mp3";
+  if (mime.includes("webm")) return "webm";
+  return "m4a";
+}
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
   status: Info,
@@ -85,9 +121,15 @@ export function ChatInput({
   const [showModels, setShowModels] = useState(false);
   const [modelMenuClosing, setModelMenuClosing] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const [preparingSpeech, setPreparingSpeech] = useState(false);
+  const [speechModelDownloaded, setSpeechModelDownloaded] = useState<boolean | null>(null);
   const [showMicMenu, setShowMicMenu] = useState(false);
   const [micDevices, setMicDevices] = useState<{ deviceId: string; label: string }[]>([]);
   const [selectedMic, setSelectedMic] = useState("");
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
   const micMenuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { providers, currentModel, setModel } = useModels(engine, { agentId: selectedAgentId, agents: agentOptions });
@@ -138,11 +180,67 @@ export function ChatInput({
     return () => document.removeEventListener("mousedown", handleClick);
   }, [showAgentMenu, closeAgentMenu]);
 
-  // Request mic permission when starting recording
-  const startRecording = useCallback(async () => {
+  useEffect(() => {
+    invoke<AudioStatus>("local_speech_status")
+      .then((status) => setSpeechModelDownloaded(status.modelDownloaded))
+      .catch(() => setSpeechModelDownloaded(null));
+  }, []);
+
+  const appendTranscription = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    setValue((current) => {
+      const next = current.trim() ? `${current.trimEnd()} ${trimmed}` : trimmed;
+      return next;
+    });
+    setPendingResize(true);
+    textareaRef.current?.focus();
+  }, []);
+
+  const cleanupRecording = useCallback(() => {
+    recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+    recordingStreamRef.current = null;
+    mediaRecorderRef.current = null;
+    audioChunksRef.current = [];
+    setRecording(false);
+  }, []);
+
+  const transcribeRecording = useCallback(async (blob: Blob) => {
+    setTranscribing(true);
     try {
+      const buffer = await blob.arrayBuffer();
+      const result = await invoke<TranscriptionResult>("transcribe_audio_background", {
+        bytes: Array.from(new Uint8Array(buffer)),
+        extension: extensionFromMime(blob.type),
+      });
+      appendTranscription(result.text);
+    } catch (error) {
+      console.error("Local transcription failed", error);
+    } finally {
+      setTranscribing(false);
+    }
+  }, [appendTranscription]);
+
+  // Request mic permission and record audio locally for transcription.
+  const startRecording = useCallback(async () => {
+    if (recording || transcribing || preparingSpeech) return;
+    try {
+      if (typeof MediaRecorder === "undefined") {
+        throw new Error("MediaRecorder is not available in this WebView");
+      }
+
+      setPreparingSpeech(true);
+      const status = await invoke<AudioStatus>("local_speech_status").catch(() => null);
+      setSpeechModelDownloaded(status?.modelDownloaded ?? null);
+
+      const prepared = await invoke<AudioStatus>("prepare_local_speech");
+      setSpeechModelDownloaded(prepared.modelDownloaded);
+      setPreparingSpeech(false);
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: selectedMic ? { deviceId: { exact: selectedMic } } : true });
-      stream.getTracks().forEach(t => t.stop()); // just for permission
+      recordingStreamRef.current = stream;
+
       // Reload devices with labels
       const list = await navigator.mediaDevices.enumerateDevices();
       const inputs = list.filter(d => d.kind === "audioinput").map(d => ({
@@ -151,13 +249,40 @@ export function ChatInput({
       }));
       setMicDevices(inputs);
       if (inputs[0] && !selectedMic) setSelectedMic(inputs[0].deviceId);
-    } catch {}
-    setRecording(true);
-  }, [selectedMic]);
+
+      const format = getRecordingFormat();
+      const recorder = format ? new MediaRecorder(stream, { mimeType: format }) : new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        const type = recorder.mimeType || format || "audio/mp4";
+        const blob = new Blob(audioChunksRef.current, { type });
+        cleanupRecording();
+        if (blob.size > 0) void transcribeRecording(blob);
+      };
+      recorder.onerror = () => cleanupRecording();
+      recorder.start();
+      setRecording(true);
+    } catch (error) {
+      console.error("Microphone recording failed", error);
+      setPreparingSpeech(false);
+      cleanupRecording();
+    }
+  }, [cleanupRecording, preparingSpeech, recording, selectedMic, transcribeRecording, transcribing]);
 
   const stopRecording = useCallback(() => {
-    setRecording(false);
-  }, []);
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === "inactive") {
+      cleanupRecording();
+      return;
+    }
+
+    recorder.stop();
+  }, [cleanupRecording]);
 
   const closeModelMenu = useCallback(() => {
     if (!showModels) return;
@@ -259,6 +384,15 @@ export function ChatInput({
   const inputPlaceholder = placeholder ?? (variant === "hero" ? "Ask Unicore anything. @ to use tools or use files" : "Message...");
   const isHero = variant === "hero";
   const hasSelectedAgent = Boolean(selectedAgentId || contextEmoji || contextAvatar || (contextLabel && contextLabel !== "Select an agent"));
+  const speechStatusText = preparingSpeech
+    ? speechModelDownloaded === false
+      ? "Downloading local speech model..."
+      : "Preparing local speech..."
+    : transcribing
+      ? "Transcribing locally..."
+      : recording
+        ? "Listening..."
+        : "";
 
   return (
     <div className={cn("relative", isHero ? "px-0 pb-0 pt-0" : "px-4 pb-4 pt-2")}>
@@ -321,11 +455,11 @@ export function ChatInput({
         <textarea
           ref={textareaRef}
           value={value}
-          onChange={(e) => { if (!recording) setValue(e.target.value); }}
-          onKeyDown={(e) => { if (!recording) handleKeyDown(e); }}
-          onInput={() => { if (!recording) handleInput(); }}
-          placeholder={recording ? "Listening..." : inputPlaceholder}
-          disabled={disabled || recording}
+          onChange={(e) => { if (!recording && !transcribing && !preparingSpeech) setValue(e.target.value); }}
+          onKeyDown={(e) => { if (!recording && !transcribing && !preparingSpeech) handleKeyDown(e); }}
+          onInput={() => { if (!recording && !transcribing && !preparingSpeech) handleInput(); }}
+          placeholder={recording || transcribing || preparingSpeech ? "" : inputPlaceholder}
+          disabled={disabled || recording || transcribing || preparingSpeech}
           rows={1}
           className={cn(
             "w-full resize-none bg-transparent px-1",
@@ -337,10 +471,33 @@ export function ChatInput({
           style={{ overflowY: "hidden" }}
         />
 
+        {(recording || transcribing || preparingSpeech) && (
+          <div className={cn(
+            "pointer-events-none absolute left-3 right-3 top-2 z-20",
+            isHero ? "pt-2" : "pt-0.5",
+          )}>
+            <div className="flex items-center gap-2">
+              <Shimmer as="span" className={cn("truncate font-medium", isHero ? "text-[14px]" : "text-[13px]")} duration={1.4}>
+                {speechStatusText}
+              </Shimmer>
+              {preparingSpeech && (
+                <span className="shrink-0 text-[10px] text-text-muted/45">
+                  first setup
+                </span>
+              )}
+            </div>
+            {preparingSpeech && (
+              <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/[0.08]">
+                <div className="h-full w-1/3 rounded-full bg-white/70 shadow-[0_0_12px_rgba(255,255,255,0.35)] animate-[speechProgress_1.1s_ease-in-out_infinite]" />
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Bottom bar */}
         <div className="relative mt-1.5 flex h-8 items-center justify-between">
           {/* Waveform — absolute behind buttons, only when recording */}
-          {recording && (
+          {(recording || transcribing || preparingSpeech) && (
             <div className="absolute inset-0 z-0">
               <LiveMicrophoneWaveform
                 active={recording}
@@ -363,7 +520,7 @@ export function ChatInput({
 
           {/* Left side */}
           <div className="relative z-10">
-            {recording ? (
+            {recording || transcribing || preparingSpeech ? (
               <div />
             ) : (
                   <div className="flex items-center gap-1.5">
@@ -392,20 +549,30 @@ export function ChatInput({
 
           {/* Right side */}
           <div className="relative z-10 flex items-center gap-1">
-            {recording ? (
+            {recording || transcribing || preparingSpeech ? (
               <button
                 onClick={stopRecording}
-                className="flex h-6 w-6 items-center justify-center rounded-full bg-red-500 text-white transition-all hover:bg-red-600"
-                title="Stop recording"
+                disabled={transcribing || preparingSpeech}
+                className={cn(
+                  "flex h-6 w-6 items-center justify-center rounded-full transition-all",
+                  preparingSpeech || transcribing ? "bg-white/[0.08] text-text-muted" : "bg-red-500 text-white hover:bg-red-600",
+                )}
+                title={preparingSpeech ? "Preparing local speech..." : transcribing ? "Transcribing..." : "Stop recording"}
               >
-                <Square className="h-2.5 w-2.5 fill-current" />
+                {transcribing || preparingSpeech ? (
+                  <Shimmer as="span" className="text-[10px]" duration={1.4}>
+                    {preparingSpeech ? "..." : "..."}
+                  </Shimmer>
+                ) : (
+                  <Square className="h-2.5 w-2.5 fill-current" />
+                )}
               </button>
             ) : (
               <>
                 <div className="relative flex items-center">
                   <button
                     onClick={startRecording}
-                    disabled={disabled}
+                    disabled={disabled || preparingSpeech}
                     className="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-white/[0.06] hover:text-text disabled:opacity-30"
                     title="Voice"
                   >
