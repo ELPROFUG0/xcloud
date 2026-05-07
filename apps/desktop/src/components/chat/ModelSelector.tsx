@@ -349,7 +349,7 @@ export function ModelSelector({ open, closing = false, onClose, providers, curre
       ref={ref}
       className={cn(
         "absolute z-50",
-        placement === "below" ? "left-0 top-full mt-2" : "bottom-full left-6 mb-2",
+        placement === "below" ? "left-0 top-full mt-0.5" : "bottom-full left-6 mb-2",
       )}
     >
       {/* Modal */}

@@ -166,6 +166,17 @@ export function ChatInput({
     window.setTimeout(() => setModelMenuClosing(false), 140);
   }, [showModels]);
 
+  const openModelMenu = useCallback(() => {
+    if (showAgentMenu) closeAgentMenu();
+    setShowModels(true);
+  }, [showAgentMenu, closeAgentMenu]);
+
+  const openAgentMenu = useCallback(() => {
+    if (!agentOptions?.length) return;
+    if (showModels) closeModelMenu();
+    setShowAgentMenu(true);
+  }, [agentOptions?.length, showModels, closeModelMenu]);
+
   // Load commands once
   useEffect(() => {
     engine.listCommands().then(setCommands).catch(() => {});
@@ -370,7 +381,7 @@ export function ChatInput({
                         currentModel={currentModel}
                         onClick={() => {
                           if (showModels) closeModelMenu();
-                          else setShowModels(true);
+                          else openModelMenu();
                         }}
                         open={showModels}
                       />
@@ -462,9 +473,8 @@ export function ChatInput({
             <button
               type="button"
               onClick={() => {
-                if (!agentOptions?.length) return;
                 if (showAgentMenu) closeAgentMenu();
-                else setShowAgentMenu(true);
+                else openAgentMenu();
               }}
               className="group flex max-w-[230px] min-w-0 items-center gap-2 rounded-full px-2 py-1 transition-colors hover:bg-white/[0.06] hover:text-text"
               title="Selected agent"
@@ -495,7 +505,7 @@ export function ChatInput({
             {(showAgentMenu || agentMenuClosing) && agentOptions && agentOptions.length > 0 && (
               <div
                 className={cn(
-                  "absolute left-0 top-full z-40 mt-2 w-64 overflow-hidden rounded-xl border border-border bg-surface p-1.5 shadow-2xl",
+                  "absolute -left-3 top-full z-40 mt-2.5 w-64 overflow-hidden rounded-xl border border-border bg-surface p-1.5 shadow-2xl",
                   agentMenuClosing ? "animate-[popoverOut_140ms_ease-in_forwards]" : "animate-[slideUp_120ms_ease-out]",
                 )}
               >
