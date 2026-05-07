@@ -577,12 +577,12 @@ export function ModelSelectorTrigger({ currentModel, onClick, open }: ModelSelec
     <button
       onClick={onClick}
       className={cn(
-        "flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] transition-all",
-        "bg-[#333] text-[#999] hover:text-[#bbb]",
+        "flex h-7 max-w-[230px] items-center gap-2 rounded-full px-2 py-1 text-[12px] transition-colors",
+        "bg-[#333] text-[#999] hover:bg-white/[0.06] hover:text-[#bbb]",
       )}
     >
       <span className="max-w-[120px] truncate">{display}</span>
-      <ChevronDown className={cn("h-2.5 w-2.5 transition-transform", open && "rotate-180")} />
+      <ChevronDown className={cn("h-3 w-3 opacity-50 transition-transform", open && "rotate-180")} />
     </button>
   );
 }

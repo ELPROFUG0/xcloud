@@ -4,7 +4,7 @@ import type { BrowserEngine, SlashCommand } from "@/lib/engine";
 import type { AgentInfo } from "@/hooks/use-agents";
 import { useModels } from "@/hooks/use-models";
 import {
-  ArrowUp, Mic, Paperclip, ChevronUp, Check, Plus,
+  ArrowUp, Mic, ChevronUp, Check, Plus,
   Slash, Info, Wrench, Settings, MessageSquare, LayoutGrid, Volume2, Eye, Square,
   type LucideIcon,
 } from "lucide-react";
@@ -338,7 +338,7 @@ export function ChatInput({
         />
 
         {/* Bottom bar */}
-        <div className="relative flex items-center justify-between mt-1.5" style={{ height: 28 }}>
+        <div className="relative mt-1.5 flex h-8 items-center justify-between">
           {/* Waveform — absolute behind buttons, only when recording */}
           {recording && (
             <div className="absolute inset-0 z-0">
@@ -402,66 +402,49 @@ export function ChatInput({
               </button>
             ) : (
               <>
-                <button
-                  disabled={disabled}
-                  className="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:text-text disabled:opacity-30"
-                  title="Attach"
-                >
-                  <Paperclip className="h-3.5 w-3.5" />
-                </button>
-
-                {hasText ? (
+                <div className="relative flex items-center">
                   <button
-                    onClick={handleSend}
+                    onClick={startRecording}
                     disabled={disabled}
-                    className="flex h-6 w-6 items-center justify-center rounded-full bg-accent text-white transition-all hover:bg-accent-hover disabled:opacity-30"
+                    className="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-white/[0.06] hover:text-text disabled:opacity-30"
+                    title="Voice"
                   >
-                    <ArrowUp className="h-3 w-3" />
+                    <Mic className="h-3.5 w-3.5" />
                   </button>
-                ) : (
-                  <div className="relative flex items-center gap-0">
-                    <button
-                      onClick={startRecording}
-                      disabled={disabled}
-                      className="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:text-text disabled:opacity-30"
-                      title="Voice"
-                    >
-                      <Mic className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      onClick={() => setShowMicMenu(!showMicMenu)}
-                      disabled={disabled}
-                      className="flex h-5 w-4 items-center justify-center text-text-muted/50 hover:text-text-muted transition-colors disabled:opacity-30"
-                      title="Select microphone"
-                    >
-                      <ChevronUp className="h-2.5 w-2.5" />
-                    </button>
 
-                    {showMicMenu && (
-                      <div
-                        ref={micMenuRef}
-                        className="absolute bottom-full right-0 mb-2 w-64 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl animate-[slideUp_120ms_ease-out]"
-                      >
-                        <div className="max-h-40 overflow-y-auto p-1">
-                          {micDevices.length === 0 ? (
-                            <div className="px-3 py-2 text-xs text-text-muted">No microphones found</div>
-                          ) : (
-                            micDevices.map((device) => (
-                              <button
-                                key={device.deviceId}
-                                onClick={() => { setSelectedMic(device.deviceId); setShowMicMenu(false); }}
-                                className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-hover"
-                              >
-                                <span className="truncate text-text">{device.label}</span>
-                                {selectedMic === device.deviceId && <Check className="h-3.5 w-3.5 shrink-0 text-accent" />}
-                              </button>
-                            ))
-                          )}
-                        </div>
+                  {showMicMenu && (
+                    <div
+                      ref={micMenuRef}
+                      className="absolute bottom-full right-0 mb-2 w-64 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl animate-[slideUp_120ms_ease-out]"
+                    >
+                      <div className="max-h-40 overflow-y-auto p-1">
+                        {micDevices.length === 0 ? (
+                          <div className="px-3 py-2 text-xs text-text-muted">No microphones found</div>
+                        ) : (
+                          micDevices.map((device) => (
+                            <button
+                              key={device.deviceId}
+                              onClick={() => { setSelectedMic(device.deviceId); setShowMicMenu(false); }}
+                              className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-hover"
+                            >
+                              <span className="truncate text-text">{device.label}</span>
+                              {selectedMic === device.deviceId && <Check className="h-3.5 w-3.5 shrink-0 text-accent" />}
+                            </button>
+                          ))
+                        )}
                       </div>
-                    )}
-                  </div>
-                )}
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  onClick={handleSend}
+                  disabled={disabled || !hasText}
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black transition-all hover:bg-white/90 disabled:cursor-not-allowed disabled:bg-white/[0.08] disabled:text-text-muted/45"
+                  title="Send"
+                >
+                  <ArrowUp className="h-3.5 w-3.5" />
+                </button>
               </>
             )}
           </div>
