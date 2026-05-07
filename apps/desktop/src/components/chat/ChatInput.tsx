@@ -90,7 +90,7 @@ export function ChatInput({
   const [selectedMic, setSelectedMic] = useState("");
   const micMenuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { providers, currentModel, setModel } = useModels(engine);
+  const { providers, currentModel, setModel } = useModels(engine, { agentId: selectedAgentId, agents: agentOptions });
   const hasText = value.trim().length > 0;
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [showSlash, setShowSlash] = useState(false);

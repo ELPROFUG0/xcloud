@@ -234,7 +234,10 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
     });
     // Update model node instantly when model changes (without waiting for gateway)
     const onModelChanged = (e: Event) => {
-      const modelId = (e as CustomEvent).detail as string;
+      const detail = (e as CustomEvent).detail as string | { agentId?: string | null; modelId?: string };
+      const eventAgentId = typeof detail === "string" ? null : detail.agentId;
+      const modelId = typeof detail === "string" ? detail : detail.modelId;
+      if (!modelId || (eventAgentId && eventAgentId !== agentId)) return;
       setAgentData((prev) => ({
         ...prev,
         model: { ...prev.model, model: modelId, provider: modelId.split("/")[0] ?? "" },

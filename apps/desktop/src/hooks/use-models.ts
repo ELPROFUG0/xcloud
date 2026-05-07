@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { BrowserEngine, ModelInfo } from "@/lib/engine";
+import type { AgentInfo } from "@/hooks/use-agents";
 import allModelsData from "@/data/all-models.json";
 
 // Full catalog of all OpenClaw models (hardcoded)
@@ -25,7 +26,68 @@ interface UseModelsReturn {
   setModel: (modelId: string) => Promise<void>;
 }
 
-export function useModels(engine: BrowserEngine): UseModelsReturn {
+interface UseModelsOptions {
+  agentId?: string | null;
+  agents?: AgentInfo[];
+}
+
+function getAgentList(config: Record<string, unknown>): Array<Record<string, unknown>> {
+  const agents = config.agents as Record<string, unknown> | undefined;
+  return Array.isArray(agents?.list) ? agents.list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object") : [];
+}
+
+function getDefaultModel(config: Record<string, unknown>): string | null {
+  const agents = config.agents as Record<string, unknown> | undefined;
+  const defaults = agents?.defaults as Record<string, unknown> | undefined;
+  const model = defaults?.model as Record<string, unknown> | undefined;
+  return (model?.primary as string) ?? null;
+}
+
+function getEffectiveModel(config: Record<string, unknown>, agentId?: string | null): string | null {
+  if (agentId) {
+    const agent = getAgentList(config).find((item) => item.id === agentId);
+    const model = agent?.model as Record<string, unknown> | undefined;
+    const primary = model?.primary as string | undefined;
+    if (primary) return primary;
+  }
+  return getDefaultModel(config);
+}
+
+function buildKnownAgentList(config: Record<string, unknown>, knownAgents: AgentInfo[] | undefined): Array<Record<string, unknown>> {
+  const existing = getAgentList(config).map((agent) => ({ ...agent }));
+  const seen = new Set(existing.map((agent) => agent.id).filter((id): id is string => typeof id === "string"));
+  for (const agent of knownAgents ?? []) {
+    if (seen.has(agent.id)) continue;
+    existing.push({
+      id: agent.id,
+      default: agent.isDefault,
+      workspace: agent.workspace || undefined,
+      model: agent.model,
+    });
+    seen.add(agent.id);
+  }
+  return existing;
+}
+
+function buildModelPatch(config: Record<string, unknown>, modelId: string, agentId: string | null | undefined, knownAgents: AgentInfo[] | undefined): Record<string, unknown> {
+  if (!agentId) {
+    return { agents: { defaults: { model: { primary: modelId } } } };
+  }
+
+  const list = buildKnownAgentList(config, knownAgents);
+  const index = list.findIndex((agent) => agent.id === agentId);
+  const agentConfig: Record<string, unknown> = index >= 0 ? { ...list[index]! } : { id: agentId };
+  const existingModel = agentConfig.model && typeof agentConfig.model === "object" ? agentConfig.model as Record<string, unknown> : {};
+  agentConfig.model = { ...existingModel, primary: modelId };
+
+  if (index >= 0) list[index] = agentConfig;
+  else list.push(agentConfig);
+
+  return { agents: { list } };
+}
+
+export function useModels(engine: BrowserEngine, options: UseModelsOptions = {}): UseModelsReturn {
+  const { agentId, agents: knownAgents } = options;
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [currentModel, setCurrentModel] = useState<string | null>(null);
   const [, setConfigHash] = useState<string>("");
@@ -71,12 +133,7 @@ export function useModels(engine: BrowserEngine): UseModelsReturn {
         const config = (configResult as { config?: Record<string, unknown>; hash?: string });
         setConfigHash((config.hash as string) ?? "");
 
-        // Extract current model from config
-        const agents = config.config?.agents as Record<string, unknown> | undefined;
-        const defaults = agents?.defaults as Record<string, unknown> | undefined;
-        const model = defaults?.model as Record<string, unknown> | undefined;
-        const primary = (model?.primary as string) ?? null;
-        setCurrentModel(primary);
+        setCurrentModel(getEffectiveModel(config.config ?? configResult, agentId));
         setError(null);
       } catch (err) {
         if (!cancelled) {
@@ -89,7 +146,7 @@ export function useModels(engine: BrowserEngine): UseModelsReturn {
 
     load();
     return () => { cancelled = true; };
-  }, [engine]);
+  }, [engine, agentId]);
 
   // Group models by provider
   const providers: ProviderGroup[] = (() => {
@@ -109,17 +166,16 @@ export function useModels(engine: BrowserEngine): UseModelsReturn {
     try {
       const configResult = await engine.rpc("config.get", {});
       const hash = (configResult as { hash?: string }).hash ?? "";
-      const patch = JSON.stringify({
-        agents: { defaults: { model: { primary: modelId } } },
-      });
+      const config = (configResult as { config?: Record<string, unknown> }).config ?? configResult;
+      const patch = JSON.stringify(buildModelPatch(config, modelId, agentId, knownAgents));
       await engine.patchConfig(patch, hash);
     } catch {
       // Gateway restarts after config patch — expected
     }
     // Always update locally and notify canvas
     setCurrentModel(modelId);
-    window.dispatchEvent(new CustomEvent("xcloud-model-changed", { detail: modelId }));
-  }, [engine]);
+    window.dispatchEvent(new CustomEvent("xcloud-model-changed", { detail: { agentId, modelId } }));
+  }, [engine, agentId, knownAgents]);
 
   return { models, providers, currentModel, loading, error, setModel };
 }

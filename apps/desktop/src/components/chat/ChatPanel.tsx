@@ -292,6 +292,8 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
                 contextEmoji={currentAgent?.emoji}
                 contextAvatar={currentAgent?.avatar}
                 contextIsMain={currentAgent?.isDefault}
+                agentOptions={agents}
+                selectedAgentId={agentId}
               />
 
               {visibleHeroSuggestions.length > 0 && (

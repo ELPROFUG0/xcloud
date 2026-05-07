@@ -141,9 +141,30 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
       if (event === "sessions.changed") {
         refresh();
       }
+      if (event === "config.changed" || event === "config.patched") {
+        refresh();
+      }
     });
     return unsub;
   }, [engine, refresh]);
+
+  useEffect(() => {
+    const onModelChanged = (e: Event) => {
+      const detail = (e as CustomEvent).detail as string | { agentId?: string | null; modelId?: string };
+      const agentId = typeof detail === "string" ? null : detail.agentId;
+      const modelId = typeof detail === "string" ? detail : detail.modelId;
+      if (!modelId) return;
+      setAgents((prev) =>
+        prev.map((agent) =>
+          !agentId || agent.id === agentId
+            ? { ...agent, model: { ...agent.model, primary: modelId } }
+            : agent,
+        ),
+      );
+    };
+    window.addEventListener("xcloud-model-changed", onModelChanged);
+    return () => window.removeEventListener("xcloud-model-changed", onModelChanged);
+  }, []);
 
   return { agents, selectedId, select: setSelectedId, refresh, loading };
 }
