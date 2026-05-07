@@ -361,7 +361,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
       </header>
 
       {/* Messages — centered like ChatGPT */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto animate-[fadeBlurInStable_180ms_ease-out]">
         {isEmptyChat && (
           <div className="flex min-h-full items-center justify-center px-8 pb-[10vh] pt-8">
             <div className="w-full max-w-[760px] animate-[fadeBlurIn_180ms_ease-out]">
@@ -476,7 +476,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
 
       {/* Input — centered at bottom */}
       {!isEmptyChat && (
-        <div className="mx-auto w-full max-w-3xl">
+        <div className="mx-auto w-full max-w-3xl animate-[fadeBlurInStable_180ms_ease-out]">
           <ChatInput
             onSend={send}
             disabled={!engine.connected}
