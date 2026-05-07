@@ -411,14 +411,14 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
   return (
     <div className={cn("flex h-full flex-col bg-bg", className)}>
       {/* Tab bar — same height as chat header */}
-      <div className="flex h-9 shrink-0 items-center border-b border-border" style={{ background: BG }}>
-        <div className="flex flex-1 items-center overflow-x-auto hide-scrollbar">
+      <div className="flex h-9 shrink-0 items-center" style={{ background: BG }}>
+        <div className="flex flex-1 items-center gap-1 overflow-x-auto hide-scrollbar px-1.5">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={cn(
-                "group flex items-center gap-2 shrink-0 h-9 px-3 text-xs border-r border-border transition-colors",
+                "group flex h-7 shrink-0 items-center gap-2 rounded-[10px] px-2.5 text-xs transition-colors",
                 activeTab === tab.id
                   ? "bg-white/[0.06] text-text"
                   : "text-text-muted hover:bg-white/[0.03] hover:text-text/80"
@@ -459,7 +459,7 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
       </div>
 
       {/* Agent quick-launch bar — same height as chat header, always visible */}
-      <div className="flex h-9 shrink-0 items-center gap-1.5 px-2.5 border-b border-border/50 overflow-x-auto hide-scrollbar" style={{ background: BG }}>
+      <div className="flex h-9 shrink-0 items-center gap-1.5 px-2.5 overflow-x-auto hide-scrollbar" style={{ background: BG }}>
         {CLI_AGENTS.map((agent) => {
           const isInstalled = installedAgents.has(agent.id);
           return (
