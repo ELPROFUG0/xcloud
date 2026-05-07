@@ -109,6 +109,7 @@ interface ModelSelectorProps {
   providers: ProviderGroup[];
   currentModel: string | null;
   onSelectModel: (modelId: string) => void;
+  placement?: "above" | "below";
 }
 
 // ── Model stats ─────────────────────────────────────────────────────────────
@@ -251,7 +252,7 @@ function ModelInfoTooltip({ model, provider, anchorRect }: { model: ModelInfo | 
   );
 }
 
-export function ModelSelector({ open, onClose, providers, currentModel, onSelectModel }: ModelSelectorProps) {
+export function ModelSelector({ open, onClose, providers, currentModel, onSelectModel, placement = "above" }: ModelSelectorProps) {
   const [search, setSearch] = useState("");
   const [activeProvider, setActiveProvider] = useState<string | null>(null);
   const [hoverY, setHoverY] = useState(0);
@@ -337,26 +338,39 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
   }, [providers, favorites, search]);
 
   const showFavorites = activeProvider === "__favorites" && !search.trim();
+  const selectorWidth = 320;
+  const selectorBodyHeight = 285;
 
   if (!open) return null;
 
   return (
-    <div ref={ref} className="absolute bottom-full left-6 mb-2" style={{ position: "relative" }}>
+    <div
+      ref={ref}
+      className={cn(
+        "absolute z-50",
+        placement === "below" ? "left-0 top-full mt-2" : "bottom-full left-6 mb-2",
+      )}
+    >
       {/* Modal */}
       <div
         className="rounded-xl border border-border shadow-2xl animate-[slideUp_150ms_ease-out]"
-        style={{ background: "#141414", maxHeight: "min(460px, calc(100dvh - 14rem))", width: 340, overflow: "hidden" }}
+        style={{
+          background: "#141414",
+          maxHeight: "min(350px, calc(100dvh - 14rem))",
+          width: selectorWidth,
+          overflow: "hidden",
+        }}
       >
       {/* Search bar */}
-      <div className="flex items-center gap-2 px-4 pt-3 pb-2">
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1.5">
         <div className="flex flex-1 items-center border-b border-border/50 pb-1">
-          <Search className="mr-2.5 h-4 w-4 shrink-0 text-text-muted/60" />
+          <Search className="mr-2.5 h-3.5 w-3.5 shrink-0 text-text-muted/60" />
           <input
             ref={searchRef}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search models..."
-            className="w-full bg-transparent py-1 text-sm text-text placeholder:text-text-muted/50 focus:outline-none"
+            className="w-full bg-transparent py-0.5 text-[12px] text-text placeholder:text-text-muted/50 focus:outline-none"
           />
           {search && (
             <button onClick={() => setSearch("")} className="text-text-muted hover:text-text">
@@ -367,22 +381,23 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
       </div>
 
       {/* Main content: sidebar + models */}
-      <div className="flex" style={{ height: 380 }}>
+      <div className="flex" style={{ height: selectorBodyHeight }}>
         {/* Provider sidebar */}
-        <div className="w-14 shrink-0 overflow-y-auto hide-scrollbar border-r border-border/30 bg-white/[0.02]">
-          <div className="flex flex-col items-center gap-1 p-1">
+        <div className="w-12 shrink-0 overflow-y-auto hide-scrollbar border-r border-border/30 bg-white/[0.02]">
+          <div className="flex flex-col items-center gap-0.5 p-1">
             {/* Favorites */}
             <button
               onClick={() => { setActiveProvider("__favorites"); setSearch(""); }}
               className={cn(
-                "group relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all hover:bg-white/[0.06]",
+                "group relative flex shrink-0 items-center justify-center rounded-xl transition-all hover:bg-white/[0.06]",
+                "h-8 w-8",
               )}
               title="Favorites"
             >
               {activeProvider === "__favorites" && (
                 <div className="absolute top-1/2 -right-1 h-5 w-0.5 -translate-y-1/2 rounded-l-full bg-accent" />
               )}
-              <Star className={cn("h-4 w-4 transition-colors", activeProvider === "__favorites" ? "text-text fill-text" : "text-text-muted")} />
+              <Star className={cn("h-3.5 w-3.5 transition-colors", activeProvider === "__favorites" ? "text-text fill-text" : "text-text-muted")} />
             </button>
 
             <div className="my-0.5 h-px w-6 bg-border/40" />
@@ -392,14 +407,14 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
               <button
                 key={g.provider}
                 onClick={() => { setActiveProvider(g.provider); setSearch(""); }}
-                className="group relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all hover:bg-white/[0.06]"
+                className="group relative flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition-all hover:bg-white/[0.06]"
                 title={fmtProvider(g.provider)}
               >
                 {activeProvider === g.provider && (
                   <div className="absolute top-1/2 -right-1 h-5 w-0.5 -translate-y-1/2 rounded-l-full bg-accent" />
                 )}
                 <div className={cn("transition-opacity", activeProvider === g.provider ? "opacity-100 text-text" : "opacity-60 text-text-muted group-hover:opacity-100 group-hover:text-text")}>
-                  <ProviderIcon provider={g.provider} size={18} />
+                  <ProviderIcon provider={g.provider} size={15} />
                 </div>
               </button>
             ))}
@@ -410,7 +425,7 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
         </div>
 
         {/* Model list */}
-        <div className="flex-1 overflow-y-auto hide-scrollbar p-2">
+        <div className="flex-1 overflow-y-auto hide-scrollbar p-1.5">
           {/* Provider header when no search */}
           {!search.trim() && activeProvider && activeProvider !== "__favorites" && (
             <div className="flex items-center gap-2 px-2 pb-2">
@@ -463,7 +478,8 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
                     }}
                     onMouseLeave={() => setHoveredModel(null)}
                     className={cn(
-                      "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-all hover:bg-white/[0.05]",
+                      "flex w-full items-center gap-2 rounded-lg px-3 text-left transition-all hover:bg-white/[0.05]",
+                      "py-1.5",
                       isActive && "bg-white/[0.06]",
                     )}
                   >
@@ -510,7 +526,7 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
               const tooltipH = el.getBoundingClientRect().height;
               el.style.top = Math.min(hoverY, modalH - tooltipH) + "px";
             }}
-            style={{ left: 348, width: 230 }}
+            style={{ left: selectorWidth + 6, width: 230 }}
           >
             <div className="rounded-lg border border-border p-3 shadow-xl text-xs" style={{ background: "#1a1a1a" }}>
               <div className="flex items-center gap-2">

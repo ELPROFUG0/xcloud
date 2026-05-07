@@ -284,6 +284,7 @@ export function ChatInput({
         providers={providers}
         currentModel={currentModel}
         onSelectModel={async (id) => { await setModel(id); }}
+        placement={isHero ? "below" : "above"}
       />
 
       {/* Input container */}
