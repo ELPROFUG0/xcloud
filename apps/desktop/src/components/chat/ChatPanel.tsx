@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback, mem
 import type { BrowserEngine } from "@/lib/engine";
 import { useChat } from "@/hooks/use-chat";
 import { ToolCallBadge } from "./ToolCallBadge";
-import { Blocks, Check, Clock, MessageCircle, Plus, Sparkles } from "lucide-react";
+import { Blocks, Check, Clock, MessageCircle, Plus, Sparkles, X } from "lucide-react";
 import { ChatInput } from "./ChatInput";
 import { AgentAvatar } from "../ui/AgentAvatar";
 import { Shimmer } from "../ai-elements/shimmer";
@@ -127,6 +127,45 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
   const isEmptyChat = pages.length === 0 && !isStreaming;
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("dismissedNewChatSuggestions") ?? "[]") as string[];
+      return new Set(saved);
+    } catch {
+      return new Set();
+    }
+  });
+
+  const heroSuggestions = useMemo(() => [
+    {
+      id: "specialist-agent",
+      icon: MessageCircle,
+      text: "Create a specialist agent for a repeated workflow",
+      prompt: "Help me create a specialist agent for a workflow I do repeatedly. Ask me the right questions, then configure the agent.",
+    },
+    {
+      id: "first-automation",
+      icon: Sparkles,
+      text: "Design the first useful automation for this workspace",
+      prompt: "Suggest and build a practical first automation for this workspace. Keep it simple and useful.",
+    },
+    {
+      id: "connect-tools",
+      icon: Blocks,
+      text: "Connect tools and capabilities for this agent",
+      prompt: "Review this agent and recommend the tools, skills, and integrations it should have. Then help me add them.",
+    },
+  ], []);
+  const visibleHeroSuggestions = heroSuggestions.filter(item => !dismissedSuggestions.has(item.id));
+
+  const dismissSuggestion = useCallback((id: string) => {
+    setDismissedSuggestions((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      localStorage.setItem("dismissedNewChatSuggestions", JSON.stringify([...next]));
+      return next;
+    });
+  }, []);
 
   const handleEmojiSelect = useCallback(async (emoji: string) => {
     setShowEmojiPicker(false);
@@ -255,38 +294,34 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
                 contextIsMain={currentAgent?.isDefault}
               />
 
-              <div className="mt-4 divide-y divide-white/[0.06]">
-                {[
-                  {
-                    icon: MessageCircle,
-                    text: "Create a specialist agent for a repeated workflow",
-                    prompt: "Help me create a specialist agent for a workflow I do repeatedly. Ask me the right questions, then configure the agent.",
-                  },
-                  {
-                    icon: Sparkles,
-                    text: "Design the first useful automation for this workspace",
-                    prompt: "Suggest and build a practical first automation for this workspace. Keep it simple and useful.",
-                  },
-                  {
-                    icon: Blocks,
-                    text: "Connect tools and capabilities for this agent",
-                    prompt: "Review this agent and recommend the tools, skills, and integrations it should have. Then help me add them.",
-                  },
-                ].map((item) => {
-                  const Icon = item.icon;
-                  return (
-                    <button
-                      key={item.text}
-                      onClick={() => send(item.prompt)}
-                      disabled={!engine.connected}
-                      className="flex w-full items-center gap-3 px-4 py-3 text-left text-[13px] text-text-muted transition-colors hover:text-text disabled:opacity-40"
-                    >
-                      <Icon className="h-4 w-4 shrink-0" />
-                      <span>{item.text}</span>
-                    </button>
-                  );
-                })}
-              </div>
+              {visibleHeroSuggestions.length > 0 && (
+                <div className="mt-4 divide-y divide-white/[0.06]">
+                  {visibleHeroSuggestions.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <div key={item.id} className="group flex items-center gap-2 px-4 py-3 text-text-muted transition-colors hover:text-text">
+                        <button
+                          onClick={() => send(item.prompt)}
+                          disabled={!engine.connected}
+                          className="flex min-w-0 flex-1 items-center gap-3 text-left text-[13px] disabled:opacity-40"
+                        >
+                          <Icon className="h-4 w-4 shrink-0" />
+                          <span className="truncate">{item.text}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => dismissSuggestion(item.id)}
+                          className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-text-muted/70 opacity-0 transition-all hover:bg-white/[0.14] hover:text-text group-hover:opacity-100"
+                          aria-label="Hide suggestion"
+                          title="Hide suggestion"
+                        >
+                          <X className="h-2.5 w-2.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         )}

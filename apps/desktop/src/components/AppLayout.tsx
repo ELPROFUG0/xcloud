@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, lazy, Suspense } from "react"
 import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
 import type { AgentInfo } from "@/hooks/use-agents";
-import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, Sparkles, Plug, Terminal, Brain, MessageCircle, Search } from "lucide-react";
+import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, Sparkles, Plug, Terminal, Brain, MessageCircle, Search, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { HomeScreen } from "./home/HomeScreen";
 import { useSessions } from "@/hooks/use-sessions";
@@ -28,6 +28,27 @@ const MIN_WIDTH = 240;
 const MAX_WIDTH = 400;
 const DEFAULT_WIDTH = 280;
 
+const NEW_CHAT_SUGGESTIONS = [
+  {
+    id: "blank-conversation",
+    icon: MessageCircle,
+    text: "Start with a blank conversation",
+    actionPrompt: undefined,
+  },
+  {
+    id: "useful-next-step",
+    icon: Sparkles,
+    text: "Ask this agent to suggest a useful next step",
+    actionPrompt: "Suggest the most useful next step for this agent and help me start it.",
+  },
+  {
+    id: "review-capabilities",
+    icon: Search,
+    text: "Review what this agent can do",
+    actionPrompt: "Review your current capabilities, tools, and workspace. Then suggest what I should ask you to do first.",
+  },
+];
+
 function NewChatView({
   agents,
   engine,
@@ -42,8 +63,26 @@ function NewChatView({
   onStart: (agentId: string, prompt?: string) => void;
 }) {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("dismissedNewChatSuggestions") ?? "[]") as string[];
+      return new Set(saved);
+    } catch {
+      return new Set();
+    }
+  });
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
   const availableAgents = agents.length > 0 ? agents : [];
+  const visibleSuggestions = NEW_CHAT_SUGGESTIONS.filter((item) => !dismissedSuggestions.has(item.id));
+
+  const dismissSuggestion = useCallback((id: string) => {
+    setDismissedSuggestions((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      localStorage.setItem("dismissedNewChatSuggestions", JSON.stringify([...next]));
+      return next;
+    });
+  }, []);
 
   return (
     <div className="flex h-full flex-col">
@@ -60,9 +99,6 @@ function NewChatView({
             <h1 className="text-center text-[28px] font-semibold leading-tight tracking-normal text-text">
               Choose an agent to chat with
             </h1>
-            <p className="mx-auto mt-2 max-w-md text-center text-[13px] leading-5 text-text-muted">
-              Start a fresh conversation with any agent you have created.
-            </p>
 
             {availableAgents.length === 0 && (
               <div className="mt-7 rounded-xl border border-white/[0.06] bg-white/[0.035] px-4 py-6 text-center text-[13px] text-text-muted">
@@ -86,42 +122,41 @@ function NewChatView({
                 agentOptions={availableAgents}
                 selectedAgentId={selectedAgentId}
                 onSelectAgent={setSelectedAgentId}
-                placeholder={selectedAgent ? `Ask ${selectedAgent.name ?? selectedAgent.id} anything` : "Select an agent first"}
+                placeholder={selectedAgent ? `Give ${selectedAgent.name ?? selectedAgent.id} a task` : "Select an agent first"}
               />
             </div>
 
-            <div className="mt-4 divide-y divide-white/[0.06]">
-              {[
-                {
-                  icon: MessageCircle,
-                  text: "Start with a blank conversation",
-                  action: () => selectedAgentId && onStart(selectedAgentId),
-                },
-                {
-                  icon: Sparkles,
-                  text: "Ask this agent to suggest a useful next step",
-                  action: () => selectedAgentId && onStart(selectedAgentId, "Suggest the most useful next step for this agent and help me start it."),
-                },
-                {
-                  icon: Search,
-                  text: "Review what this agent can do",
-                  action: () => selectedAgentId && onStart(selectedAgentId, "Review your current capabilities, tools, and workspace. Then suggest what I should ask you to do first."),
-                },
-              ].map((item) => {
-                const Icon = item.icon;
-                return (
-                  <button
-                    key={item.text}
-                    onClick={item.action}
-                    disabled={!selectedAgentId}
-                    className="flex w-full items-center gap-3 px-4 py-3 text-left text-[13px] text-text-muted transition-colors hover:text-text disabled:opacity-35"
-                  >
-                    <Icon className="h-4 w-4 shrink-0" />
-                    <span>{item.text}</span>
-                  </button>
-                );
-              })}
-            </div>
+            {visibleSuggestions.length > 0 && (
+              <div className="mt-4 divide-y divide-white/[0.06]">
+                {visibleSuggestions.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <div
+                      key={item.id}
+                      className="group flex items-center gap-2 px-4 py-3 text-text-muted transition-colors hover:text-text"
+                    >
+                      <button
+                        onClick={() => selectedAgentId && onStart(selectedAgentId, item.actionPrompt)}
+                        disabled={!selectedAgentId}
+                        className="flex min-w-0 flex-1 items-center gap-3 text-left text-[13px] disabled:opacity-35"
+                      >
+                        <Icon className="h-4 w-4 shrink-0" />
+                        <span className="truncate">{item.text}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => dismissSuggestion(item.id)}
+                        className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-text-muted/70 opacity-0 transition-all hover:bg-white/[0.14] hover:text-text group-hover:opacity-100"
+                        aria-label="Hide suggestion"
+                        title="Hide suggestion"
+                      >
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       </div>
