@@ -34,7 +34,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   "azure-openai-responses": "Azure OpenAI", mistral: "Mistral", groq: "Groq", deepseek: "DeepSeek",
   fireworks: "Fireworks", openrouter: "OpenRouter", "github-copilot": "GitHub Copilot", xai: "xAI",
   cerebras: "Cerebras", huggingface: "Hugging Face", ollama: "Ollama", minimax: "MiniMax",
-  "google-vertex": "Google Vertex", codex: "Codex", "openai-codex": "OpenAI Codex",
+  "google-vertex": "Google Vertex", codex: "OpenAI Codex", "openai-codex": "OpenAI Codex",
   opencode: "OpenCode", "vercel-ai-gateway": "Vercel AI", volcengine: "Volcengine",
 };
 

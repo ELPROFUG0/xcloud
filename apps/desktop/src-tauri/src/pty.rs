@@ -44,6 +44,7 @@ pub fn pty_spawn(
     cols: u16,
     rows: u16,
     cwd: Option<String>,
+    command: Option<String>,
 ) -> Result<u32, String> {
     let pty_system = native_pty_system();
 
@@ -58,7 +59,12 @@ pub fn pty_spawn(
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     let mut cmd = CommandBuilder::new(&shell);
-    cmd.arg("-l"); // login shell
+    if let Some(command) = command {
+        cmd.arg("-lc");
+        cmd.arg(command);
+    } else {
+        cmd.arg("-l"); // login shell
+    }
 
     // Set working directory
     if let Some(dir) = cwd {

@@ -12,6 +12,11 @@ const ALL_MODELS: ModelInfo[] = (allModelsData as Array<{ id: string; name: stri
   input: m.input,
 }));
 
+const OPENAI_CODEX_OAUTH_MODELS = new Set([
+  "openai-codex/gpt-5.5",
+]);
+const MAIN_AGENT_ID = "main";
+
 interface ProviderGroup {
   provider: string;
   models: ModelInfo[];
@@ -43,13 +48,19 @@ function getDefaultModel(config: Record<string, unknown>): string | null {
   return (model?.primary as string) ?? null;
 }
 
+function getAgentModel(config: Record<string, unknown>, agentId: string): string | null {
+  const agent = getAgentList(config).find((item) => item.id === agentId);
+  const model = agent?.model as Record<string, unknown> | undefined;
+  return (model?.primary as string) ?? null;
+}
+
 function getEffectiveModel(config: Record<string, unknown>, agentId?: string | null): string | null {
   if (agentId) {
-    const agent = getAgentList(config).find((item) => item.id === agentId);
-    const model = agent?.model as Record<string, unknown> | undefined;
-    const primary = model?.primary as string | undefined;
+    const primary = getAgentModel(config, agentId);
     if (primary) return primary;
   }
+  const mainPrimary = getAgentModel(config, MAIN_AGENT_ID);
+  if (mainPrimary) return mainPrimary;
   return getDefaultModel(config);
 }
 
@@ -70,20 +81,68 @@ function buildKnownAgentList(config: Record<string, unknown>, knownAgents: Agent
 }
 
 function buildModelPatch(config: Record<string, unknown>, modelId: string, agentId: string | null | undefined, knownAgents: AgentInfo[] | undefined): Record<string, unknown> {
-  if (!agentId) {
-    return { agents: { defaults: { model: { primary: modelId } } } };
-  }
+  const targetAgentId = agentId ?? MAIN_AGENT_ID;
 
   const list = buildKnownAgentList(config, knownAgents);
-  const index = list.findIndex((agent) => agent.id === agentId);
-  const agentConfig: Record<string, unknown> = index >= 0 ? { ...list[index]! } : { id: agentId };
+  const index = list.findIndex((agent) => agent.id === targetAgentId);
+  const agentConfig: Record<string, unknown> = index >= 0 ? { ...list[index]! } : { id: targetAgentId };
   const existingModel = agentConfig.model && typeof agentConfig.model === "object" ? agentConfig.model as Record<string, unknown> : {};
   agentConfig.model = { ...existingModel, primary: modelId };
 
   if (index >= 0) list[index] = agentConfig;
   else list.push(agentConfig);
 
+  if (targetAgentId === MAIN_AGENT_ID) {
+    return {
+      agents: {
+        defaults: { model: { primary: modelId } },
+        list,
+      },
+    };
+  }
+
   return { agents: { list } };
+}
+
+function modelKey(model: ModelInfo): string {
+  const id = model.id.includes("/") ? model.id.split("/").pop()! : model.id;
+  return `${model.provider}/${id}`;
+}
+
+function normalizeProvider(provider: string): string {
+  return provider === "codex" ? "openai-codex" : provider;
+}
+
+function normalizeModelId(modelId: string | null): string | null {
+  return modelId?.replace(/^codex\//, "openai-codex/") ?? null;
+}
+
+function normalizeModelForUi(model: ModelInfo): ModelInfo {
+  const provider = normalizeProvider(model.provider);
+  const id = normalizeModelId(model.id) ?? model.id;
+
+  return {
+    ...model,
+    id,
+    provider,
+  };
+}
+
+function mergeWithCatalog(modelList: ModelInfo[]): ModelInfo[] {
+  const merged: ModelInfo[] = [];
+  const seen = new Set<string>();
+
+  for (const model of [...modelList, ...ALL_MODELS].map(normalizeModelForUi)) {
+    if (model.provider === "openai-codex" && !OPENAI_CODEX_OAUTH_MODELS.has(modelKey(model))) {
+      continue;
+    }
+    const key = modelKey(model);
+    if (seen.has(key)) continue;
+    merged.push(model);
+    seen.add(key);
+  }
+
+  return merged;
 }
 
 export function useModels(engine: BrowserEngine, options: UseModelsOptions = {}): UseModelsReturn {
@@ -108,32 +167,12 @@ export function useModels(engine: BrowserEngine, options: UseModelsOptions = {})
 
         if (cancelled) return;
 
-        // Use gateway models if available, otherwise fall back to hardcoded catalog
-        if (modelList.length > 10) {
-          setModels(modelList);
-        } else {
-          // Gateway returned few models — merge with catalog
-          const seen = new Set<string>();
-          for (const m of modelList) {
-            seen.add(m.id);
-            if (m.id.includes("/")) seen.add(m.id.split("/").pop()!);
-          }
-          const merged = [...modelList];
-          for (const m of ALL_MODELS) {
-            const name = m.id.includes("/") ? m.id.split("/").pop()! : m.id;
-            if (!seen.has(m.id) && !seen.has(name)) {
-              merged.push(m);
-              seen.add(m.id);
-              seen.add(name);
-            }
-          }
-          setModels(merged);
-        }
+        setModels(mergeWithCatalog(modelList));
 
         const config = (configResult as { config?: Record<string, unknown>; hash?: string });
         setConfigHash((config.hash as string) ?? "");
 
-        setCurrentModel(getEffectiveModel(config.config ?? configResult, agentId));
+        setCurrentModel(normalizeModelId(getEffectiveModel(config.config ?? configResult, agentId)));
         setError(null);
       } catch (err) {
         if (!cancelled) {
@@ -162,7 +201,8 @@ export function useModels(engine: BrowserEngine, options: UseModelsOptions = {})
   })();
 
   // Change model via config.patch
-  const setModel = useCallback(async (modelId: string) => {
+  const setModel = useCallback(async (nextModelId: string) => {
+    const modelId = normalizeModelId(nextModelId) ?? nextModelId;
     try {
       const configResult = await engine.rpc("config.get", {});
       const hash = (configResult as { hash?: string }).hash ?? "";
@@ -174,7 +214,7 @@ export function useModels(engine: BrowserEngine, options: UseModelsOptions = {})
     }
     // Always update locally and notify canvas
     setCurrentModel(modelId);
-    window.dispatchEvent(new CustomEvent("xcloud-model-changed", { detail: { agentId, modelId } }));
+    window.dispatchEvent(new CustomEvent("xcloud-model-changed", { detail: { agentId: agentId ?? MAIN_AGENT_ID, modelId } }));
   }, [engine, agentId, knownAgents]);
 
   return { models, providers, currentModel, loading, error, setModel };

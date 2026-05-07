@@ -203,6 +203,11 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const draggingCanvas = useRef(false);
   const draggingTerminal = useRef(false);
 
+  const openTerminal = useCallback((command?: string) => {
+    setTerminalCommand(command || undefined);
+    setShowTerminal(true);
+  }, []);
+
   // Detect fullscreen
   useEffect(() => {
     const win = getCurrentWindow();
@@ -247,12 +252,11 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   useEffect(() => {
     function handleOpenTerminal(e: Event) {
       const cmd = (e as CustomEvent).detail?.command;
-      setTerminalCommand(cmd || undefined);
-      setShowTerminal(true);
+      openTerminal(cmd);
     }
     window.addEventListener("xcloud-open-terminal", handleOpenTerminal);
     return () => window.removeEventListener("xcloud-open-terminal", handleOpenTerminal);
-  }, []);
+  }, [openTerminal]);
 
   // Cmd+` to toggle terminal
   useEffect(() => {
@@ -608,11 +612,42 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
           }}
         >
           {showSettings ? (
-            /* Settings — fills entire card */
-            <div className="flex flex-1 min-w-0 justify-center overflow-y-auto">
-              <div className="w-full max-w-2xl px-6 py-6">
-                <SettingsPanel engine={engine} section={settingsSection} onPreviewOnboarding={() => setShowOnboardingPreview(true)} />
+            /* Settings + Terminal (vertical split) */
+            <div className="flex flex-1 min-w-0 min-h-0 flex-col overflow-hidden">
+              <div className="flex flex-1 min-h-0 justify-center overflow-y-auto">
+                <div className="w-full max-w-2xl px-6 py-6">
+                  <SettingsPanel
+                    engine={engine}
+                    section={settingsSection}
+                    onPreviewOnboarding={() => setShowOnboardingPreview(true)}
+                    onOpenTerminal={(command) => {
+                      setShowSettings(false);
+                      openTerminal(command);
+                    }}
+                  />
+                </div>
               </div>
+              {showTerminal && (
+                <>
+                  <div
+                    onMouseDown={onTerminalMouseDown}
+                    data-interactive
+                    className="relative z-10 h-0 w-full shrink-0 cursor-row-resize"
+                  >
+                    <div className="absolute -top-1.5 left-0 w-full h-3 group">
+                      <div className="absolute top-1/2 left-0 w-full h-px -translate-y-1/2 bg-white/[0.06] transition-colors group-hover:bg-accent" />
+                    </div>
+                  </div>
+                  <div className="shrink-0" style={{ height: terminalHeight, transition: isDragging ? "none" : "height 150ms ease" }}>
+                    <Suspense fallback={<div className="flex h-full items-center justify-center bg-bg text-text-muted text-xs">Loading terminal...</div>}>
+                      <TerminalPanel
+                        initialCommand={terminalCommand}
+                        onClose={() => setShowTerminal(false)}
+                      />
+                    </Suspense>
+                  </div>
+                </>
+              )}
             </div>
           ) : (
             <>

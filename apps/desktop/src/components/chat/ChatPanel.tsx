@@ -391,7 +391,17 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
       {/* Input — centered at bottom */}
       {!isEmptyChat && (
         <div className="mx-auto w-full max-w-3xl">
-          <ChatInput onSend={send} disabled={!engine.connected} engine={engine} />
+          <ChatInput
+            onSend={send}
+            disabled={!engine.connected}
+            engine={engine}
+            contextLabel={displayName}
+            contextEmoji={currentAgent?.emoji}
+            contextAvatar={currentAgent?.avatar}
+            contextIsMain={currentAgent?.isDefault}
+            agentOptions={agents}
+            selectedAgentId={agentId}
+          />
         </div>
       )}
     </div>

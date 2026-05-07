@@ -29,7 +29,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   minimax: "MiniMax",
   "minimax-cn": "MiniMax CN",
   huggingface: "Hugging Face",
-  codex: "Codex",
+  codex: "OpenAI Codex",
   "openai-codex": "OpenAI Codex",
   opencode: "OpenCode",
   "opencode-go": "OpenCode Go",

@@ -141,6 +141,7 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
   const [installedAgents, setInstalledAgents] = useState<Set<string>>(new Set(["shell"]));
   const searchInputRef = useRef<HTMLInputElement>(null);
   const initRef = useRef(false);
+  const lastInitialCommandRef = useRef<string | undefined>(undefined);
 
   const parkedRef = useRef<Map<number, { xterm: XTerm; wrapper: HTMLDivElement; fitAddon: FitAddon; searchAddon: SearchAddon }>>(new Map());
   const unlistenersRef = useRef<Map<number, () => void>>(new Map());
@@ -166,11 +167,13 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
   const createTab = useCallback(async (agentId: string = "shell", command?: string) => {
     try {
       const agent = CLI_AGENTS.find(a => a.id === agentId) ?? CLI_AGENTS[0]!;
+      const launchCmd = command ?? (agent.command ? agent.command : null);
 
       const ptyId: number = await invoke("pty_spawn", {
         cols: 80,
         rows: 24,
         cwd: null,
+        command: launchCmd,
       });
 
       const tab: TerminalTab = {
@@ -213,8 +216,14 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
 
       xterm.onData((data) => { invoke("pty_write", { id: ptyId, data }).catch(() => {}); });
 
+      const isAuthLaunch = command?.includes("# xcloud-auth-") ?? false;
       const unlisten = await listen<{ id: number; data: string }>("pty-output", (event) => {
-        if (event.payload.id === ptyId) xterm.write(event.payload.data);
+        if (event.payload.id !== ptyId) return;
+        let data = event.payload.data;
+        if (isAuthLaunch) {
+          data = data.replace(/\r?\n?🦞 OpenClaw[^\r\n]*(?:\r?\n\s+[^\r\n]+)?\r?\n?/g, "\r\n");
+        }
+        xterm.write(data);
       });
       const unlistenExit = await listen<{ id: number; code: number | null }>("pty-exit", (event) => {
         if (event.payload.id === ptyId) xterm.write("\r\n\x1b[38;5;241m[Process exited]\x1b[0m\r\n");
@@ -225,14 +234,6 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
 
       setTabs((prev) => [...prev, tab]);
       setActiveTab(ptyId);
-
-      // Launch the CLI agent command after shell is ready
-      const launchCmd = command ?? (agent.command ? agent.command : null);
-      if (launchCmd) {
-        setTimeout(() => {
-          invoke("pty_write", { id: ptyId, data: launchCmd + "\n" }).catch(() => {});
-        }, 600);
-      }
 
       return ptyId;
     } catch (err) {
@@ -347,11 +348,22 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
   useEffect(() => {
     if (initRef.current) return;
     initRef.current = true;
+    lastInitialCommandRef.current = initialCommand;
     createTab("shell", initialCommand ?? undefined).catch((err) => {
       console.error("Terminal init failed:", err);
       if (onClose) onClose();
     });
   }, []);
+
+  // When another part of the app asks the already-open terminal to run a
+  // command, create a fresh shell tab instead of ignoring the new command.
+  useEffect(() => {
+    if (!initRef.current || !initialCommand || lastInitialCommandRef.current === initialCommand) return;
+    lastInitialCommandRef.current = initialCommand;
+    createTab("shell", initialCommand).catch((err) => {
+      console.error("Terminal command launch failed:", err);
+    });
+  }, [initialCommand, createTab]);
 
   // ── Close tab ─────────────────────────────────────────────────────────────
   const closeTab = useCallback(async (tabId: number) => {

@@ -46,11 +46,11 @@ const PROVIDER_ICONS: Record<string, any> = {
   grok: Grok, microsoft: Microsoft, ibm: IBM, apple: Apple, snowflake: Snowflake,
   nova: Nova, palm: PaLM, dbrx: Dbrx, "google-antigravity": Antigravity,
   "kimi-coding": Kimi, "opencode-go": OpenCode, "stepfun-plan": Stepfun,
-  opencode: OpenCode, openclaw: OpenClaw, claude: Claude, codex: Codex,
+  opencode: OpenCode, openclaw: OpenClaw, claude: Claude, codex: OpenAI,
 };
 
 const PROVIDER_NAMES: Record<string, string> = {
-  anthropic: "Anthropic", openai: "OpenAI", google: "Google", "amazon-bedrock": "AWS Bedrock",
+  anthropic: "Anthropic", openai: "OpenAI", "openai-codex": "OpenAI Codex", codex: "OpenAI Codex", google: "Google", "amazon-bedrock": "AWS Bedrock",
   "azure-openai-responses": "Azure OpenAI", mistral: "Mistral", groq: "Groq", deepseek: "DeepSeek",
   fireworks: "Fireworks", openrouter: "OpenRouter", "github-copilot": "GitHub Copilot", xai: "xAI",
   cerebras: "Cerebras", huggingface: "Hugging Face", ollama: "Ollama",

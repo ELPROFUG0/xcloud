@@ -23,6 +23,7 @@ interface SettingsPanelProps {
   section?: Section;
   onBack?: () => void;
   onPreviewOnboarding?: () => void;
+  onOpenTerminal?: (command?: string) => void;
 }
 
 const SECTIONS: { id: Section; label: string; icon: typeof Cpu }[] = [
@@ -36,7 +37,7 @@ const SECTIONS: { id: Section; label: string; icon: typeof Cpu }[] = [
   { id: "general", label: "General", icon: Settings2 },
 ];
 
-export function SettingsPanel({ engine, section: externalSection, onPreviewOnboarding }: SettingsPanelProps) {
+export function SettingsPanel({ engine, section: externalSection, onPreviewOnboarding, onOpenTerminal }: SettingsPanelProps) {
   const [internalSection, setSection] = useState<Section>("models");
   const section = externalSection ?? internalSection;
 
@@ -45,7 +46,7 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
       case "models":
         return <ModelsSection engine={engine} />;
       case "keys":
-        return <KeysSection engine={engine} />;
+        return <KeysSection engine={engine} onOpenTerminal={onOpenTerminal} />;
       case "channels":
         return <ChannelsSection engine={engine} />;
       case "skills":

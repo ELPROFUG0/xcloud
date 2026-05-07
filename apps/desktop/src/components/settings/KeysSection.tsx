@@ -32,12 +32,54 @@ const PROVIDER_LOGOS: Record<string, string> = {
 
 interface KeysSectionProps {
   engine: BrowserEngine;
+  onOpenTerminal?: (command?: string) => void;
 }
 
-export function KeysSection({ engine }: KeysSectionProps) {
+interface AuthProfilesStatus {
+  openaiCodex: boolean;
+  githubCopilot: boolean;
+}
+
+const STATUS_BY_PROVIDER: Record<string, keyof AuthProfilesStatus> = {
+  "github-copilot": "githubCopilot",
+  "openai-codex": "openaiCodex",
+};
+
+export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
   const [keys, setKeys] = useState<Record<string, KeyState>>({});
   const [authLoading, setAuthLoading] = useState<Record<string, boolean>>({});
   const [authStatus, setAuthStatus] = useState<Record<string, string>>({});
+
+  const openAuthTerminal = useCallback(async (args: string[]) => {
+    const command = await invoke<string>("xcloud_shell_command", { args });
+    const loading = "printf 'Preparing login...\\n\\n'";
+    const prompt = "printf '\\nLogin finished. Return to API Keys and click Verify.\\n'";
+    const marker = `# xcloud-auth-${Date.now()}`;
+    const authCommand = `printf '\\033[2J\\033[H'; ${loading}; OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH=1 OPENCLAW_HIDE_BANNER=1 ${command}; ${prompt}; ${marker}`;
+    if (onOpenTerminal) {
+      onOpenTerminal(authCommand);
+      return;
+    }
+    window.dispatchEvent(new CustomEvent("xcloud-open-terminal", {
+      detail: { command: authCommand },
+    }));
+  }, [onOpenTerminal]);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<AuthProfilesStatus>("xcloud_auth_profiles_status")
+      .then((status) => {
+        if (cancelled) return;
+        setAuthStatus((prev) => {
+          const next = { ...prev };
+          next["codex-login"] = status.openaiCodex ? "connected" : "";
+          next["github-copilot-login"] = status.githubCopilot ? "connected" : "";
+          return next;
+        });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   // Load saved API keys from gateway config
   useEffect(() => {
@@ -93,8 +135,8 @@ export function KeysSection({ engine }: KeysSectionProps) {
           <div className="mb-6">
             <p className="text-xs text-text-muted mb-3 uppercase tracking-wider font-semibold">Subscriptions</p>
             {[
-              { id: "github-copilot-login", name: "GitHub Copilot", logo: githubLogo, cmdArgs: ["models", "auth", "login-github-copilot"], disconnectArgs: ["models", "auth", "paste-token", "--provider", "github-copilot", "--token", ""], description: "Use your Copilot subscription" },
-              { id: "codex-login", name: "OpenAI Codex", logo: openaiLogo, cmdArgs: ["models", "auth", "login", "--provider", "openai-codex"], disconnectArgs: ["models", "auth", "paste-token", "--provider", "openai-codex", "--token", ""], description: "Use your Codex subscription" },
+              { id: "github-copilot-login", name: "GitHub Copilot", provider: "github-copilot", logo: githubLogo, cmdArgs: ["models", "auth", "login-github-copilot"], description: "Use your Copilot subscription" },
+              { id: "codex-login", name: "OpenAI Codex", provider: "openai-codex", logo: openaiLogo, cmdArgs: ["models", "auth", "login", "--provider", "openai-codex"], description: "Use your Codex subscription" },
             ].map((item) => (
               <div key={item.id} className="flex items-center justify-between border-b border-border/50 py-3.5 last:border-0">
                 <div className="flex items-center gap-3 min-w-0 mr-4">
@@ -110,9 +152,12 @@ export function KeysSection({ engine }: KeysSectionProps) {
                       onClick={async () => {
                         setAuthLoading(p => ({ ...p, [item.id]: true }));
                         try {
-                          await invoke<string>("xcloud_run", { args: item.disconnectArgs });
-                        } catch { /* */ }
-                        setAuthStatus(p => ({ ...p, [item.id]: "" }));
+                          const status = await invoke<AuthProfilesStatus>("xcloud_disconnect_auth_provider", { provider: item.provider });
+                          const statusKey = STATUS_BY_PROVIDER[item.provider];
+                          setAuthStatus(p => ({ ...p, [item.id]: status[statusKey] ? "connected" : "" }));
+                        } catch {
+                          setAuthStatus(p => ({ ...p, [item.id]: "connected" }));
+                        }
                         setAuthLoading(p => ({ ...p, [item.id]: false }));
                       }}
                       disabled={authLoading[item.id]}
@@ -126,7 +171,9 @@ export function KeysSection({ engine }: KeysSectionProps) {
                         setAuthLoading(p => ({ ...p, [item.id]: true }));
                         try {
                           await invoke<string>("xcloud_run", { args: ["models", "status", "--probe"] });
-                          setAuthStatus(p => ({ ...p, [item.id]: "connected" }));
+                          const status = await invoke<AuthProfilesStatus>("xcloud_auth_profiles_status");
+                          const statusKey = STATUS_BY_PROVIDER[item.provider];
+                          setAuthStatus(p => ({ ...p, [item.id]: status[statusKey] ? "connected" : "failed" }));
                         } catch {
                           setAuthStatus(p => ({ ...p, [item.id]: "failed" }));
                         }
@@ -141,8 +188,12 @@ export function KeysSection({ engine }: KeysSectionProps) {
                     <button
                       onClick={async () => {
                         setAuthLoading(p => ({ ...p, [item.id]: true }));
-                        await invoke<string>("xcloud_run", { args: item.cmdArgs }).catch(() => {});
-                        setAuthStatus(p => ({ ...p, [item.id]: "check-terminal" }));
+                        try {
+                          await openAuthTerminal(item.cmdArgs);
+                          setAuthStatus(p => ({ ...p, [item.id]: "check-terminal" }));
+                        } catch {
+                          setAuthStatus(p => ({ ...p, [item.id]: "failed" }));
+                        }
                         setAuthLoading(p => ({ ...p, [item.id]: false }));
                       }}
                       disabled={authLoading[item.id]}

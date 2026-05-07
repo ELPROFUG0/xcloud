@@ -42,6 +42,13 @@ pub struct IdentityInfo {
     pub token: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthProfilesStatus {
+    pub openai_codex: bool,
+    pub github_copilot: bool,
+}
+
 fn load_identity() -> Option<IdentityInfo> {
     let state_dir = openclaw_state_dir().ok()?;
     let device_str = fs::read_to_string(state_dir.join("identity/device.json")).ok()?;
@@ -179,6 +186,25 @@ fn run_openclaw(resource_dir: &Option<PathBuf>, args: &[&str]) -> Result<String,
     } else {
         Err(format!("openclaw exited {}: {}", output.status.code().unwrap_or(-1), stderr))
     }
+}
+
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn openclaw_shell_command(resource_dir: &Option<PathBuf>, args: &[String]) -> Result<String, String> {
+    let (node_bin, openclaw_mjs) = resolve_paths(resource_dir)?;
+    let mut parts = vec![
+        shell_quote(&node_bin.to_string_lossy()),
+        shell_quote(&openclaw_mjs.to_string_lossy()),
+    ];
+
+    parts.extend(args.iter().map(|arg| shell_quote(arg)));
+    Ok(parts.join(" "))
 }
 
 // ─── Commands: Init & Setup ───────────────────────────────────────────────────
@@ -327,6 +353,100 @@ pub fn xcloud_run(
     let resource_dir = state.resource_dir.lock().unwrap().clone();
     let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     run_openclaw(&resource_dir, &str_args)
+}
+
+/// Build a shell command that runs bundled OpenClaw in the embedded terminal.
+#[tauri::command]
+pub fn xcloud_shell_command(
+    state: tauri::State<'_, EngineProcess>,
+    args: Vec<String>,
+) -> Result<String, String> {
+    let resource_dir = state.resource_dir.lock().unwrap().clone();
+    openclaw_shell_command(&resource_dir, &args)
+}
+
+/// Read local auth profile availability without probing remote models.
+#[tauri::command]
+pub fn xcloud_auth_profiles_status() -> Result<AuthProfilesStatus, String> {
+    let state_dir = openclaw_state_dir()?;
+    let profiles_path = state_dir
+        .join("agents")
+        .join("main")
+        .join("agent")
+        .join("auth-profiles.json");
+
+    let profiles_str = match fs::read_to_string(profiles_path) {
+        Ok(contents) => contents,
+        Err(_) => {
+            return Ok(AuthProfilesStatus {
+                openai_codex: false,
+                github_copilot: false,
+            });
+        }
+    };
+
+    let value: serde_json::Value = serde_json::from_str(&profiles_str)
+        .map_err(|e| format!("Failed to read auth profiles: {}", e))?;
+
+    let profiles = value
+        .get("profiles")
+        .and_then(|profiles| profiles.as_object());
+
+    let has_provider = |provider: &str| -> bool {
+        profiles
+            .map(|profiles| {
+                profiles.values().any(|profile| {
+                    profile
+                        .get("provider")
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|value| value == provider)
+                })
+            })
+            .unwrap_or(false)
+    };
+
+    Ok(AuthProfilesStatus {
+        openai_codex: has_provider("openai-codex"),
+        github_copilot: has_provider("github-copilot"),
+    })
+}
+
+/// Remove all local auth profiles for a provider.
+#[tauri::command]
+pub fn xcloud_disconnect_auth_provider(provider: String) -> Result<AuthProfilesStatus, String> {
+    let state_dir = openclaw_state_dir()?;
+    let profiles_path = state_dir
+        .join("agents")
+        .join("main")
+        .join("agent")
+        .join("auth-profiles.json");
+
+    let profiles_str = match fs::read_to_string(&profiles_path) {
+        Ok(contents) => contents,
+        Err(_) => return xcloud_auth_profiles_status(),
+    };
+
+    let mut value: serde_json::Value = serde_json::from_str(&profiles_str)
+        .map_err(|e| format!("Failed to read auth profiles: {}", e))?;
+
+    if let Some(profiles) = value
+        .get_mut("profiles")
+        .and_then(|profiles| profiles.as_object_mut())
+    {
+        profiles.retain(|_, profile| {
+            profile
+                .get("provider")
+                .and_then(|value| value.as_str())
+                .is_none_or(|value| value != provider)
+        });
+    }
+
+    let updated = serde_json::to_string_pretty(&value)
+        .map_err(|e| format!("Failed to write auth profiles: {}", e))?;
+    fs::write(&profiles_path, format!("{}\n", updated))
+        .map_err(|e| format!("Failed to save auth profiles: {}", e))?;
+
+    xcloud_auth_profiles_status()
 }
 
 // ─── Commands: Gateway Lifecycle ──────────────────────────────────────────────
