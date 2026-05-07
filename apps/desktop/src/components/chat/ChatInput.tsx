@@ -182,7 +182,9 @@ export function ChatInput({
 
   useEffect(() => {
     invoke<AudioStatus>("local_speech_status")
-      .then((status) => setSpeechModelDownloaded(status.modelDownloaded))
+      .then((status) => {
+        setSpeechModelDownloaded(status.modelDownloaded);
+      })
       .catch(() => setSpeechModelDownloaded(null));
   }, []);
 
@@ -230,13 +232,15 @@ export function ChatInput({
         throw new Error("MediaRecorder is not available in this WebView");
       }
 
-      setPreparingSpeech(true);
       const status = await invoke<AudioStatus>("local_speech_status").catch(() => null);
       setSpeechModelDownloaded(status?.modelDownloaded ?? null);
 
-      const prepared = await invoke<AudioStatus>("prepare_local_speech");
-      setSpeechModelDownloaded(prepared.modelDownloaded);
-      setPreparingSpeech(false);
+      if (!status?.ready) {
+        setPreparingSpeech(true);
+        const prepared = await invoke<AudioStatus>("prepare_local_speech");
+        setSpeechModelDownloaded(prepared.modelDownloaded);
+        setPreparingSpeech(false);
+      }
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: selectedMic ? { deviceId: { exact: selectedMic } } : true });
       recordingStreamRef.current = stream;
@@ -507,7 +511,7 @@ export function ChatInput({
                 barGap={3}
                 barRadius={3}
                 barColor="rgba(170, 170, 170, 0.7)"
-                sensitivity={3.5}
+                sensitivity={1.2}
                 fadeEdges={true}
                 fadeWidth={60}
                 fftSize={128}
