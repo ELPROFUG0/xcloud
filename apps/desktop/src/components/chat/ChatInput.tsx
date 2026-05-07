@@ -11,6 +11,8 @@ import {
 import { LiveMicrophoneWaveform } from "../ui/waveform";
 import { ModelSelector, ModelSelectorTrigger } from "./ModelSelector";
 import { AgentAvatar } from "../ui/AgentAvatar";
+import { Shimmer } from "../ai-elements/shimmer";
+import orbVideo from "@/assets/setup-icons/orb-video.mp4";
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
   status: Info,
@@ -81,6 +83,7 @@ export function ChatInput({
   }, [pendingResize]);
 
   const [showModels, setShowModels] = useState(false);
+  const [modelMenuClosing, setModelMenuClosing] = useState(false);
   const [recording, setRecording] = useState(false);
   const [showMicMenu, setShowMicMenu] = useState(false);
   const [micDevices, setMicDevices] = useState<{ deviceId: string; label: string }[]>([]);
@@ -155,6 +158,13 @@ export function ChatInput({
   const stopRecording = useCallback(() => {
     setRecording(false);
   }, []);
+
+  const closeModelMenu = useCallback(() => {
+    if (!showModels) return;
+    setModelMenuClosing(true);
+    setShowModels(false);
+    window.setTimeout(() => setModelMenuClosing(false), 140);
+  }, [showModels]);
 
   // Load commands once
   useEffect(() => {
@@ -237,6 +247,7 @@ export function ChatInput({
 
   const inputPlaceholder = placeholder ?? (variant === "hero" ? "Ask Unicore anything. @ to use tools or use files" : "Message...");
   const isHero = variant === "hero";
+  const hasSelectedAgent = Boolean(selectedAgentId || contextEmoji || contextAvatar || (contextLabel && contextLabel !== "Select an agent"));
 
   return (
     <div className={cn("relative", isHero ? "px-0 pb-0 pt-0" : "px-4 pb-4 pt-2")}>
@@ -280,7 +291,8 @@ export function ChatInput({
       {/* Model selector */}
       <ModelSelector
         open={showModels}
-        onClose={() => setShowModels(false)}
+        closing={modelMenuClosing}
+        onClose={closeModelMenu}
         providers={providers}
         currentModel={currentModel}
         onSelectModel={async (id) => { await setModel(id); }}
@@ -289,9 +301,9 @@ export function ChatInput({
 
       {/* Input container */}
       <div className={cn(
-        "border px-2.5 py-2 shadow-[0_18px_60px_rgba(0,0,0,0.26)]",
+        "relative z-10 border px-2.5 py-2 shadow-[0_18px_60px_rgba(0,0,0,0.26)]",
         isHero
-          ? "rounded-t-[22px] rounded-b-none border-white/[0.06] bg-[#252525]"
+          ? "rounded-[22px] border-white/[0.06] bg-[#252525]"
           : "rounded-2xl border-[#444] bg-container",
       )}>
         {/* Textarea — always same size */}
@@ -353,11 +365,16 @@ export function ChatInput({
                         <Plus className="h-4 w-4" />
                       </button>
                     )}
-                    <ModelSelectorTrigger
-                      currentModel={currentModel}
-                      onClick={() => setShowModels(!showModels)}
-                      open={showModels}
-                    />
+                    <div onMouseDown={(e) => e.stopPropagation()}>
+                      <ModelSelectorTrigger
+                        currentModel={currentModel}
+                        onClick={() => {
+                          if (showModels) closeModelMenu();
+                          else setShowModels(true);
+                        }}
+                        open={showModels}
+                      />
+                    </div>
                   </div>
             )}
           </div>
@@ -440,7 +457,7 @@ export function ChatInput({
         </div>
       </div>
       {isHero && (
-        <div className="flex h-10 items-center gap-4 rounded-b-[22px] bg-[#1c1c1c] px-4 text-[12px] text-text-muted">
+        <div className="relative -mt-5 flex h-16 items-start gap-3 rounded-t-none rounded-b-[22px] border-x border-b border-white/[0.04] bg-[#1c1c1c] px-3 pt-7 text-[12px] text-text-muted shadow-[0_12px_36px_rgba(0,0,0,0.18)]">
           <div ref={agentMenuRef} className="relative min-w-0">
             <button
               type="button"
@@ -449,22 +466,36 @@ export function ChatInput({
                 if (showAgentMenu) closeAgentMenu();
                 else setShowAgentMenu(true);
               }}
-              className="group flex max-w-[230px] min-w-0 items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-white/[0.06] hover:text-text"
+              className="group flex max-w-[230px] min-w-0 items-center gap-2 rounded-full px-2 py-1 transition-colors hover:bg-white/[0.06] hover:text-text"
               title="Selected agent"
             >
-              {contextEmoji || contextAvatar ? (
-                <AgentAvatar emoji={contextEmoji} avatar={contextAvatar} isMain={contextIsMain} />
+              {contextAvatar ? (
+                <AgentAvatar avatar={contextAvatar} isMain={contextIsMain} size="sm" className="rounded-full" />
+              ) : contextEmoji ? (
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/[0.04] text-[15px] leading-none">
+                  {contextEmoji}
+                </span>
+              ) : hasSelectedAgent ? (
+                <AgentAvatar isMain={contextIsMain} size="sm" className="rounded-full" />
               ) : (
-                <Paperclip className="h-3.5 w-3.5" />
+                <span className="relative h-5 w-5 shrink-0 overflow-hidden rounded-full border border-white/10 bg-white/[0.04]">
+                  <video src={orbVideo} autoPlay loop muted playsInline className="h-full w-full object-cover" />
+                </span>
               )}
-              <span className="truncate">{contextLabel ?? "Select an agent"}</span>
+              {hasSelectedAgent ? (
+                <span className="truncate">{contextLabel ?? "Select an agent"}</span>
+              ) : (
+                <Shimmer as="span" className="truncate text-[12px]" duration={1.8}>
+                  {contextLabel ?? "Select an agent"}
+                </Shimmer>
+              )}
               <ChevronUp className="h-3 w-3 rotate-180 opacity-50 transition-opacity group-hover:opacity-90" />
             </button>
 
             {(showAgentMenu || agentMenuClosing) && agentOptions && agentOptions.length > 0 && (
               <div
                 className={cn(
-                  "absolute bottom-full left-0 z-40 mb-2 w-64 overflow-hidden rounded-xl border border-border bg-surface p-1.5 shadow-2xl",
+                  "absolute left-0 top-full z-40 mt-2 w-64 overflow-hidden rounded-xl border border-border bg-surface p-1.5 shadow-2xl",
                   agentMenuClosing ? "animate-[popoverOut_140ms_ease-in_forwards]" : "animate-[slideUp_120ms_ease-out]",
                 )}
               >
@@ -484,7 +515,15 @@ export function ChatInput({
                           selected ? "bg-white/10 text-text" : "text-text-muted hover:bg-white/[0.06] hover:text-text",
                         )}
                       >
-                        <AgentAvatar emoji={agent.emoji} avatar={agent.avatar} isMain={agent.isDefault} />
+                        {agent.avatar ? (
+                          <AgentAvatar avatar={agent.avatar} isMain={agent.isDefault} size="sm" className="rounded-full" />
+                        ) : agent.emoji ? (
+                          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/[0.04] text-[15px] leading-none">
+                            {agent.emoji}
+                          </span>
+                        ) : (
+                          <AgentAvatar isMain={agent.isDefault} size="sm" className="rounded-full" />
+                        )}
                         <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{agent.name ?? agent.id}</span>
                         {selected && <Check className="h-3.5 w-3.5 text-text-muted" />}
                       </button>

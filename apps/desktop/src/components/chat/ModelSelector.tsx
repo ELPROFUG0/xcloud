@@ -105,6 +105,7 @@ interface ProviderGroup {
 
 interface ModelSelectorProps {
   open: boolean;
+  closing?: boolean;
   onClose: () => void;
   providers: ProviderGroup[];
   currentModel: string | null;
@@ -252,7 +253,7 @@ function ModelInfoTooltip({ model, provider, anchorRect }: { model: ModelInfo | 
   );
 }
 
-export function ModelSelector({ open, onClose, providers, currentModel, onSelectModel, placement = "above" }: ModelSelectorProps) {
+export function ModelSelector({ open, closing = false, onClose, providers, currentModel, onSelectModel, placement = "above" }: ModelSelectorProps) {
   const [search, setSearch] = useState("");
   const [activeProvider, setActiveProvider] = useState<string | null>(null);
   const [hoverY, setHoverY] = useState(0);
@@ -266,7 +267,7 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
 
   // Close on click outside
   useEffect(() => {
-    if (!open) return;
+    if (!open || closing) return;
     function handleClick(e: MouseEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     }
@@ -276,7 +277,7 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
 
   // Focus search on open
   useEffect(() => {
-    if (open) {
+    if (open && !closing) {
       setTimeout(() => searchRef.current?.focus(), 50);
       setSearch("");
     }
@@ -341,7 +342,7 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
   const selectorWidth = 320;
   const selectorBodyHeight = 285;
 
-  if (!open) return null;
+  if (!open && !closing) return null;
 
   return (
     <div
@@ -353,7 +354,10 @@ export function ModelSelector({ open, onClose, providers, currentModel, onSelect
     >
       {/* Modal */}
       <div
-        className="rounded-xl border border-border shadow-2xl animate-[slideUp_150ms_ease-out]"
+        className={cn(
+          "rounded-xl border border-border shadow-2xl",
+          closing ? "animate-[popoverOut_140ms_ease-in_forwards]" : "animate-[slideUp_150ms_ease-out]",
+        )}
         style={{
           background: "#141414",
           maxHeight: "min(350px, calc(100dvh - 14rem))",
