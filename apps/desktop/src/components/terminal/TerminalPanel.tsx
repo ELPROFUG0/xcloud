@@ -332,7 +332,7 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
         // No drag — debounce normally (window resize, etc.)
         clearTimeout(timeout);
         pendingResize = false;
-        timeout = setTimeout(doResize, 200);
+        timeout = setTimeout(doResize, 40);
       }
     });
     observer.observe(container);
