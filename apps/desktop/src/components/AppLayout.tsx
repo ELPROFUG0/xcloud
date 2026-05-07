@@ -49,6 +49,12 @@ const NEW_CHAT_SUGGESTIONS = [
   },
 ];
 
+interface TerminalContextState {
+  visible: boolean;
+  mounted: boolean;
+  command?: string;
+}
+
 function NewChatView({
   agents,
   engine,
@@ -164,6 +170,54 @@ function NewChatView({
   );
 }
 
+function TerminalDock({
+  activeKey,
+  entries,
+  height,
+  isOpen,
+  disableTransition,
+  onResizeMouseDown,
+  onClose,
+}: {
+  activeKey: string;
+  entries: Array<[string, TerminalContextState]>;
+  height: number;
+  isOpen: boolean;
+  disableTransition: boolean;
+  onResizeMouseDown: (e: React.MouseEvent) => void;
+  onClose: (key: string) => void;
+}) {
+  return (
+    <div
+      className="shrink-0 overflow-hidden"
+      style={{
+        height: isOpen ? height : 0,
+        transition: disableTransition ? "none" : "height 240ms cubic-bezier(0.22, 1, 0.36, 1)",
+      }}
+      aria-hidden={!isOpen}
+    >
+      <div
+        onMouseDown={onResizeMouseDown}
+        data-interactive
+        className="relative z-10 h-0 w-full shrink-0 cursor-row-resize"
+      >
+        <div className="absolute -top-1.5 left-0 w-full h-3 group">
+          <div className="absolute top-1/2 left-0 w-full h-px -translate-y-1/2 bg-white/[0.06] transition-colors group-hover:bg-accent" />
+        </div>
+      </div>
+      <div style={{ height }}>
+        <Suspense fallback={<div className="flex h-full items-center justify-center bg-bg text-text-muted text-xs">Loading terminal...</div>}>
+          {entries.map(([key, state]) => (
+            <div key={key} className="h-full" style={{ display: key === activeKey ? undefined : "none" }}>
+              <TerminalPanel initialCommand={state.command} onClose={() => onClose(key)} />
+            </div>
+          ))}
+        </Suspense>
+      </div>
+    </div>
+  );
+}
+
 export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   useTheme(); // Initialize theme CSS variables
   const { agents, refresh: refreshAgents } = useAgents(engine);
@@ -192,30 +246,50 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const [canvasOrbs, setCanvasOrbs] = useState(() => localStorage.getItem("canvasUseOrbs") === "true");
   const [showOnboardingPreview, setShowOnboardingPreview] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
-  const [showTerminal, setShowTerminal] = useState(false);
-  const [terminalMounted, setTerminalMounted] = useState(false);
+  const [terminalByContext, setTerminalByContext] = useState<Record<string, TerminalContextState>>({});
   const [terminalHeight, setTerminalHeight] = useState(() => {
     const saved = localStorage.getItem("terminalHeight");
     return saved ? Number(saved) : 300;
   });
-  const [terminalCommand, setTerminalCommand] = useState<string | undefined>(undefined);
   const canvasViewportRef = useRef<Record<string, { x: number; y: number; zoom: number }>>({});
   const dragging = useRef(false);
   const draggingCanvas = useRef(false);
   const draggingTerminal = useRef(false);
+  const previousTerminalKeyRef = useRef<string | null>(null);
+  const currentAgentId = activeAgentId ?? agents.find((a) => a.isDefault)?.id ?? "main";
+  const hasChat = activeAgentId !== null && !showNewChat;
+  const activeTerminalKey = showSettings ? "settings" : hasChat ? `agent:${currentAgentId}` : showNewChat ? "new-chat" : "workspace";
+  const activeTerminal = terminalByContext[activeTerminalKey];
+  const showTerminal = activeTerminal?.visible ?? false;
 
   const openTerminal = useCallback((command?: string) => {
-    setTerminalCommand(command || undefined);
-    setTerminalMounted(true);
-    setShowTerminal(true);
-  }, []);
+    setTerminalByContext((prev) => {
+      const current = prev[activeTerminalKey];
+      return {
+        ...prev,
+        [activeTerminalKey]: {
+          ...current,
+          visible: true,
+          mounted: true,
+          command: command ?? current?.command,
+        },
+      };
+    });
+  }, [activeTerminalKey]);
 
   const toggleTerminal = useCallback(() => {
-    setShowTerminal((visible) => {
-      if (!visible) setTerminalMounted(true);
-      return !visible;
+    setTerminalByContext((prev) => {
+      const current = prev[activeTerminalKey];
+      return {
+        ...prev,
+        [activeTerminalKey]: {
+          ...current,
+          visible: !(current?.visible ?? false),
+          mounted: true,
+        },
+      };
     });
-  }, []);
+  }, [activeTerminalKey]);
 
   // Detect fullscreen
   useEffect(() => {
@@ -256,12 +330,6 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
       localStorage.setItem("terminalHeight", String(terminalHeight));
     }
   }, [isDragging, terminalHeight]);
-
-  useEffect(() => {
-    if (showTerminal) {
-      setTerminalMounted(true);
-    }
-  }, [showTerminal]);
 
   // Listen for terminal open requests (from agent tools or UI)
   useEffect(() => {
@@ -410,10 +478,13 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setCanvasExpanded(false);
   }, []);
 
-  const currentAgentId = activeAgentId ?? agents.find((a) => a.isDefault)?.id ?? "main";
-  const hasChat = activeAgentId !== null && !showNewChat;
-
   const showThirdPanel = showPreview || showSettings || showCanvas;
+  const terminalContextChanged = previousTerminalKeyRef.current !== null && previousTerminalKeyRef.current !== activeTerminalKey;
+  const mountedTerminalEntries = Object.entries(terminalByContext).filter(([, state]) => state.mounted);
+
+  useEffect(() => {
+    previousTerminalKeyRef.current = activeTerminalKey;
+  }, [activeTerminalKey]);
 
   return (
     <div className="flex flex-col h-full">
@@ -636,33 +707,25 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                     section={settingsSection}
                     onPreviewOnboarding={() => setShowOnboardingPreview(true)}
                     onOpenTerminal={(command) => {
-                      setShowSettings(false);
                       openTerminal(command);
                     }}
                   />
                 </div>
               </div>
-              {showTerminal && (
-                <>
-                  <div
-                    onMouseDown={onTerminalMouseDown}
-                    data-interactive
-                    className="relative z-10 h-0 w-full shrink-0 cursor-row-resize"
-                  >
-                    <div className="absolute -top-1.5 left-0 w-full h-3 group">
-                      <div className="absolute top-1/2 left-0 w-full h-px -translate-y-1/2 bg-white/[0.06] transition-colors group-hover:bg-accent" />
-                    </div>
-                  </div>
-                  <div className="shrink-0" style={{ height: terminalHeight, transition: isDragging ? "none" : "height 150ms ease" }}>
-                    <Suspense fallback={<div className="flex h-full items-center justify-center bg-bg text-text-muted text-xs">Loading terminal...</div>}>
-                      <TerminalPanel
-                        initialCommand={terminalCommand}
-                        onClose={() => setShowTerminal(false)}
-                      />
-                    </Suspense>
-                  </div>
-                </>
-              )}
+              <TerminalDock
+                activeKey={activeTerminalKey}
+                entries={mountedTerminalEntries}
+                height={terminalHeight}
+                isOpen={showTerminal}
+                disableTransition={isDragging || terminalContextChanged}
+                onResizeMouseDown={onTerminalMouseDown}
+                onClose={(key) => {
+                  setTerminalByContext((prev) => ({
+                    ...prev,
+                    [key]: { ...prev[key], visible: false, mounted: false, command: undefined },
+                  }));
+                }}
+              />
             </div>
           ) : (
             <>
@@ -742,36 +805,20 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
           </div>
           </div>
           {/* Terminal panel (full card width) */}
-          <div
-            className="shrink-0 overflow-hidden"
-            style={{
-              height: showTerminal ? terminalHeight : 0,
-              transition: isDragging
-                ? "none"
-                : "height 240ms cubic-bezier(0.22, 1, 0.36, 1)",
+          <TerminalDock
+            activeKey={activeTerminalKey}
+            entries={mountedTerminalEntries}
+            height={terminalHeight}
+            isOpen={showTerminal}
+            disableTransition={isDragging || terminalContextChanged}
+            onResizeMouseDown={onTerminalMouseDown}
+            onClose={(key) => {
+              setTerminalByContext((prev) => ({
+                ...prev,
+                [key]: { ...prev[key], visible: false, mounted: false, command: undefined },
+              }));
             }}
-            aria-hidden={!showTerminal}
-          >
-            <div
-              onMouseDown={onTerminalMouseDown}
-              data-interactive
-              className="relative z-10 h-0 w-full shrink-0 cursor-row-resize"
-            >
-              <div className="absolute -top-1.5 left-0 w-full h-3 group">
-                <div className="absolute top-1/2 left-0 w-full h-px -translate-y-1/2 bg-white/[0.06] transition-colors group-hover:bg-accent" />
-              </div>
-            </div>
-            <div style={{ height: terminalHeight }}>
-              <Suspense fallback={<div className="flex h-full items-center justify-center bg-bg text-text-muted text-xs">Loading terminal...</div>}>
-                {terminalMounted && (
-                  <TerminalPanel
-                    initialCommand={terminalCommand}
-                    onClose={() => setShowTerminal(false)}
-                  />
-                )}
-              </Suspense>
-            </div>
-          </div>
+          />
             </>
           )}
         </div>
