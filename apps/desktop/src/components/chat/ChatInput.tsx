@@ -409,7 +409,7 @@ export function ChatInput({
                     className="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-white/[0.06] hover:text-text disabled:opacity-30"
                     title="Voice"
                   >
-                    <Mic className="h-3.5 w-3.5" />
+                    <Mic className="h-4 w-4" />
                   </button>
 
                   {showMicMenu && (
@@ -526,16 +526,6 @@ export function ChatInput({
               </div>
             )}
           </div>
-          <button className="group flex items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors hover:bg-white/[0.06] hover:text-text" title="Execution mode">
-            <Wrench className="h-3.5 w-3.5" />
-            <span>Work locally</span>
-            <ChevronUp className="h-3 w-3 rotate-180 opacity-50 transition-opacity group-hover:opacity-90" />
-          </button>
-          <button className="group flex items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors hover:bg-white/[0.06] hover:text-text" title="Branch">
-            <Slash className="h-3.5 w-3.5" />
-            <span>main</span>
-            <ChevronUp className="h-3 w-3 rotate-180 opacity-50 transition-opacity group-hover:opacity-90" />
-          </button>
         </div>
       )}
     </div>
