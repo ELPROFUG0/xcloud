@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import type { AgentInfo } from "@/hooks/use-agents";
 import type { SessionInfo } from "@/hooks/use-sessions";
-import { Search, MessageSquarePlus, Download, MoreHorizontal, Pin } from "lucide-react";
+import type { WorkspaceInfo } from "@/hooks/use-workspaces";
+import { Search, MessageSquarePlus, Download, MoreHorizontal, Pin, Boxes, Plus, ArrowLeft, GitBranch, Link2, UserPlus, CornerDownRight, X, FileText } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { EmojiPicker } from "../ui/EmojiPicker";
 import { AgentAvatar } from "../ui/AgentAvatar";
@@ -14,8 +15,16 @@ import orbVideo from "@/assets/setup-icons/orb-video.mp4";
 
 interface HomeScreenProps {
   agents: AgentInfo[];
+  workspaces?: WorkspaceInfo[];
+  activeWorkspaceId?: string | null;
   activeAgentId?: string | null;
   onSelectAgent: (id: string) => void;
+  onSelectWorkspace?: (id: string) => void;
+  onLeaveWorkspace?: () => void;
+  onCreateWorkspace?: (name: string) => void;
+  onAddAgentToWorkspace?: (workspaceId: string, agentId: string) => void;
+  onCreateAgentInWorkspace?: (workspaceId: string) => void;
+  onOpenWorkspaceContext?: (workspaceId: string) => void;
   onSelectSession?: (agentId: string, sessionKey: string) => void;
   getAgentSessions?: (agentId: string) => SessionInfo[];
   isFullscreen?: boolean;
@@ -123,7 +132,24 @@ function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { main
   );
 }
 
-export function HomeScreen({ agents, activeAgentId, onSelectAgent, isFullscreen, onRefresh, onOpenSettings, onSearch, onNewChat }: HomeScreenProps) {
+export function HomeScreen({
+  agents,
+  workspaces = [],
+  activeWorkspaceId,
+  activeAgentId,
+  onSelectAgent,
+  onSelectWorkspace,
+  onLeaveWorkspace,
+  onCreateWorkspace,
+  onAddAgentToWorkspace,
+  onCreateAgentInWorkspace,
+  onOpenWorkspaceContext,
+  isFullscreen,
+  onRefresh,
+  onOpenSettings,
+  onSearch,
+  onNewChat,
+}: HomeScreenProps) {
   const mainAgent = agents.find((a) => a.isDefault) ?? agents[0];
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem("pinnedAgents") ?? "[]"); } catch { return []; }
@@ -139,7 +165,18 @@ export function HomeScreen({ agents, activeAgentId, onSelectAgent, isFullscreen,
   const otherAgents = agents.filter(a => a.id !== mainAgent?.id && !pinnedIds.includes(a.id));
   const [menuAgentId, setMenuAgentId] = useState<string | null>(null);
   const [showEmojiFor, setShowEmojiFor] = useState<string | null>(null);
+  const [showWorkspaceCreator, setShowWorkspaceCreator] = useState(false);
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [showAddAgent, setShowAddAgent] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const workspaceMenuRef = useRef<HTMLDivElement>(null);
+  const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
+  const workspaceAgents = activeWorkspace
+    ? activeWorkspace.agentIds.map((id) => agents.find((agent) => agent.id === id)).filter(Boolean) as AgentInfo[]
+    : [];
+  const importableAgents = activeWorkspace
+    ? agents.filter((agent) => !activeWorkspace.agentIds.includes(agent.id))
+    : [];
 
   // Close menu on click outside
   useEffect(() => {
@@ -152,6 +189,18 @@ export function HomeScreen({ agents, activeAgentId, onSelectAgent, isFullscreen,
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [menuAgentId]);
+
+  useEffect(() => {
+    if (!showWorkspaceCreator && !showAddAgent) return;
+    function handleClick(e: MouseEvent) {
+      if (workspaceMenuRef.current && !workspaceMenuRef.current.contains(e.target as Node)) {
+        setShowWorkspaceCreator(false);
+        setShowAddAgent(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showWorkspaceCreator, showAddAgent]);
 
   const handleEmojiSelect = useCallback(async (agentId: string, emoji: string) => {
     setShowEmojiFor(null);
@@ -230,6 +279,129 @@ export function HomeScreen({ agents, activeAgentId, onSelectAgent, isFullscreen,
     );
   };
 
+  const submitWorkspace = () => {
+    const name = workspaceName.trim();
+    if (!name) return;
+    onCreateWorkspace?.(name);
+    setWorkspaceName("");
+    setShowWorkspaceCreator(false);
+  };
+
+  if (activeWorkspace) {
+    return (
+      <div className="flex h-full flex-col">
+        <div className={`px-3 pb-3 ${isFullscreen ? "pt-12" : "pt-14"}`}>
+          <button
+            onClick={onLeaveWorkspace}
+            className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text-muted transition-colors hover:bg-white/6 hover:text-text"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            <span className="text-[13px] font-medium">Back to agents</span>
+          </button>
+        </div>
+
+        <div className="px-3 pb-3">
+          <div className="rounded-[14px] border border-white/[0.08] bg-white/[0.035] p-3">
+            <div className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-white/[0.08] text-text">
+                <Boxes className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="truncate text-[13px] font-semibold text-text">{activeWorkspace.name}</div>
+                <div className="text-[10px] text-text-muted">{workspaceAgents.length} linked agents</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-1.5">
+          <button
+            onClick={() => onSelectWorkspace?.(activeWorkspace.id)}
+            className={cn(
+              "group ml-1 flex w-[calc(100%-4px)] items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors",
+              !activeAgentId ? "bg-white/8" : "hover:bg-white/6",
+            )}
+          >
+            <MessageSquarePlus className="h-4 w-4 text-text-muted" />
+            <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-text">General chat</span>
+          </button>
+
+          <button
+            onClick={() => onOpenWorkspaceContext?.(activeWorkspace.id)}
+            className="group ml-1 flex w-[calc(100%-4px)] items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/6"
+          >
+            <FileText className="h-4 w-4 text-text-muted" />
+            <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-text">Context files</span>
+          </button>
+
+          <div className="px-2.5 pb-1 pt-4">
+            <span className="text-[12px] font-medium text-text/90">Team tree</span>
+          </div>
+
+          <div className="space-y-1">
+            <div className="ml-4 border-l border-white/[0.10] pl-3">
+              {workspaceAgents.map((agent) => (
+                <div key={agent.id} className="relative py-0.5">
+                  <div className="absolute -left-3 top-1/2 h-px w-2 bg-white/[0.10]" />
+                  <button
+                    onClick={() => onSelectAgent(agent.id)}
+                    className={cn(
+                      "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors",
+                      activeAgentId === agent.id ? "bg-white/8" : "hover:bg-white/6",
+                    )}
+                  >
+                    <AgentAvatar emoji={agent.emoji} avatar={agent.avatar} isMain={agent.isDefault} />
+                    <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-text">{agent.name ?? agent.id}</span>
+                    {agent.isDefault && <GitBranch className="h-3.5 w-3.5 text-text-muted/70" />}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="relative shrink-0 px-3 pb-2" ref={workspaceMenuRef}>
+          {showAddAgent && (
+            <div className="absolute bottom-full left-3 right-3 mb-2 overflow-hidden rounded-[14px] border border-border bg-surface p-1.5 shadow-2xl animate-[slideUp_120ms_ease-out]">
+              <button
+                onClick={() => {
+                  onCreateAgentInWorkspace?.(activeWorkspace.id);
+                  setShowAddAgent(false);
+                }}
+                className="flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[12px] text-text transition-colors hover:bg-white/6"
+              >
+                <UserPlus className="h-3.5 w-3.5 text-text-muted" />
+                Create new agent
+              </button>
+              {importableAgents.length > 0 && <div className="my-1 h-px bg-white/[0.06]" />}
+              {importableAgents.map((agent) => (
+                <button
+                  key={agent.id}
+                  onClick={() => {
+                    onAddAgentToWorkspace?.(activeWorkspace.id, agent.id);
+                    setShowAddAgent(false);
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[12px] text-text transition-colors hover:bg-white/6"
+                >
+                  <Link2 className="h-3.5 w-3.5 text-text-muted" />
+                  <AgentAvatar emoji={agent.emoji} avatar={agent.avatar} isMain={agent.isDefault} size="sm" />
+                  <span className="min-w-0 flex-1 truncate">{agent.name ?? agent.id}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <button
+            onClick={() => setShowAddAgent((v) => !v)}
+            className="flex w-full items-center justify-center gap-2 rounded-[12px] bg-white/10 px-3 py-2 text-[12px] font-medium text-text transition-colors hover:bg-white/15"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add agent
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full flex-col">
       {/* Top actions — padded for macOS traffic lights */}
@@ -286,6 +458,71 @@ export function HomeScreen({ agents, activeAgentId, onSelectAgent, isFullscreen,
             </div>
           </>
         )}
+
+        <div className="px-2.5 pb-1 pt-4">
+          <div className="flex items-center justify-between">
+            <span className="text-[12px] font-medium text-text/90">Workspaces</span>
+            <div className="relative" ref={workspaceMenuRef}>
+              <button
+                onClick={() => setShowWorkspaceCreator((v) => !v)}
+                className="flex h-5 w-5 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-white/8 hover:text-text"
+                title="Create workspace"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+              {showWorkspaceCreator && (
+                <div className="absolute right-0 top-full z-40 mt-2 w-64 overflow-hidden rounded-[14px] border border-border bg-surface p-2 shadow-2xl animate-[slideUp_120ms_ease-out]">
+                  <div className="flex items-center gap-2 rounded-[10px] bg-white/[0.06] px-2.5 py-2">
+                    <Search className="h-3.5 w-3.5 text-text-muted" />
+                    <input
+                      autoFocus
+                      value={workspaceName}
+                      onChange={(e) => setWorkspaceName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") submitWorkspace();
+                        if (e.key === "Escape") setShowWorkspaceCreator(false);
+                      }}
+                      placeholder="Workspace name..."
+                      className="min-w-0 flex-1 bg-transparent text-[12px] text-text outline-none placeholder:text-text-muted"
+                    />
+                    {workspaceName && (
+                      <button onClick={() => setWorkspaceName("")} className="text-text-muted hover:text-text">
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <button
+                    onClick={submitWorkspace}
+                    disabled={!workspaceName.trim()}
+                    className="mt-2 flex w-full items-center justify-center rounded-[10px] bg-white px-3 py-2 text-[12px] font-medium text-black transition-opacity disabled:opacity-40"
+                  >
+                    Create workspace
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-0.5">
+          {workspaces.length === 0 ? (
+            <div className="px-2.5 py-1.5 text-[11px] text-text-muted/70">No workspaces yet</div>
+          ) : (
+            workspaces.map((workspace) => (
+              <button
+                key={workspace.id}
+                onClick={() => onSelectWorkspace?.(workspace.id)}
+                className="group ml-1 flex w-[calc(100%-4px)] items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/6"
+              >
+                <Boxes className="h-4 w-4 text-text-muted" />
+                <div className="min-w-0 flex-1">
+                  <span className="block truncate text-[12px] font-medium text-text">{workspace.name}</span>
+                </div>
+                <CornerDownRight className="h-3.5 w-3.5 text-text-muted/50 opacity-0 transition-opacity group-hover:opacity-100" />
+              </button>
+            ))
+          )}
+        </div>
 
       </div>
 

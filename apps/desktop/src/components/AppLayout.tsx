@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect, lazy, Suspense } from "react"
 import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
 import type { AgentInfo } from "@/hooks/use-agents";
+import { getWorkspaceAgentId, getWorkspaceDir, useWorkspaces } from "@/hooks/use-workspaces";
 import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, Sparkles, Plug, Brain, MessageCircle, Search, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { HomeScreen } from "./home/HomeScreen";
@@ -9,11 +10,13 @@ import { useSessions } from "@/hooks/use-sessions";
 import { ChatPanel } from "./chat/ChatPanel";
 import { ChatInput } from "./chat/ChatInput";
 import { AgentCanvas, type DetailPanel } from "./canvas/AgentCanvas";
+import { WorkspaceCanvas } from "./canvas/WorkspaceCanvas";
 import { SettingsPanel } from "./SettingsPanel";
 import { DevPreview } from "./DevPreview";
 import { OnboardingScreen } from "./OnboardingScreen";
 const TerminalPanel = lazy(() => import("./terminal/TerminalPanel").then(m => ({ default: m.TerminalPanel })));
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { BaseDirectory, readTextFile } from "@tauri-apps/plugin-fs";
 import { useTheme } from "@/hooks/use-theme";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -221,8 +224,10 @@ function TerminalDock({
 export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   useTheme(); // Initialize theme CSS variables
   const { agents, refresh: refreshAgents } = useAgents(engine);
+  const { workspaces, createWorkspace, linkAgent, getWorkspaceAgents } = useWorkspaces(agents);
   const { getAgentSessions } = useSessions(engine);
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [activeSessionKey, setActiveSessionKey] = useState<string | null>(null);
   const [showNewChat, setShowNewChat] = useState(false);
   const [initialChatPrompt, setInitialChatPrompt] = useState<string | undefined>(undefined);
@@ -256,9 +261,13 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const draggingCanvas = useRef(false);
   const draggingTerminal = useRef(false);
   const previousTerminalKeyRef = useRef<string | null>(null);
-  const currentAgentId = activeAgentId ?? agents.find((a) => a.isDefault)?.id ?? "main";
-  const hasChat = activeAgentId !== null && !showNewChat;
-  const activeTerminalKey = showSettings ? "settings" : hasChat ? `agent:${currentAgentId}` : showNewChat ? "new-chat" : "workspace";
+  const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
+  const workspaceAgents = getWorkspaceAgents(activeWorkspace);
+  const hasWorkspaceChat = activeWorkspace !== null && activeAgentId === null && !showNewChat;
+  const workspaceCoordinatorId = activeWorkspace ? getWorkspaceAgentId(activeWorkspace.id) : null;
+  const currentAgentId = activeAgentId ?? workspaceCoordinatorId ?? agents.find((a) => a.isDefault)?.id ?? "main";
+  const hasChat = (activeAgentId !== null || hasWorkspaceChat) && !showNewChat;
+  const activeTerminalKey = showSettings ? "settings" : activeAgentId ? `agent:${currentAgentId}` : hasWorkspaceChat ? `workspace:${activeWorkspace.id}` : showNewChat ? "new-chat" : "workspace";
   const activeTerminal = terminalByContext[activeTerminalKey];
   const showTerminal = activeTerminal?.visible ?? false;
 
@@ -446,8 +455,58 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setShowPreview(false);
   }, []);
 
+  const handleSelectWorkspace = useCallback((id: string) => {
+    setActiveWorkspaceId(id);
+    setActiveAgentId(null);
+    setActiveSessionKey(`agent:${getWorkspaceAgentId(id)}:general`);
+    setShowNewChat(false);
+    setInitialChatPrompt(undefined);
+    setShowSettings(false);
+    setShowPreview(false);
+    setShowCanvas(true);
+    setCanvasExpanded(false);
+  }, []);
+
+  const handleLeaveWorkspace = useCallback(() => {
+    setActiveWorkspaceId(null);
+    setActiveAgentId(null);
+    setActiveSessionKey(null);
+  }, []);
+
+  const handleCreateWorkspace = useCallback((name: string) => {
+    const workspace = createWorkspace(name);
+    if (workspace) handleSelectWorkspace(workspace.id);
+  }, [createWorkspace, handleSelectWorkspace]);
+
+  const handleCreateAgentInWorkspace = useCallback((workspaceId: string) => {
+    const workspace = workspaces.find((item) => item.id === workspaceId);
+    const prompt = `Create a specialist agent for the workspace "${workspace?.name ?? workspaceId}". Ask me only what you need, then create and configure the agent. When it exists, I will link it into this workspace.`;
+    setActiveWorkspaceId(workspaceId);
+    setActiveAgentId(agents.find((a) => a.isDefault)?.id ?? "main");
+    setActiveSessionKey(null);
+    setInitialChatPrompt(prompt);
+    setShowNewChat(false);
+    setShowSettings(false);
+    setShowPreview(false);
+  }, [agents, workspaces]);
+
+  const handleOpenWorkspaceContext = useCallback(async (workspaceId: string) => {
+    const workspace = workspaces.find((item) => item.id === workspaceId);
+    const dir = getWorkspaceDir(workspaceId);
+    const files = await Promise.all(["AGENTS.md", "TEAM.md", "GOALS.md", "MEMORY.md"].map(async (file) => {
+      const content = await readTextFile(`${dir}/${file}`, { baseDir: BaseDirectory.Home }).catch(() => `No ${file}`);
+      return `# ${file}\n\n${content}`;
+    }));
+    setNodeDetail({
+      title: workspace?.name ? `${workspace.name} Context` : "Workspace Context",
+      type: "markdown",
+      content: files.join("\n\n---\n\n"),
+    });
+  }, [workspaces]);
+
   const handleSelectSession = useCallback((agentId: string, sessionKey: string) => {
     setActiveAgentId(agentId);
+    setActiveWorkspaceId(null);
     setActiveSessionKey(sessionKey);
     setShowNewChat(false);
     setInitialChatPrompt(undefined);
@@ -457,6 +516,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
 
   const handleNewChat = useCallback(() => {
     setShowNewChat(true);
+    setActiveWorkspaceId(null);
     setActiveAgentId(null);
     setActiveSessionKey(null);
     setInitialChatPrompt(undefined);
@@ -469,6 +529,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const handleStartNewChat = useCallback((agentId: string, prompt?: string) => {
     const id = crypto.randomUUID().slice(0, 8);
     setActiveAgentId(agentId);
+    setActiveWorkspaceId(null);
     setActiveSessionKey(agentId === "main" ? `main:${id}` : `agent:${agentId}:${id}`);
     setInitialChatPrompt(prompt?.trim() || undefined);
     setShowNewChat(false);
@@ -477,6 +538,17 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setShowCanvas(false);
     setCanvasExpanded(false);
   }, []);
+
+  useEffect(() => {
+    function handleWorkspaceRequest(e: Event) {
+      const detail = (e as CustomEvent).detail as { name?: string };
+      const name = detail?.name?.trim();
+      if (!name) return;
+      handleCreateWorkspace(name);
+    }
+    window.addEventListener("xcloud-create-workspace-request", handleWorkspaceRequest);
+    return () => window.removeEventListener("xcloud-create-workspace-request", handleWorkspaceRequest);
+  }, [handleCreateWorkspace]);
 
   const showThirdPanel = showPreview || showSettings || showCanvas;
   const terminalContextChanged = previousTerminalKeyRef.current !== null && previousTerminalKeyRef.current !== activeTerminalKey;
@@ -627,8 +699,16 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
           ) : (
             <HomeScreen
               agents={agents}
-              activeAgentId={hasChat ? currentAgentId : null}
+              workspaces={workspaces}
+              activeWorkspaceId={activeWorkspaceId}
+              activeAgentId={activeAgentId}
               onSelectAgent={handleSelectAgent}
+              onSelectWorkspace={handleSelectWorkspace}
+              onLeaveWorkspace={handleLeaveWorkspace}
+              onCreateWorkspace={handleCreateWorkspace}
+              onAddAgentToWorkspace={linkAgent}
+              onCreateAgentInWorkspace={handleCreateAgentInWorkspace}
+              onOpenWorkspaceContext={handleOpenWorkspaceContext}
               onSelectSession={handleSelectSession}
               getAgentSessions={getAgentSessions}
               isFullscreen={isFullscreen}
@@ -726,11 +806,13 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
             <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
               {hasChat ? (
                 <ChatPanel
-                  key={`${currentAgentId}-${activeSessionKey ?? "default"}`}
+                  key={hasWorkspaceChat ? `${activeWorkspace!.id}-${activeSessionKey ?? "general"}` : `${currentAgentId}-${activeSessionKey ?? "default"}`}
                   engine={engine}
                   agentId={currentAgentId}
-                  sessionKey={activeSessionKey ?? undefined}
-                  agentName={agents.find((a) => a.id === currentAgentId)?.name ?? currentAgentId}
+                  sessionKey={hasWorkspaceChat ? (activeSessionKey ?? `agent:${getWorkspaceAgentId(activeWorkspace!.id)}:general`) : (activeSessionKey ?? undefined)}
+                  agentName={hasWorkspaceChat ? activeWorkspace!.name : agents.find((a) => a.id === currentAgentId)?.name ?? currentAgentId}
+                  titleName={hasWorkspaceChat ? activeWorkspace!.name : undefined}
+                  workspaceName={hasWorkspaceChat ? activeWorkspace!.name : undefined}
                   agents={agents}
                   onSwitchAgent={(id) => setActiveAgentId(id)}
                   sidebarCollapsed={sidebarCollapsed}
@@ -782,16 +864,25 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
             <div className="flex-1 min-h-0" style={{ minWidth: canvasExpanded ? undefined : canvasWidth }}>
               {/* Canvas — always mounted, hidden when preview active */}
               <div className="h-full" style={{ display: showPreview ? "none" : undefined, visibility: canvasTransitioning ? "hidden" : "visible" }}>
-                <AgentCanvas
-                  key={currentAgentId}
-                  engine={engine}
-                  agentId={currentAgentId}
-                  agentAvatar={agents.find(a => a.id === currentAgentId)?.avatar}
-                  savedViewport={canvasViewportRef.current[currentAgentId]}
-                  onViewportChange={(vp) => { canvasViewportRef.current[currentAgentId] = vp; }}
-                  onNodeDetail={setNodeDetail}
-                  onCanvasSettings={() => setShowCanvasSettings(!showCanvasSettings)}
-                />
+                {hasWorkspaceChat && activeWorkspace ? (
+                  <WorkspaceCanvas
+                    key={`workspace:${activeWorkspace.id}`}
+                    workspace={activeWorkspace}
+                    agents={workspaceAgents}
+                    onSelectAgent={handleSelectAgent}
+                  />
+                ) : (
+                  <AgentCanvas
+                    key={currentAgentId}
+                    engine={engine}
+                    agentId={currentAgentId}
+                    agentAvatar={agents.find(a => a.id === currentAgentId)?.avatar}
+                    savedViewport={canvasViewportRef.current[currentAgentId]}
+                    onViewportChange={(vp) => { canvasViewportRef.current[currentAgentId] = vp; }}
+                    onNodeDetail={setNodeDetail}
+                    onCanvasSettings={() => setShowCanvasSettings(!showCanvasSettings)}
+                  />
+                )}
               </div>
               {showPreview && <DevPreview />}
             </div>

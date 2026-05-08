@@ -35,6 +35,21 @@ function buildToolTitle(name: string, args?: Record<string, unknown>): string {
   return name;
 }
 
+function findWorkspaceRequest(message: string): string | null {
+  const text = message.trim();
+  const lower = text.toLowerCase();
+  if (!/(workspace|work space|espacio de trabajo)/.test(lower)) return null;
+  if (!/(crea|crear|create|nuevo|new|haz|hacer)/.test(lower)) return null;
+
+  const quoted = text.match(/["“']([^"”']{2,60})["”']/)?.[1]?.trim();
+  if (quoted) return quoted;
+
+  const named = text.match(/(?:workspace|espacio de trabajo)(?:\s+(?:llamado|named|de|para|for))?\s+([a-z0-9][\w\s-]{1,50})/i)?.[1]?.trim();
+  if (named) return named.replace(/[.!?].*$/, "").trim();
+
+  return "New workspace";
+}
+
 export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -348,6 +363,12 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
       setIsStreaming(true);
 
       try {
+        const workspaceName = findWorkspaceRequest(content);
+        if (workspaceName) {
+          window.dispatchEvent(new CustomEvent("xcloud-create-workspace-request", {
+            detail: { name: workspaceName, sourceSessionKey: sessionKey },
+          }));
+        }
         await engine.sendMessage(sessionKey, content.trim());
       } catch {
         setIsStreaming(false);

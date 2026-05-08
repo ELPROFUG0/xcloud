@@ -21,6 +21,8 @@ interface ChatPanelProps {
   agentId?: string;
   sessionKey?: string;
   agentName?: string;
+  titleName?: string;
+  workspaceName?: string;
   agents?: AgentInfo[];
   onSwitchAgent?: (id: string) => void;
   sidebarCollapsed?: boolean;
@@ -52,7 +54,7 @@ function paginate(messages: ChatMessage[]): Page[] {
   return pages;
 }
 
-export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessionKey, agentName, agents = [], sidebarCollapsed, isFullscreen, onRefresh, initialPrompt, terminalLift = 0, onToggleTerminal, terminalOpen = false, reserveCanvasControlsSpace = false }: ChatPanelProps) {
+export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessionKey, agentName, titleName, workspaceName, agents = [], sidebarCollapsed, isFullscreen, onRefresh, initialPrompt, terminalLift = 0, onToggleTerminal, terminalOpen = false, reserveCanvasControlsSpace = false }: ChatPanelProps) {
   const defaultSessionKey = externalSessionKey ?? (agentId === "main" ? "main" : `agent:${agentId}:main`);
   const [activeSession, setActiveSession] = useState(defaultSessionKey);
 
@@ -182,7 +184,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
   }, [terminalLift]);
 
   const currentAgent = agents.find(a => a.id === agentId);
-  const displayName = currentAgent?.name ?? agentName ?? agentId;
+  const displayName = titleName ?? currentAgent?.name ?? agentName ?? agentId;
   const isEmptyChat = pages.length === 0 && !isStreaming;
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
@@ -366,7 +368,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
           <div className="flex min-h-full items-center justify-center px-8 pb-[10vh] pt-8">
             <div className="w-full max-w-[760px] animate-[fadeBlurIn_180ms_ease-out]">
               <h1 className="mb-7 text-center text-[28px] font-semibold leading-tight tracking-normal text-text">
-                What should we build in {displayName}?
+                {workspaceName ? `What should this workspace build next?` : `What should we build in ${displayName}?`}
               </h1>
 
               <ChatInput
@@ -380,6 +382,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
                 contextIsMain={currentAgent?.isDefault}
                 agentOptions={agents}
                 selectedAgentId={agentId}
+                placeholder={workspaceName ? `Give ${workspaceName} a team task` : undefined}
               />
 
               {visibleHeroSuggestions.length > 0 && (
