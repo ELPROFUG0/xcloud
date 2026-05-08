@@ -14,6 +14,17 @@ export interface AgentInfo {
   status: "active" | "idle" | "error";
 }
 
+const DELETED_AGENTS_KEY = "xcloudDeletedAgents";
+
+function readDeletedAgentIds() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DELETED_AGENTS_KEY) ?? "[]") as string[];
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set<string>();
+  }
+}
+
 interface UseAgentsReturn {
   agents: AgentInfo[];
   selectedId: string;
@@ -64,7 +75,8 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
         }>;
       };
 
-      const list: AgentInfo[] = (payload.agents ?? []).map((a) => ({
+      const deletedAgentIds = readDeletedAgentIds();
+      const list: AgentInfo[] = (payload.agents ?? []).filter((a) => !deletedAgentIds.has(a.id)).map((a) => ({
         id: a.id,
         name: a.name,
         workspace: a.workspace ?? "",
@@ -122,6 +134,12 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
 
   useEffect(() => {
     refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    const handleDeletedAgentsChanged = () => void refresh();
+    window.addEventListener("xcloud-deleted-agents-changed", handleDeletedAgentsChanged);
+    return () => window.removeEventListener("xcloud-deleted-agents-changed", handleDeletedAgentsChanged);
   }, [refresh]);
 
   // Auto-refresh when agent finishes responding (may have changed identity/name)

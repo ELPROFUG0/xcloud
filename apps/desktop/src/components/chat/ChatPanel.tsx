@@ -29,6 +29,7 @@ interface ChatPanelProps {
   isFullscreen?: boolean;
   onRefresh?: () => Promise<void>;
   initialPrompt?: string;
+  initialPromptHidden?: boolean;
   terminalLift?: number;
   onToggleTerminal?: () => void;
   terminalOpen?: boolean;
@@ -54,7 +55,7 @@ function paginate(messages: ChatMessage[]): Page[] {
   return pages;
 }
 
-export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessionKey, agentName, titleName, workspaceName, agents = [], sidebarCollapsed, isFullscreen, onRefresh, initialPrompt, terminalLift = 0, onToggleTerminal, terminalOpen = false, reserveCanvasControlsSpace = false }: ChatPanelProps) {
+export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessionKey, agentName, titleName, workspaceName, agents = [], sidebarCollapsed, isFullscreen, onRefresh, initialPrompt, initialPromptHidden = false, terminalLift = 0, onToggleTerminal, terminalOpen = false, reserveCanvasControlsSpace = false }: ChatPanelProps) {
   const defaultSessionKey = externalSessionKey ?? (agentId === "main" ? "main" : `agent:${agentId}:main`);
   const [activeSession, setActiveSession] = useState(defaultSessionKey);
 
@@ -237,8 +238,8 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
   useEffect(() => {
     if (loading || !initialPrompt || sentInitialPromptRef.current === initialPrompt) return;
     sentInitialPromptRef.current = initialPrompt;
-    void send(initialPrompt);
-  }, [initialPrompt, loading, send]);
+    void send(initialPrompt, { hidden: initialPromptHidden });
+  }, [initialPrompt, initialPromptHidden, loading, send]);
 
   if (loading) {
     return <div className="flex h-full flex-col bg-bg" />;

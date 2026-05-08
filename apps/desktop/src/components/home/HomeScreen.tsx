@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import type { AgentInfo } from "@/hooks/use-agents";
 import type { SessionInfo } from "@/hooks/use-sessions";
 import type { WorkspaceInfo } from "@/hooks/use-workspaces";
-import { Search, MessageSquarePlus, Download, MoreHorizontal, Pin, Boxes, Plus, ArrowLeft, GitBranch, Link2, UserPlus, CornerDownRight, X, FileText } from "lucide-react";
+import { Search, MessageSquarePlus, Download, MoreHorizontal, Pin, Boxes, Plus, ArrowLeft, GitBranch, Link2, UserPlus, CornerDownRight, X, FileText, Trash2, Unlink } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { EmojiPicker } from "../ui/EmojiPicker";
 import { AgentAvatar } from "../ui/AgentAvatar";
@@ -23,8 +23,11 @@ interface HomeScreenProps {
   onLeaveWorkspace?: () => void;
   onCreateWorkspace?: (name: string) => void;
   onAddAgentToWorkspace?: (workspaceId: string, agentId: string) => void;
+  onRemoveAgentFromWorkspace?: (workspaceId: string, agentId: string) => void;
   onCreateAgentInWorkspace?: (workspaceId: string) => void;
   onOpenWorkspaceContext?: (workspaceId: string) => void;
+  onDeleteAgent?: (agentId: string) => void | Promise<void>;
+  onDeleteWorkspace?: (workspaceId: string) => void | Promise<void>;
   onSelectSession?: (agentId: string, sessionKey: string) => void;
   getAgentSessions?: (agentId: string) => SessionInfo[];
   isFullscreen?: boolean;
@@ -142,8 +145,11 @@ export function HomeScreen({
   onLeaveWorkspace,
   onCreateWorkspace,
   onAddAgentToWorkspace,
+  onRemoveAgentFromWorkspace,
   onCreateAgentInWorkspace,
   onOpenWorkspaceContext,
+  onDeleteAgent,
+  onDeleteWorkspace,
   isFullscreen,
   onRefresh,
   onOpenSettings,
@@ -168,8 +174,10 @@ export function HomeScreen({
   const [showWorkspaceCreator, setShowWorkspaceCreator] = useState(false);
   const [workspaceName, setWorkspaceName] = useState("");
   const [showAddAgent, setShowAddAgent] = useState(false);
+  const [workspaceActionMenuId, setWorkspaceActionMenuId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const workspaceMenuRef = useRef<HTMLDivElement>(null);
+  const workspaceActionMenuRef = useRef<HTMLDivElement>(null);
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
   const workspaceAgents = activeWorkspace
     ? activeWorkspace.agentIds.map((id) => agents.find((agent) => agent.id === id)).filter(Boolean) as AgentInfo[]
@@ -202,12 +210,37 @@ export function HomeScreen({
     return () => document.removeEventListener("mousedown", handleClick);
   }, [showWorkspaceCreator, showAddAgent]);
 
+  useEffect(() => {
+    if (!workspaceActionMenuId) return;
+    function handleClick(e: MouseEvent) {
+      if (workspaceActionMenuRef.current && !workspaceActionMenuRef.current.contains(e.target as Node)) {
+        setWorkspaceActionMenuId(null);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [workspaceActionMenuId]);
+
   const handleEmojiSelect = useCallback(async (agentId: string, emoji: string) => {
     setShowEmojiFor(null);
     setMenuAgentId(null);
     await updateAgentEmoji(agentId, emoji);
     onRefresh?.();
   }, [onRefresh]);
+
+  const deleteAgent = useCallback((agent: AgentInfo) => {
+    if (agent.isDefault) return;
+    const name = agent.name ?? agent.id;
+    if (!window.confirm(`Delete agent "${name}"? This removes it from OpenClaw and from every workspace.`)) return;
+    setMenuAgentId(null);
+    void onDeleteAgent?.(agent.id);
+  }, [onDeleteAgent]);
+
+  const deleteWorkspace = useCallback((workspace: WorkspaceInfo) => {
+    if (!window.confirm(`Delete workspace "${workspace.name}"? This removes its workspace context and links.`)) return;
+    setWorkspaceActionMenuId(null);
+    void onDeleteWorkspace?.(workspace.id);
+  }, [onDeleteWorkspace]);
 
   const renderAgent = (agent: AgentInfo, isMain: boolean) => {
     return (
@@ -258,6 +291,18 @@ export function HomeScreen({
                   >
                     Change emoji
                   </button>
+                  {!isMain && onDeleteAgent && (
+                    <>
+                      <div className="my-1 h-px bg-white/[0.06]" />
+                      <button
+                        onClick={(e) => { e.stopPropagation(); deleteAgent(agent); }}
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-red-300 transition-colors hover:bg-red-500/10 hover:text-red-200"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Delete agent
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -306,10 +351,35 @@ export function HomeScreen({
               <div className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-white/[0.08] text-text">
                 <Boxes className="h-4 w-4" />
               </div>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="truncate text-[13px] font-semibold text-text">{activeWorkspace.name}</div>
                 <div className="text-[10px] text-text-muted">{workspaceAgents.length} linked agents</div>
               </div>
+              {onDeleteWorkspace && (
+                <div className="relative" ref={workspaceActionMenuRef}>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setWorkspaceActionMenuId(workspaceActionMenuId === activeWorkspace.id ? null : activeWorkspace.id);
+                    }}
+                    className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-white/8 hover:text-text"
+                    title="Workspace options"
+                  >
+                    <MoreHorizontal className="h-4 w-4" />
+                  </button>
+                  {workspaceActionMenuId === activeWorkspace.id && (
+                    <div className="absolute right-0 top-full z-40 mt-1 w-40 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-2xl animate-[slideUp_120ms_ease-out]">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); deleteWorkspace(activeWorkspace); }}
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-red-300 transition-colors hover:bg-red-500/10 hover:text-red-200"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Delete workspace
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -346,13 +416,58 @@ export function HomeScreen({
                   <button
                     onClick={() => onSelectAgent(agent.id)}
                     className={cn(
-                      "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors",
+                      "group flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors",
                       activeAgentId === agent.id ? "bg-white/8" : "hover:bg-white/6",
                     )}
                   >
                     <AgentAvatar emoji={agent.emoji} avatar={agent.avatar} isMain={agent.isDefault} />
                     <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-text">{agent.name ?? agent.id}</span>
                     {agent.isDefault && <GitBranch className="h-3.5 w-3.5 text-text-muted/70" />}
+                    <span className="relative">
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMenuAgentId(menuAgentId === `workspace:${agent.id}` ? null : `workspace:${agent.id}`);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key !== "Enter" && e.key !== " ") return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setMenuAgentId(menuAgentId === `workspace:${agent.id}` ? null : `workspace:${agent.id}`);
+                        }}
+                        className="flex h-5 w-5 items-center justify-center rounded-md text-text-muted opacity-0 transition-all hover:bg-white/8 hover:text-text group-hover:opacity-100"
+                      >
+                        <MoreHorizontal className="h-3.5 w-3.5" />
+                      </span>
+                      {menuAgentId === `workspace:${agent.id}` && (
+                        <div ref={menuRef} className="absolute right-0 top-full z-40 mt-1 w-44 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-2xl animate-[slideUp_120ms_ease-out]">
+                          {!agent.isDefault && onRemoveAgentFromWorkspace && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setMenuAgentId(null);
+                                onRemoveAgentFromWorkspace(activeWorkspace.id, agent.id);
+                              }}
+                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-text transition-colors hover:bg-surface-hover"
+                            >
+                              <Unlink className="h-3.5 w-3.5" />
+                              Remove from workspace
+                            </button>
+                          )}
+                          {!agent.isDefault && onDeleteAgent && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); deleteAgent(agent); }}
+                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-red-300 transition-colors hover:bg-red-500/10 hover:text-red-200"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Delete agent
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </span>
                   </button>
                 </div>
               ))}
@@ -509,17 +624,46 @@ export function HomeScreen({
             <div className="px-2.5 py-1.5 text-[11px] text-text-muted/70">No workspaces yet</div>
           ) : (
             workspaces.map((workspace) => (
-              <button
+              <div
                 key={workspace.id}
-                onClick={() => onSelectWorkspace?.(workspace.id)}
                 className="group ml-1 flex w-[calc(100%-4px)] items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/6"
               >
-                <Boxes className="h-4 w-4 text-text-muted" />
-                <div className="min-w-0 flex-1">
-                  <span className="block truncate text-[12px] font-medium text-text">{workspace.name}</span>
-                </div>
-                <CornerDownRight className="h-3.5 w-3.5 text-text-muted/50 opacity-0 transition-opacity group-hover:opacity-100" />
-              </button>
+                <button
+                  onClick={() => onSelectWorkspace?.(workspace.id)}
+                  className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                >
+                  <Boxes className="h-4 w-4 shrink-0 text-text-muted" />
+                  <div className="min-w-0 flex-1">
+                    <span className="block truncate text-[12px] font-medium text-text">{workspace.name}</span>
+                  </div>
+                  <CornerDownRight className="h-3.5 w-3.5 shrink-0 text-text-muted/50 opacity-0 transition-opacity group-hover:opacity-100" />
+                </button>
+                {onDeleteWorkspace && (
+                  <div className="relative" ref={workspaceActionMenuRef}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setWorkspaceActionMenuId(workspaceActionMenuId === workspace.id ? null : workspace.id);
+                      }}
+                      className="flex h-5 w-5 items-center justify-center rounded-md text-text-muted opacity-0 transition-all hover:bg-white/8 hover:text-text group-hover:opacity-100"
+                      title="Workspace options"
+                    >
+                      <MoreHorizontal className="h-3.5 w-3.5" />
+                    </button>
+                    {workspaceActionMenuId === workspace.id && (
+                      <div className="absolute right-0 top-full z-40 mt-1 w-40 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-2xl animate-[slideUp_120ms_ease-out]">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); deleteWorkspace(workspace); }}
+                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-red-300 transition-colors hover:bg-red-500/10 hover:text-red-200"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Delete workspace
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             ))
           )}
         </div>

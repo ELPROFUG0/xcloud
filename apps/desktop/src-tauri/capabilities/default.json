@@ -35,6 +35,10 @@
     {
       "identifier": "fs:allow-mkdir",
       "allow": [{ "path": "$HOME/.openclaw/**" }]
+    },
+    {
+      "identifier": "fs:allow-remove",
+      "allow": [{ "path": "$HOME/.openclaw/**" }]
     }
   ]
 }

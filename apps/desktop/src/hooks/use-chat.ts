@@ -11,8 +11,10 @@ interface UseChatReturn {
   messages: ChatMessage[];
   isStreaming: boolean;
   loading: boolean;
-  send: (message: string) => Promise<void>;
+  send: (message: string, options?: { hidden?: boolean }) => Promise<void>;
 }
+
+export const HIDDEN_PROMPT_MARKER = "<!-- unicore:hidden-workspace-setup -->";
 
 /** Build a readable title from tool name + arguments */
 function buildToolTitle(name: string, args?: Record<string, unknown>): string {
@@ -153,6 +155,10 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
 
           for (let i = 0; i < parsed.length; i++) {
             const p = parsed[i]!;
+
+            if (p.role === "user" && p.content.includes(HIDDEN_PROMPT_MARKER)) {
+              continue;
+            }
 
             if (p.role === "user" && p.content.length > 0) {
               loaded.push({
@@ -343,7 +349,7 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
 
   // Send message
   const send = useCallback(
-    async (content: string) => {
+    async (content: string, options?: { hidden?: boolean }) => {
       if (!content.trim()) return;
 
       const userMsg: ChatMessage = {
@@ -357,13 +363,13 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
 
       setMessages((prev) => [
         ...prev,
-        userMsg,
+        ...(options?.hidden ? [] : [userMsg]),
         { id: streamId, role: "assistant", content: "", timestamp: Date.now(), isStreaming: true },
       ]);
       setIsStreaming(true);
 
       try {
-        const workspaceName = findWorkspaceRequest(content);
+        const workspaceName = options?.hidden ? null : findWorkspaceRequest(content);
         if (workspaceName) {
           window.dispatchEvent(new CustomEvent("xcloud-create-workspace-request", {
             detail: { name: workspaceName, sourceSessionKey: sessionKey },
