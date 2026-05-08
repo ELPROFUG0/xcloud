@@ -369,7 +369,8 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
       setIsStreaming(true);
 
       try {
-        const workspaceName = options?.hidden ? null : findWorkspaceRequest(content);
+        const isWorkspaceSession = sessionKey.includes("workspace-");
+        const workspaceName = options?.hidden || isWorkspaceSession ? null : findWorkspaceRequest(content);
         if (workspaceName) {
           window.dispatchEvent(new CustomEvent("xcloud-create-workspace-request", {
             detail: { name: workspaceName, sourceSessionKey: sessionKey },

@@ -409,6 +409,23 @@ export function useWorkspaces(agents: AgentInfo[]) {
     }))
   ), [workspaces, getWorkspaceAgents]);
 
+  useEffect(() => {
+    if (workspaces.length === 0 || agents.length === 0) return;
+    let changed = false;
+    const next = workspaces.map((workspace) => {
+      const inferredAgentIds = agents
+        .filter((agent) => !agent.isDefault && agent.id.startsWith(`${workspace.id}-`))
+        .map((agent) => agent.id);
+      const agentIds = Array.from(new Set([...workspace.agentIds, ...inferredAgentIds]));
+      if (agentIds.length === workspace.agentIds.length) return workspace;
+      changed = true;
+      return { ...workspace, agentIds, updatedAt: Date.now() };
+    });
+    if (!changed) return;
+    setWorkspaces(next);
+    writeWorkspaces(next);
+  }, [agents, workspaces]);
+
   return {
     workspaces,
     workspacesWithAgents,
