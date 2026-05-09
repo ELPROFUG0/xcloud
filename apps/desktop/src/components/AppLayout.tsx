@@ -110,8 +110,27 @@ function normalizeLookup(value: string) {
   return value
     .trim()
     .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+function workspaceAgentPrefixes(workspace: WorkspaceInfo) {
+  return Array.from(new Set([
+    workspace.id,
+    workspace.id.replace(/^workspace-/, ""),
+    normalizeLookup(workspace.name),
+    normalizeLookup(workspace.name).replace(/^workspace-/, ""),
+  ].filter(Boolean)));
+}
+
+function isWorkspaceOwnedAgent(agent: AgentInfo, workspaces: WorkspaceInfo[]) {
+  if (agent.isDefault) return false;
+  if (agent.id.startsWith("workspace-")) return true;
+  return workspaces.some((workspace) => (
+    workspaceAgentPrefixes(workspace).some((prefix) => agent.id.startsWith(`${prefix}-`))
+  ));
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -422,8 +441,10 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const ensuringWorkspaceIdsRef = useRef(new Set<string>());
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
   const workspaceAgents = getWorkspaceAgents(activeWorkspace);
+  const globalAgents = agents.filter((agent) => !isWorkspaceOwnedAgent(agent, workspaces));
+  const chatAgentOptions = activeWorkspace ? workspaceAgents : globalAgents;
   const hasWorkspaceChat = activeWorkspace !== null && activeAgentId === null && !showNewChat;
-  const defaultAgentId = agents.find((a) => a.isDefault)?.id ?? MAIN_AGENT_ID;
+  const defaultAgentId = globalAgents.find((a) => a.isDefault)?.id ?? agents.find((a) => a.isDefault)?.id ?? MAIN_AGENT_ID;
   const activeWorkspaceCoordinatorId = activeWorkspace ? getWorkspaceAgentId(activeWorkspace.id) : null;
   const currentAgentId = activeAgentId ?? activeWorkspaceCoordinatorId ?? defaultAgentId;
   const hasChat = (activeAgentId !== null || hasWorkspaceChat) && !showNewChat;
@@ -1219,7 +1240,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                   agentName={hasWorkspaceChat ? activeWorkspace!.name : agents.find((a) => a.id === currentAgentId)?.name ?? currentAgentId}
                   titleName={hasWorkspaceChat ? activeWorkspace!.name : undefined}
                   workspaceName={hasWorkspaceChat ? activeWorkspace!.name : undefined}
-                  agents={agents}
+                  agents={chatAgentOptions}
                   onSwitchAgent={(id) => setActiveAgentId(id)}
                   sidebarCollapsed={sidebarCollapsed}
                   isFullscreen={isFullscreen}
@@ -1234,7 +1255,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                 />
               ) : showNewChat ? (
                 <NewChatView
-                  agents={agents}
+                  agents={globalAgents}
                   engine={engine}
                   sidebarCollapsed={sidebarCollapsed}
                   isFullscreen={isFullscreen}
@@ -1381,7 +1402,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
       <CommandPalette
         open={showCommandPalette}
         onClose={() => setShowCommandPalette(false)}
-        agents={agents}
+        agents={chatAgentOptions}
         getAgentSessions={getAgentSessions}
         onSelectAgent={(id) => { handleSelectAgent(id); }}
         onSelectSession={handleSelectSession}

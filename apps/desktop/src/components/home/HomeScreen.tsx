@@ -65,6 +65,12 @@ function isWorkspaceSpecialistAgent(agent: AgentInfo, workspace: WorkspaceInfo) 
   return workspaceAgentPrefixes(workspace).some((prefix) => agent.id.startsWith(`${prefix}-`));
 }
 
+function isWorkspaceOwnedAgent(agent: AgentInfo, workspaces: WorkspaceInfo[]) {
+  if (agent.isDefault) return false;
+  if (agent.id.startsWith("workspace-")) return true;
+  return workspaces.some((workspace) => isWorkspaceSpecialistAgent(agent, workspace));
+}
+
 function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { mainAgent: AgentInfo; agents: AgentInfo[]; onSelectAgent: (id: string) => void; onOpenSettings?: () => void }) {
   const [viewIdx, setViewIdx] = useState(0);
 
@@ -184,7 +190,8 @@ export function HomeScreen({
   onSearch,
   onNewChat,
 }: HomeScreenProps) {
-  const mainAgent = agents.find((a) => a.isDefault) ?? agents[0];
+  const globalAgents = agents.filter((agent) => !isWorkspaceOwnedAgent(agent, workspaces));
+  const mainAgent = globalAgents.find((a) => a.isDefault) ?? agents.find((a) => a.isDefault) ?? globalAgents[0] ?? agents[0];
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem("pinnedAgents") ?? "[]"); } catch { return []; }
   });
@@ -195,8 +202,8 @@ export function HomeScreen({
       return next;
     });
   };
-  const pinnedAgents = agents.filter(a => a.id !== mainAgent?.id && pinnedIds.includes(a.id));
-  const otherAgents = agents.filter(a => a.id !== mainAgent?.id && !pinnedIds.includes(a.id));
+  const pinnedAgents = globalAgents.filter(a => a.id !== mainAgent?.id && pinnedIds.includes(a.id));
+  const otherAgents = globalAgents.filter(a => a.id !== mainAgent?.id && !pinnedIds.includes(a.id));
   const [menuAgentId, setMenuAgentId] = useState<string | null>(null);
   const [showEmojiFor, setShowEmojiFor] = useState<string | null>(null);
   const [showWorkspaceCreator, setShowWorkspaceCreator] = useState(false);
@@ -216,11 +223,9 @@ export function HomeScreen({
     })
     : [];
   const importableAgents = activeWorkspace
-    ? agents.filter((agent) => (
+    ? globalAgents.filter((agent) => (
       !agent.isDefault
-      && !agent.id.startsWith("workspace-")
       && !activeWorkspace.agentIds.includes(agent.id)
-      && !isWorkspaceSpecialistAgent(agent, activeWorkspace)
     ))
     : [];
 
@@ -447,17 +452,39 @@ export function HomeScreen({
           </div>
 
           <div className="space-y-1">
-            <div className="ml-4 border-l border-white/[0.10] pl-3">
-              {workspaceAgents.map((agent) => (
-                <div key={agent.id} className="relative py-0.5">
-                  <div className="absolute -left-3 top-1/2 h-px w-2 bg-white/[0.10]" />
-                  <button
-                    onClick={() => onSelectAgent(agent.id)}
-                    className={cn(
-                      "group flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors",
-                      activeAgentId === agent.id ? "bg-white/8" : "hover:bg-white/6",
-                    )}
-                  >
+            <div className="relative ml-4 pl-4">
+              {workspaceAgents.length > 1 && (
+                <div className="absolute left-0 top-[14px] bottom-[22px] w-[2.5px] rounded-full bg-[#4C4C4C]" />
+              )}
+              {workspaceAgents.map((agent, index) => {
+                const isActive = activeAgentId === agent.id;
+                return (
+                  <div key={agent.id} className="relative py-0.5">
+                    <svg
+                      className={cn(
+                        "pointer-events-none absolute -left-4 h-6 w-5 -translate-y-1/2",
+                        index === 0 ? "top-[calc(50%-6px)]" : "top-[calc(50%-4px)]",
+                        "text-[#4C4C4C]",
+                      )}
+                      viewBox="0 0 20 24"
+                      fill="none"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M1 12C1 15.3137 3.68629 18 7 18H19"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                    <button
+                      onClick={() => onSelectAgent(agent.id)}
+                      className={cn(
+                        "group flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors",
+                        isActive ? "bg-white/8" : "hover:bg-white/6",
+                      )}
+                    >
                     <AgentAvatar emoji={agent.emoji} avatar={agent.avatar} isMain={agent.isDefault} />
                     <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-text">{agent.name ?? agent.id}</span>
                     {agent.isDefault && <GitBranch className="h-3.5 w-3.5 text-text-muted/70" />}
@@ -506,9 +533,10 @@ export function HomeScreen({
                         </div>
                       )}
                     </span>
-                  </button>
-                </div>
-              ))}
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -710,7 +738,7 @@ export function HomeScreen({
 
       {/* Setup guide — bottom */}
       {mainAgent && (
-        <SetupGuide mainAgent={mainAgent} agents={agents} onSelectAgent={onSelectAgent} onOpenSettings={onOpenSettings} />
+        <SetupGuide mainAgent={mainAgent} agents={globalAgents} onSelectAgent={onSelectAgent} onOpenSettings={onOpenSettings} />
       )}
     </div>
   );
