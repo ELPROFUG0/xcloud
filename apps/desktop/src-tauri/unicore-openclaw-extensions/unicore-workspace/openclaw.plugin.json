@@ -1,0 +1,19 @@
+{
+  "id": "unicore-workspace",
+  "name": "Unicore Workspace",
+  "description": "Workspace-scoped tools for creating real OpenClaw specialist agents from Unicore.",
+  "enabledByDefault": true,
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "workspace_agent_create"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

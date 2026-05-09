@@ -69,7 +69,13 @@ function isPlaceholder(v: string): boolean {
 
 function parseIdentity(content: string) {
   const get = (key: string) => {
-    const m = content.match(new RegExp(`\\*\\*${key}:\\*\\*\\s*(.+)`, "i"));
+    const keyPattern = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const patterns = [
+      new RegExp(`^[^\\S\\r\\n]*-?[^\\S\\r\\n]*\\*\\*${keyPattern}:\\*\\*[^\\S\\r\\n]*([^\\r\\n]*)[^\\S\\r\\n]*$`, "im"),
+      new RegExp(`^[^\\S\\r\\n]*-?[^\\S\\r\\n]*\\*\\*${keyPattern}\\*\\*:[^\\S\\r\\n]*([^\\r\\n]*)[^\\S\\r\\n]*$`, "im"),
+      new RegExp(`^[^\\S\\r\\n]*-?[^\\S\\r\\n]*(?!\\*\\*)${keyPattern}:[^\\S\\r\\n]*([^\\r\\n]*)[^\\S\\r\\n]*$`, "im"),
+    ];
+    const m = patterns.map((pattern) => content.match(pattern)).find(Boolean);
     const v = m?.[1]?.trim() ?? "";
     return isPlaceholder(v) ? "" : v;
   };

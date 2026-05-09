@@ -44,14 +44,21 @@ function getAgentList(config: Record<string, unknown>): Array<Record<string, unk
 function getDefaultModel(config: Record<string, unknown>): string | null {
   const agents = config.agents as Record<string, unknown> | undefined;
   const defaults = agents?.defaults as Record<string, unknown> | undefined;
-  const model = defaults?.model as Record<string, unknown> | undefined;
-  return (model?.primary as string) ?? null;
+  return resolveModelValue(defaults?.model);
 }
 
 function getAgentModel(config: Record<string, unknown>, agentId: string): string | null {
   const agent = getAgentList(config).find((item) => item.id === agentId);
-  const model = agent?.model as Record<string, unknown> | undefined;
-  return (model?.primary as string) ?? null;
+  return resolveModelValue(agent?.model);
+}
+
+function resolveModelValue(model: unknown): string | null {
+  if (typeof model === "string") return model;
+  if (model && typeof model === "object") {
+    const primary = (model as Record<string, unknown>).primary;
+    return typeof primary === "string" ? primary : null;
+  }
+  return null;
 }
 
 function getEffectiveModel(config: Record<string, unknown>, agentId?: string | null): string | null {

@@ -2,13 +2,12 @@ import { useState, useCallback, useRef, useEffect, lazy, Suspense } from "react"
 import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
 import type { AgentInfo } from "@/hooks/use-agents";
-import { getWorkspaceAgentId, getWorkspaceDir, listWorkspaceDraftAgents, useWorkspaces, workspaceHasContext } from "@/hooks/use-workspaces";
-import type { WorkspaceDraftAgent, WorkspaceInfo } from "@/hooks/use-workspaces";
+import { getWorkspaceAgentId, getWorkspaceDir, useWorkspaces } from "@/hooks/use-workspaces";
+import type { WorkspaceInfo } from "@/hooks/use-workspaces";
 import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, Sparkles, Plug, Brain, MessageCircle, Search, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { HomeScreen } from "./home/HomeScreen";
 import { useSessions } from "@/hooks/use-sessions";
-import { HIDDEN_PROMPT_MARKER } from "@/hooks/use-chat";
 import type { AppToolHandler } from "@/hooks/use-chat";
 import { ChatPanel } from "./chat/ChatPanel";
 import { ChatInput } from "./chat/ChatInput";
@@ -20,7 +19,7 @@ import { OnboardingScreen } from "./OnboardingScreen";
 const TerminalPanel = lazy(() => import("./terminal/TerminalPanel").then(m => ({ default: m.TerminalPanel })));
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { homeDir } from "@tauri-apps/api/path";
-import { BaseDirectory, mkdir, readTextFile, remove, writeTextFile } from "@tauri-apps/plugin-fs";
+import { BaseDirectory, readTextFile, remove, writeTextFile } from "@tauri-apps/plugin-fs";
 import { useTheme } from "@/hooks/use-theme";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -57,82 +56,14 @@ const NEW_CHAT_SUGGESTIONS = [
 ];
 
 const MAIN_AGENT_ID = "main";
-const PROMOTED_WORKSPACE_AGENTS_KEY = "xcloudPromotedWorkspaceAgents";
 const DELETED_AGENTS_KEY = "xcloudDeletedAgents";
+const UNICORE_WORKSPACE_PLUGIN_ID = "unicore-workspace";
+const WORKSPACE_AGENT_CREATE_TOOL = "workspace_agent_create";
 
 interface TerminalContextState {
   visible: boolean;
   mounted: boolean;
   command?: string;
-}
-
-function buildWorkspaceSetupPrompt(workspaceName: string, workspaceId: string) {
-  return `${HIDDEN_PROMPT_MARKER}
-You are the normal OpenClaw main agent. Keep your normal OpenClaw behavior, tools, setup abilities, agent creation behavior, automation behavior, and operator judgment.
-
-For this session, you are operating inside the Unicore workspace "${workspaceName}".
-
-Important separation:
-- "${workspaceName}" is a workspace/project, not a specialist agent.
-- Do not ask for "${workspaceName}"'s agent role. Ask what the workspace/project is for.
-- The durable workspace files live in ~/.openclaw/workspace/workspace-${workspaceId}/.
-
-Workspace overlay rules:
-- Treat this as normal OpenClaw main, plus workspace organization.
-- When the user asks to create agents, tools, automations, channels, schedules, or integrations, do it using normal OpenClaw mechanisms whenever available.
-- Any specialist agents you create should be real OpenClaw agents and should be organized under this workspace.
-- Keep workspace context in ~/.openclaw/workspace/workspace-${workspaceId}/MEMORY.md, GOALS.md, and TEAM.md.
-- When creating agent files yourself, write the real agent files: IDENTITY.md, SOUL.md, AGENTS.md, and PROJECT_BRIEF.md.
-- If direct OpenClaw config/tools are unavailable from this session, write a structured setup file in ~/.openclaw/workspace/workspace-${workspaceId}/agents/<agent-slug>.md so Unicore can install it automatically as a real agent.
-- If the user asks for recurring work, create or propose the real automation/cron schedule.
-- If a task needs an external app like X/Twitter, verify whether the integration is connected. If it is not connected, ask the user to connect it. Never publish externally without explicit approval unless the user configured auto-publish.
-
-If this workspace has little or no durable context yet, start a real conversational setup in the chat:
-- Briefly say you will help define the workspace and assemble the right team.
-- Ask the first one or two questions needed to understand what this workspace is for.
-- As the user answers, keep asking only what is useful and not tedious.
-- When enough context is clear, update MEMORY.md, GOALS.md, and TEAM.md.
-
-Fallback setup file format for Unicore installation:
-
-# Agent Setup: <Agent Name>
-Agent ID: ${workspaceId}-<agent-slug>
-Role: <short role>
-## IDENTITY.md
-<full IDENTITY.md content>
-## SOUL.md
-<full SOUL.md content>
-## AGENTS.md
-<full AGENTS.md content>
-## PROJECT_BRIEF.md
-<full PROJECT_BRIEF.md content>
-
-Keep the first message short and natural.`;
-}
-
-function slugifyAgentId(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "") || `agent-${Date.now().toString(36)}`;
-}
-
-function readPromotedWorkspaceAgents() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(PROMOTED_WORKSPACE_AGENTS_KEY) ?? "[]") as string[];
-    return new Set(Array.isArray(parsed) ? parsed : []);
-  } catch {
-    return new Set<string>();
-  }
-}
-
-function markWorkspaceAgentPromoted(key: string) {
-  const promoted = readPromotedWorkspaceAgents();
-  promoted.add(key);
-  localStorage.setItem(PROMOTED_WORKSPACE_AGENTS_KEY, JSON.stringify([...promoted]));
 }
 
 function markAgentDeleted(agentId: string) {
@@ -175,17 +106,6 @@ async function upsertAgentInLocalConfig(agent: Record<string, unknown>) {
   await writeTextFile(".openclaw/openclaw.json", `${JSON.stringify(config, null, 2)}\n`, { baseDir: BaseDirectory.Home });
 }
 
-function uniqueAgentId(base: string, existingIds: Set<string>) {
-  let id = base;
-  let i = 2;
-  while (existingIds.has(id)) {
-    id = `${base}-${i}`;
-    i += 1;
-  }
-  existingIds.add(id);
-  return id;
-}
-
 function normalizeLookup(value: string) {
   return value
     .trim()
@@ -194,74 +114,105 @@ function normalizeLookup(value: string) {
     .replace(/^-+|-+$/g, "");
 }
 
-function buildPromotedIdentity(workspace: WorkspaceInfo, draft: WorkspaceDraftAgent) {
-  return draft.identityMd ?? `# IDENTITY.md - Agent Identity
-
-**Name:** ${draft.name}
-**Emoji:** 
-**Creature:** specialist agent
-**Vibe:** focused workspace specialist
-
-## Workspace
-${workspace.name}
-
-## Role
-${draft.role ?? "Specialist for this workspace."}
-`;
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      window.setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+    }),
+  ]);
 }
 
-function buildPromotedSoul(workspace: WorkspaceInfo, draft: WorkspaceDraftAgent) {
-  return draft.soulMd ?? `# SOUL.md
+async function syncAgentsToGatewayConfig(engine: BrowserEngine, agents: Record<string, unknown>[]) {
+  if (!engine.connected || agents.length === 0) return;
+  const configResult = await withTimeout(engine.rpc("config.get", {}), 5_000, "config.get").catch(() => null);
+  if (!configResult) return;
 
-You are ${draft.name}, a specialist agent for the "${workspace.name}" workspace.
+  const hash = (configResult as { hash?: string }).hash ?? "";
+  const config = ((configResult as { config?: Record<string, unknown> }).config ?? configResult) as Record<string, unknown>;
+  if (!hash) return;
 
-## Workspace Context
+  const agentsConfig = (config.agents as Record<string, unknown> | undefined) ?? {};
+  const list = Array.isArray(agentsConfig.list)
+    ? agentsConfig.list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    : [];
 
-You belong to the "${workspace.name}" workspace. Read PROJECT_BRIEF.md and SOURCE_SPEC.md before giving project-level answers.
+  for (const agent of agents) {
+    const index = list.findIndex((item) => item.id === agent.id);
+    if (index >= 0) list[index] = { ...list[index], ...agent };
+    else list.push(agent);
+  }
 
-## Role
-
-${draft.role ?? "Use SOURCE_SPEC.md as your primary role definition."}
-
-## Operating Style
-
-- Stay specific to ${workspace.name}.
-- Coordinate with the workspace general chat and other linked agents when useful.
-- Prefer concrete, ready-to-use outputs.
-- Keep durable discoveries in the workspace files when appropriate.
-
-## Source Specification
-
-${draft.content}
-`;
+  await withTimeout(
+    engine.patchConfig(JSON.stringify({ agents: { ...agentsConfig, list } }), hash),
+    5_000,
+    "config.patch",
+  ).catch(() => {});
 }
 
-function buildPromotedAgentsMd(workspace: WorkspaceInfo, draft: WorkspaceDraftAgent) {
-  return draft.agentsMd ?? `# ${draft.name}
-
-You are a real OpenClaw specialist agent linked to the "${workspace.name}" workspace.
-
-## Instructions
-
-- Read IDENTITY.md, SOUL.md, PROJECT_BRIEF.md, and SOURCE_SPEC.md.
-- Own this specialist role: ${draft.role ?? draft.name}.
-- Keep outputs practical and directly useful to the workspace.
-- If your task needs another specialist, say which workspace agent should help.
-- Do not treat "${workspace.name}" as your own name; it is the workspace/project you serve.
-`;
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function buildPromotedProjectBrief(workspace: WorkspaceInfo, draft: WorkspaceDraftAgent, memory: string, goals: string) {
-  return draft.projectBriefMd ?? `# ${workspace.name} Project Brief
+function withUnicoreWorkspaceSupport(config: Record<string, unknown>) {
+  const plugins = asRecord(config.plugins);
+  const entries = asRecord(plugins.entries);
+  const existingPlugin = asRecord(entries[UNICORE_WORKSPACE_PLUGIN_ID]);
+  const nextPlugin = { ...existingPlugin, enabled: true };
+  const tools = asRecord(config.tools);
+  const currentAlsoAllow = Array.isArray(tools.alsoAllow)
+    ? tools.alsoAllow.map(String).filter(Boolean)
+    : [];
+  const nextAlsoAllow = currentAlsoAllow.includes(WORKSPACE_AGENT_CREATE_TOOL)
+    ? currentAlsoAllow
+    : [...currentAlsoAllow, WORKSPACE_AGENT_CREATE_TOOL];
 
-## Memory
+  const nextConfig = {
+    ...config,
+    plugins: {
+      ...plugins,
+      entries: {
+        ...entries,
+        [UNICORE_WORKSPACE_PLUGIN_ID]: nextPlugin,
+      },
+    },
+    tools: {
+      ...tools,
+      alsoAllow: nextAlsoAllow,
+    },
+  };
 
-${memory || "No MEMORY.md yet."}
+  const changed = existingPlugin.enabled !== true
+    || nextAlsoAllow.length !== currentAlsoAllow.length;
+  return { config: nextConfig, changed };
+}
 
-## Goals
+async function ensureUnicoreWorkspaceSupportInLocalConfig() {
+  const raw = await readTextFile(".openclaw/openclaw.json", { baseDir: BaseDirectory.Home });
+  const parsed = JSON.parse(raw || "{}") as Record<string, unknown>;
+  const { config, changed } = withUnicoreWorkspaceSupport(parsed);
+  if (!changed) return false;
+  await writeTextFile(".openclaw/openclaw.json", `${JSON.stringify(config, null, 2)}\n`, { baseDir: BaseDirectory.Home });
+  return true;
+}
 
-${goals || "No GOALS.md yet."}
-`;
+async function ensureUnicoreWorkspaceSupport(engine: BrowserEngine) {
+  await ensureUnicoreWorkspaceSupportInLocalConfig().catch(() => false);
+  if (!engine.connected) return;
+
+  const configResult = await withTimeout(engine.rpc("config.get", {}), 5_000, "config.get").catch(() => null);
+  if (!configResult) return;
+  const hash = (configResult as { hash?: string }).hash ?? "";
+  const config = ((configResult as { config?: Record<string, unknown> }).config ?? configResult) as Record<string, unknown>;
+  if (!hash) return;
+
+  const { config: nextConfig, changed } = withUnicoreWorkspaceSupport(config);
+  if (!changed) return;
+  await withTimeout(
+    engine.patchConfig(JSON.stringify({ plugins: nextConfig.plugins, tools: nextConfig.tools }), hash),
+    5_000,
+    "config.patch",
+  ).catch(() => {});
 }
 
 function NewChatView({
@@ -468,7 +419,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const draggingCanvas = useRef(false);
   const draggingTerminal = useRef(false);
   const previousTerminalKeyRef = useRef<string | null>(null);
-  const promotingDraftAgentsRef = useRef(false);
+  const ensuringWorkspaceIdsRef = useRef(new Set<string>());
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
   const workspaceAgents = getWorkspaceAgents(activeWorkspace);
   const hasWorkspaceChat = activeWorkspace !== null && activeAgentId === null && !showNewChat;
@@ -480,125 +431,57 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const activeTerminal = terminalByContext[activeTerminalKey];
   const showTerminal = activeTerminal?.visible ?? false;
 
-  const promoteWorkspaceDraftAgents = useCallback(async (workspace: WorkspaceInfo) => {
-    if (promotingDraftAgentsRef.current || !engine.connected) return;
-    promotingDraftAgentsRef.current = true;
+  const ensureWorkspaceCoordinator = useCallback(async (workspace: WorkspaceInfo) => {
+    if (ensuringWorkspaceIdsRef.current.has(workspace.id)) return;
+    ensuringWorkspaceIdsRef.current.add(workspace.id);
+    let nextAgent: Record<string, unknown> | null = null;
+    let isCurrent = true;
     try {
-      const drafts = await listWorkspaceDraftAgents(workspace.id);
-      if (drafts.length === 0) return;
-
-      const promoted = readPromotedWorkspaceAgents();
-      const configResult = await engine.rpc("config.get", {});
-      const hash = (configResult as { hash?: string }).hash ?? "";
-      const config = ((configResult as { config?: Record<string, unknown> }).config ?? configResult) as Record<string, unknown>;
+      await ensureUnicoreWorkspaceSupportInLocalConfig().catch(() => false);
+      const agentId = getWorkspaceAgentId(workspace.id);
+      const home = (await homeDir()).replace(/\/$/, "");
+      const workspacePath = `${home}/${getWorkspaceDir(workspace.id)}`;
+      const localConfigRaw = await readTextFile(".openclaw/openclaw.json", { baseDir: BaseDirectory.Home }).catch(() => "{}");
+      const config = JSON.parse(localConfigRaw || "{}") as Record<string, unknown>;
       const agentsConfig = (config.agents as Record<string, unknown> | undefined) ?? {};
       const defaults = (agentsConfig.defaults as Record<string, unknown> | undefined) ?? {};
       const defaultModel = (defaults.model as Record<string, unknown> | undefined)?.primary as string | undefined;
       const list = Array.isArray(agentsConfig.list)
-        ? [...agentsConfig.list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")]
+        ? agentsConfig.list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
         : [];
-      const existingIds = new Set<string>([
-        ...agents.map((agent) => agent.id),
-        ...list.map((agent) => String(agent.id ?? "")).filter(Boolean),
-      ]);
-      const home = (await homeDir()).replace(/\/$/, "");
-      const idsToLink: string[] = [];
-      let changed = false;
-
-      for (const draft of drafts) {
-        const promotionKey = `${workspace.id}:${draft.fileName}`;
-        const baseId = slugifyAgentId(draft.agentId ?? `${workspace.id}-${draft.id}`);
-        const alreadyRegistered = existingIds.has(baseId);
-        if (alreadyRegistered) {
-          idsToLink.push(baseId);
-          markWorkspaceAgentPromoted(promotionKey);
-          continue;
-        }
-        if (promoted.has(promotionKey)) {
-          markWorkspaceAgentPromoted(promotionKey);
-        }
-
-        const agentId = uniqueAgentId(baseId, existingIds);
-        const agentDir = `.openclaw/workspace/${agentId}`;
-        const [memory, goals] = await Promise.all([
-          readTextFile(`${getWorkspaceDir(workspace.id)}/MEMORY.md`, { baseDir: BaseDirectory.Home }).catch(() => ""),
-          readTextFile(`${getWorkspaceDir(workspace.id)}/GOALS.md`, { baseDir: BaseDirectory.Home }).catch(() => ""),
-        ]);
-
-        await mkdir(agentDir, { baseDir: BaseDirectory.Home, recursive: true }).catch(() => {});
-        await writeTextFile(`${agentDir}/IDENTITY.md`, buildPromotedIdentity(workspace, draft), { baseDir: BaseDirectory.Home });
-        await writeTextFile(`${agentDir}/SOUL.md`, buildPromotedSoul(workspace, draft), { baseDir: BaseDirectory.Home });
-        await writeTextFile(`${agentDir}/AGENTS.md`, buildPromotedAgentsMd(workspace, draft), { baseDir: BaseDirectory.Home });
-        await writeTextFile(`${agentDir}/SOURCE_SPEC.md`, draft.sourceSpecMd ?? draft.content, { baseDir: BaseDirectory.Home });
-        await writeTextFile(`${agentDir}/PROJECT_BRIEF.md`, buildPromotedProjectBrief(workspace, draft, memory, goals), { baseDir: BaseDirectory.Home });
-
-        list.push({
-          id: agentId,
-          name: draft.name,
-          workspace: `${home}/.openclaw/workspace/${agentId}`,
-          ...(defaultModel ? { model: { primary: defaultModel } } : {}),
-        });
-        idsToLink.push(agentId);
-        markWorkspaceAgentPromoted(promotionKey);
-        changed = true;
+      const index = list.findIndex((item) => item.id === agentId);
+      const current = index >= 0 ? list[index]! : null;
+      nextAgent = {
+        id: agentId,
+        name: workspace.name,
+        workspace: workspacePath,
+        ...(defaultModel ? { model: { primary: defaultModel } } : {}),
+      };
+      isCurrent = Boolean(current)
+        && current?.name === nextAgent.name
+        && current?.workspace === nextAgent.workspace;
+      if (!isCurrent) {
+        await upsertAgentInLocalConfig(nextAgent).catch(() => {});
+        window.dispatchEvent(new CustomEvent("xcloud-agents-local-config-changed"));
+        void refreshAgents();
       }
-
-      if (changed) {
-        const patch = JSON.stringify({
-          agents: {
-            ...agentsConfig,
-            list,
-          },
-        });
-        await engine.patchConfig(patch, hash).catch(() => {});
-      }
-
-      for (const agentId of idsToLink) {
-        linkAgent(workspace.id, agentId);
-      }
-      if (idsToLink.length > 0) {
-        setTimeout(() => void refreshAgents(), 900);
-        setTimeout(() => void refreshAgents(), 2200);
-      }
-    } finally {
-      promotingDraftAgentsRef.current = false;
+    } catch {
+      ensuringWorkspaceIdsRef.current.delete(workspace.id);
+      return;
     }
-  }, [agents, engine, linkAgent, refreshAgents]);
 
-  const ensureWorkspaceCoordinator = useCallback(async (workspace: WorkspaceInfo) => {
-    if (!engine.connected) return;
-    const agentId = getWorkspaceAgentId(workspace.id);
-    const home = (await homeDir()).replace(/\/$/, "");
-    const workspacePath = `${home}/${getWorkspaceDir(workspace.id)}`;
-    const configResult = await engine.rpc("config.get", {});
-    const hash = (configResult as { hash?: string }).hash ?? "";
-    const config = ((configResult as { config?: Record<string, unknown> }).config ?? configResult) as Record<string, unknown>;
-    const agentsConfig = (config.agents as Record<string, unknown> | undefined) ?? {};
-    const defaults = (agentsConfig.defaults as Record<string, unknown> | undefined) ?? {};
-    const defaultModel = (defaults.model as Record<string, unknown> | undefined)?.primary as string | undefined;
-    const list = Array.isArray(agentsConfig.list)
-      ? agentsConfig.list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
-      : [];
-    const nextAgent = {
-      id: agentId,
-      name: workspace.name,
-      workspace: workspacePath,
-      ...(defaultModel ? { model: { primary: defaultModel } } : {}),
-    };
-    const index = list.findIndex((item) => item.id === agentId);
-    const current = index >= 0 ? list[index]! : null;
-    const isCurrent = current
-      && current.name === nextAgent.name
-      && current.workspace === nextAgent.workspace;
-    if (!isCurrent) {
-      const nextList = [...list];
-      if (index >= 0) nextList[index] = { ...current, ...nextAgent };
-      else nextList.push(nextAgent);
-      await engine.patchConfig(JSON.stringify({ agents: { ...agentsConfig, list: nextList } }), hash).catch(() => {});
-      await upsertAgentInLocalConfig(nextAgent).catch(() => {});
-      setTimeout(() => void refreshAgents(), 700);
-      setTimeout(() => void refreshAgents(), 1800);
-    }
+    void (async () => {
+      try {
+        await ensureUnicoreWorkspaceSupport(engine).catch(() => {});
+        if (nextAgent && !isCurrent) {
+          await syncAgentsToGatewayConfig(engine, [nextAgent]).catch(() => {});
+        }
+        window.dispatchEvent(new CustomEvent("xcloud-agents-local-config-changed"));
+        void refreshAgents();
+      } finally {
+        ensuringWorkspaceIdsRef.current.delete(workspace.id);
+      }
+    })();
   }, [engine, refreshAgents]);
 
   const openTerminal = useCallback((command?: string) => {
@@ -682,11 +565,9 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
 
   useEffect(() => {
     if (!activeWorkspace) return;
-    void ensureWorkspaceCoordinator(activeWorkspace).catch(() => {});
-    void promoteWorkspaceDraftAgents(activeWorkspace);
-    const interval = window.setInterval(() => void promoteWorkspaceDraftAgents(activeWorkspace), 2500);
-    return () => window.clearInterval(interval);
-  }, [activeWorkspace, ensureWorkspaceCoordinator, promoteWorkspaceDraftAgents]);
+    const workspace = activeWorkspace;
+    void ensureWorkspaceCoordinator(workspace).catch(() => {});
+  }, [activeWorkspace, ensureWorkspaceCoordinator]);
 
   // Cmd+` to toggle terminal
   useEffect(() => {
@@ -795,7 +676,6 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   }, []);
 
   const handleSelectWorkspace = useCallback((id: string) => {
-    const workspace = workspaces.find((item) => item.id === id);
     setActiveWorkspaceId(id);
     setActiveAgentId(null);
     setActiveSessionKey(`agent:${getWorkspaceAgentId(id)}:general`);
@@ -806,17 +686,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setShowPreview(false);
     setShowCanvas(true);
     setCanvasExpanded(false);
-    if (!workspace) return;
-
-    void ensureWorkspaceCoordinator(workspace).catch(() => {});
-    const setupKey = `xcloudWorkspaceSetupPrompted:v2:${id}`;
-    void workspaceHasContext(id).then((hasContext) => {
-      if (hasContext) return;
-      localStorage.setItem(setupKey, "true");
-      setInitialChatPrompt(buildWorkspaceSetupPrompt(workspace.name, workspace.id));
-      setInitialChatPromptHidden(true);
-    });
-  }, [ensureWorkspaceCoordinator, workspaces]);
+  }, []);
 
   const handleLeaveWorkspace = useCallback(() => {
     setActiveWorkspaceId(null);
@@ -828,12 +698,13 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
 
   const handleCreateWorkspace = useCallback((name: string) => {
     const workspace = createWorkspace(name);
-    if (workspace) handleSelectWorkspace(workspace.id);
+    if (!workspace) return;
+    handleSelectWorkspace(workspace.id);
   }, [createWorkspace, handleSelectWorkspace]);
 
   const handleCreateAgentInWorkspace = useCallback((workspaceId: string) => {
     const workspace = workspaces.find((item) => item.id === workspaceId);
-    const prompt = `The workspace is "${workspace?.name ?? workspaceId}". It is a workspace/project, not an agent. Help me create a new specialist agent that belongs to this workspace. Ask only what you need about the specialist role, then write a complete agent setup file in this workspace at agents/<agent-slug>.md. Include "Agent ID: ${workspaceId}-<agent-slug>" and exact sections "## IDENTITY.md", "## SOUL.md", "## AGENTS.md", and "## PROJECT_BRIEF.md" with the full content you want installed for the real OpenClaw agent. Unicore will automatically install that setup file as a real agent and link it to the "${workspace?.name ?? workspaceId}" workspace.`;
+    const prompt = `The workspace is "${workspace?.name ?? workspaceId}". It is a workspace/project, not an agent. Help me define one new specialist agent that belongs to this workspace. Ask only what you need about the role. When enough context is clear, create the real persistent specialist with the ${WORKSPACE_AGENT_CREATE_TOOL} tool. The agent id must start with "${workspaceId}-".`;
     setActiveWorkspaceId(workspaceId);
     setActiveAgentId(null);
     setActiveSessionKey(`agent:${getWorkspaceAgentId(workspaceId)}:general`);
@@ -842,8 +713,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setShowNewChat(false);
     setShowSettings(false);
     setShowPreview(false);
-    if (workspace) void ensureWorkspaceCoordinator(workspace).catch(() => {});
-  }, [ensureWorkspaceCoordinator, workspaces]);
+  }, [workspaces]);
 
   const handleOpenWorkspaceContext = useCallback(async (workspaceId: string) => {
     const workspace = workspaces.find((item) => item.id === workspaceId);
@@ -886,8 +756,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
           output: "Workspace creation skipped: empty name.",
         };
       }
-      window.setTimeout(() => handleSelectWorkspace(workspace.id), 450);
-      void ensureWorkspaceCoordinator(workspace).catch(() => {});
+      handleSelectWorkspace(workspace.id);
       return {
         message: `Listo, creé el workspace **${workspace.name}**. Ya lo abrí para que podamos definir su contexto, equipo y agentes vinculados.`,
         output: `Created workspace "${workspace.name}" (${workspace.id}).`,
@@ -923,6 +792,35 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
       };
     }
 
+    if (request.name === "open_workspace") {
+      const requestedName = request.args.name?.trim();
+      if (!requestedName) {
+        return {
+          message: "Necesito el nombre del workspace que quieres abrir.",
+          output: "Workspace open skipped: missing name.",
+        };
+      }
+
+      const lookup = normalizeLookup(requestedName);
+      const workspace = workspaces.find((item) => (
+        normalizeLookup(item.id) === lookup || normalizeLookup(item.name) === lookup
+      ));
+
+      if (!workspace) {
+        const available = workspaces.map((item) => item.name).join(", ") || "no hay workspaces creados";
+        return {
+          message: `No encontré un workspace llamado **${requestedName}**. Workspaces disponibles: ${available}.`,
+          output: `Workspace not found: ${requestedName}`,
+        };
+      }
+
+      handleSelectWorkspace(workspace.id);
+      return {
+        message: `Abrí el workspace **${workspace.name}**. Ahora el chat está en su Workspace Main, separado del Main global.`,
+        output: `Opened workspace "${workspace.name}" (${workspace.id}).`,
+      };
+    }
+
     if (request.name === "list_workspaces") {
       if (workspaces.length === 0) {
         return {
@@ -945,7 +843,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
       message: "Esa herramienta de workspace todavía no está disponible.",
       output: `Unsupported app tool: ${request.name}`,
     };
-  }, [createWorkspace, ensureWorkspaceCoordinator, handleDeleteWorkspace, handleSelectWorkspace, workspaces]);
+  }, [createWorkspace, handleDeleteWorkspace, handleSelectWorkspace, workspaces]);
 
   const handleRemoveAgentFromWorkspace = useCallback((workspaceId: string, agentId: string) => {
     unlinkAgent(workspaceId, agentId);

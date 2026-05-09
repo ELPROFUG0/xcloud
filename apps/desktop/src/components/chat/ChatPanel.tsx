@@ -243,10 +243,6 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
     void send(initialPrompt, { hidden: initialPromptHidden });
   }, [initialPrompt, initialPromptHidden, loading, send]);
 
-  if (loading) {
-    return <div className="flex h-full flex-col bg-bg" />;
-  }
-
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
@@ -376,7 +372,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
 
               <ChatInput
                 onSend={send}
-                disabled={!engine.connected}
+                disabled={!engine.connected || loading}
                 engine={engine}
                 variant="hero"
                 contextLabel={displayName}
@@ -396,7 +392,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
                       <div key={item.id} className="group flex items-center gap-2 px-4 py-3 text-text-muted transition-colors hover:text-text">
                         <button
                           onClick={() => send(item.prompt)}
-                          disabled={!engine.connected}
+                          disabled={!engine.connected || loading}
                           className="flex min-w-0 flex-1 items-center gap-3 text-left text-[13px] disabled:opacity-40"
                         >
                           <Icon className="h-4 w-4 shrink-0" />
@@ -485,7 +481,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
         <div className="mx-auto w-full max-w-3xl animate-[fadeBlurInStable_180ms_ease-out]">
           <ChatInput
             onSend={send}
-            disabled={!engine.connected}
+            disabled={!engine.connected || loading}
             engine={engine}
             contextLabel={displayName}
             contextEmoji={currentAgent?.emoji}

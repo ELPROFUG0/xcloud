@@ -44,16 +44,74 @@ function isPlaceholder(value: string): boolean {
   return false;
 }
 
+function extractIdentityField(content: string, field: "Name" | "Emoji" | "Avatar") {
+  const fieldPattern = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = [
+    new RegExp(`^[^\\S\\r\\n]*-?[^\\S\\r\\n]*\\*\\*${fieldPattern}:\\*\\*[^\\S\\r\\n]*([^\\r\\n]*)[^\\S\\r\\n]*$`, "im"),
+    new RegExp(`^[^\\S\\r\\n]*-?[^\\S\\r\\n]*\\*\\*${fieldPattern}\\*\\*:[^\\S\\r\\n]*([^\\r\\n]*)[^\\S\\r\\n]*$`, "im"),
+    new RegExp(`^[^\\S\\r\\n]*-?[^\\S\\r\\n]*(?!\\*\\*)${fieldPattern}:[^\\S\\r\\n]*([^\\r\\n]*)[^\\S\\r\\n]*$`, "im"),
+  ];
+
+  for (const pattern of patterns) {
+    const value = content.match(pattern)?.[1]?.trim();
+    if (value && !isPlaceholder(value)) return value;
+  }
+
+  return undefined;
+}
+
 /** Parse IDENTITY.md frontmatter-style fields */
 function parseIdentity(content: string): { name?: string; emoji?: string; avatar?: string } {
   const result: { name?: string; emoji?: string; avatar?: string } = {};
-  const nameMatch = content.match(/\*\*Name:\*\*\s*(.+)/i) ?? content.match(/^-\s*\*\*Name:\*\*\s*(.+)/mi);
-  if (nameMatch && !isPlaceholder(nameMatch[1]!)) result.name = nameMatch[1]!.trim();
-  const emojiMatch = content.match(/\*\*Emoji:\*\*\s*(.+)/i) ?? content.match(/^-\s*\*\*Emoji:\*\*\s*(.+)/mi);
-  if (emojiMatch && !isPlaceholder(emojiMatch[1]!)) result.emoji = emojiMatch[1]!.trim();
-  const avatarMatch = content.match(/\*\*Avatar:\*\*\s*(.+)/i) ?? content.match(/^-\s*\*\*Avatar:\*\*\s*(.+)/mi);
-  if (avatarMatch && avatarMatch[1]!.trim() && !isPlaceholder(avatarMatch[1]!)) result.avatar = avatarMatch[1]!.trim();
+  result.name = extractIdentityField(content, "Name");
+  result.emoji = extractIdentityField(content, "Emoji");
+  result.avatar = extractIdentityField(content, "Avatar");
   return result;
+}
+
+type LocalConfigAgent = {
+  id: string;
+  name?: string;
+  workspace?: string;
+  model?: string | { primary?: string };
+  default?: boolean;
+};
+
+type LocalConfig = {
+  agents?: {
+    list?: LocalConfigAgent[];
+  };
+};
+
+async function readLocalConfigAgents() {
+  try {
+    const raw = await readTextFile(".openclaw/openclaw.json", { baseDir: BaseDirectory.Home });
+    const config = JSON.parse(raw) as LocalConfig;
+    return (config.agents?.list ?? []).filter((agent): agent is LocalConfigAgent => Boolean(agent?.id));
+  } catch {
+    return [];
+  }
+}
+
+function agentsEqual(a: AgentInfo[], b: AgentInfo[]) {
+  if (a.length !== b.length) return false;
+  return a.every((agent, index) => {
+    const next = b[index]!;
+    return agent.id === next.id
+      && agent.name === next.name
+      && agent.emoji === next.emoji
+      && agent.avatar === next.avatar
+      && agent.workspace === next.workspace
+      && agent.model?.primary === next.model?.primary
+      && agent.isDefault === next.isDefault
+      && agent.status === next.status;
+  });
+}
+
+function normalizeAgentModel(model: string | { primary?: string } | undefined): { primary?: string } | undefined {
+  if (typeof model === "string") return { primary: model };
+  if (model && typeof model === "object") return model;
+  return undefined;
 }
 
 export function useAgents(engine: BrowserEngine): UseAgentsReturn {
@@ -63,67 +121,59 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
 
   const refresh = useCallback(async () => {
     try {
-      setLoading(true);
-      const result = await engine.rpc("agents.list", {});
+      const result = await engine.rpc("agents.list", {}).catch(() => ({ agents: [] }));
       const payload = result as {
         defaultId?: string;
         agents?: Array<{
           id: string;
           name?: string;
           workspace?: string;
-          model?: { primary?: string };
+          model?: string | { primary?: string };
         }>;
       };
 
+      const localAgents = await readLocalConfigAgents();
       const deletedAgentIds = readDeletedAgentIds();
-      const list: AgentInfo[] = (payload.agents ?? []).filter((a) => !deletedAgentIds.has(a.id)).map((a) => ({
+      const merged = [...(payload.agents ?? [])];
+      const seenIds = new Set(merged.map((agent) => agent.id));
+      for (const localAgent of localAgents) {
+        if (seenIds.has(localAgent.id)) continue;
+        merged.push(localAgent);
+        seenIds.add(localAgent.id);
+      }
+
+      const defaultId = payload.defaultId ?? localAgents.find((agent) => agent.default)?.id ?? "main";
+      const list: AgentInfo[] = merged.filter((a) => !deletedAgentIds.has(a.id)).map((a) => ({
         id: a.id,
         name: a.name,
         workspace: a.workspace ?? "",
-        model: a.model,
-        isDefault: a.id === payload.defaultId,
+        model: normalizeAgentModel(a.model),
+        isDefault: a.id === defaultId,
         status: "active" as const,
       }));
 
-      setAgents(list);
-
-      // Read IDENTITY.md for each agent from their workspace
-      for (const agent of list) {
+      const enriched = await Promise.all(list.map(async (agent) => {
         const wsPath = agent.isDefault
           ? ".openclaw/workspace/IDENTITY.md"
           : `.openclaw/workspace/${agent.id}/IDENTITY.md`;
-        readTextFile(wsPath, { baseDir: BaseDirectory.Home })
-          .then((content) => {
-            const identity = parseIdentity(content);
-            if (identity.name || identity.emoji || identity.avatar) {
-              // Resolve avatar URL if present
-              if (identity.avatar) {
-                resolveAvatarUrl(agent.id, identity.avatar).then((url) => {
-                  setAgents((prev) =>
-                    prev.map((a) =>
-                      a.id === agent.id
-                        ? { ...a, name: identity.name ?? a.name, emoji: identity.emoji ?? a.emoji, avatar: url }
-                        : a,
-                    ),
-                  );
-                }).catch(() => {});
-              } else {
-                setAgents((prev) =>
-                  prev.map((a) =>
-                    a.id === agent.id
-                      ? { ...a, name: identity.name ?? a.name, emoji: identity.emoji ?? a.emoji }
-                      : a,
-                  ),
-                );
-              }
-            }
-          })
-          .catch(() => { /* IDENTITY.md may not exist */ });
-      }
+        const content = await readTextFile(wsPath, { baseDir: BaseDirectory.Home }).catch(() => "");
+        const identity = parseIdentity(content);
+        const avatar = identity.avatar
+          ? await resolveAvatarUrl(agent.id, identity.avatar).catch(() => undefined)
+          : undefined;
+        return {
+          ...agent,
+          name: identity.name ?? agent.name,
+          emoji: identity.emoji ?? agent.emoji,
+          avatar: avatar ?? agent.avatar,
+        };
+      }));
+
+      setAgents((prev) => agentsEqual(prev, enriched) ? prev : enriched);
 
       // If selected agent no longer exists, fallback to default
       if (!list.find((a) => a.id === selectedId)) {
-        setSelectedId(payload.defaultId ?? "main");
+        setSelectedId(defaultId);
       }
     } catch {
       // Keep existing agents on error
@@ -139,7 +189,11 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
   useEffect(() => {
     const handleDeletedAgentsChanged = () => void refresh();
     window.addEventListener("xcloud-deleted-agents-changed", handleDeletedAgentsChanged);
-    return () => window.removeEventListener("xcloud-deleted-agents-changed", handleDeletedAgentsChanged);
+    window.addEventListener("xcloud-agents-local-config-changed", handleDeletedAgentsChanged);
+    return () => {
+      window.removeEventListener("xcloud-deleted-agents-changed", handleDeletedAgentsChanged);
+      window.removeEventListener("xcloud-agents-local-config-changed", handleDeletedAgentsChanged);
+    };
   }, [refresh]);
 
   // Auto-refresh when agent finishes responding (may have changed identity/name)
@@ -155,9 +209,6 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
         if (stream === "lifecycle" && data?.phase === "end") {
           refresh();
         }
-      }
-      if (event === "sessions.changed") {
-        refresh();
       }
       if (event === "config.changed" || event === "config.patched") {
         refresh();

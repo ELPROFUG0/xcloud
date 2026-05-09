@@ -1,0 +1,15 @@
+{
+  "name": "@unicore/openclaw-workspace-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unicore workspace tools for creating real OpenClaw agents inside workspace teams.",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.33"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}

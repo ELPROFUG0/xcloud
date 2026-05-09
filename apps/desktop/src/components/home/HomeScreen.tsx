@@ -37,6 +37,34 @@ interface HomeScreenProps {
   onNewChat?: () => void;
 }
 
+function slugifyWorkspaceRef(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function workspaceCoordinatorId(workspace: WorkspaceInfo) {
+  return `workspace-${workspace.id.replace(/^workspace-/, "")}`;
+}
+
+function workspaceAgentPrefixes(workspace: WorkspaceInfo) {
+  return Array.from(new Set([
+    workspace.id,
+    workspace.id.replace(/^workspace-/, ""),
+    slugifyWorkspaceRef(workspace.name),
+    slugifyWorkspaceRef(workspace.name).replace(/^workspace-/, ""),
+  ].filter(Boolean)));
+}
+
+function isWorkspaceSpecialistAgent(agent: AgentInfo, workspace: WorkspaceInfo) {
+  if (agent.isDefault || agent.id.startsWith("workspace-")) return false;
+  return workspaceAgentPrefixes(workspace).some((prefix) => agent.id.startsWith(`${prefix}-`));
+}
+
 function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { mainAgent: AgentInfo; agents: AgentInfo[]; onSelectAgent: (id: string) => void; onOpenSettings?: () => void }) {
   const [viewIdx, setViewIdx] = useState(0);
 
@@ -180,10 +208,20 @@ export function HomeScreen({
   const workspaceActionMenuRef = useRef<HTMLDivElement>(null);
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
   const workspaceAgents = activeWorkspace
-    ? activeWorkspace.agentIds.map((id) => agents.find((agent) => agent.id === id)).filter(Boolean) as AgentInfo[]
+    ? agents.filter((agent) => {
+      if (agent.isDefault) return false;
+      if (agent.id === workspaceCoordinatorId(activeWorkspace)) return false;
+      if (activeWorkspace.agentIds.includes(agent.id)) return true;
+      return isWorkspaceSpecialistAgent(agent, activeWorkspace);
+    })
     : [];
   const importableAgents = activeWorkspace
-    ? agents.filter((agent) => !activeWorkspace.agentIds.includes(agent.id))
+    ? agents.filter((agent) => (
+      !agent.isDefault
+      && !agent.id.startsWith("workspace-")
+      && !activeWorkspace.agentIds.includes(agent.id)
+      && !isWorkspaceSpecialistAgent(agent, activeWorkspace)
+    ))
     : [];
 
   // Close menu on click outside
@@ -353,7 +391,7 @@ export function HomeScreen({
               </div>
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[13px] font-semibold text-text">{activeWorkspace.name}</div>
-                <div className="text-[10px] text-text-muted">{workspaceAgents.length} linked agents</div>
+                <div className="text-[10px] text-text-muted">{workspaceAgents.length} specialist agents</div>
               </div>
               {onDeleteWorkspace && (
                 <div className="relative" ref={workspaceActionMenuRef}>

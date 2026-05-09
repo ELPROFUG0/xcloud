@@ -1,13 +1,21 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
 
 const DEFAULT_PORT: u16 = 18789;
+const UNICORE_WORKSPACE_PLUGIN_ID: &str = "unicore-workspace";
+const WORKSPACE_AGENT_CREATE_TOOL: &str = "workspace_agent_create";
+const UNICORE_WORKSPACE_PLUGIN_JSON: &str =
+    include_str!("../unicore-openclaw-extensions/unicore-workspace/openclaw.plugin.json");
+const UNICORE_WORKSPACE_PLUGIN_INDEX: &str =
+    include_str!("../unicore-openclaw-extensions/unicore-workspace/index.js");
+const UNICORE_WORKSPACE_PLUGIN_PACKAGE: &str =
+    include_str!("../unicore-openclaw-extensions/unicore-workspace/package.json");
 
 pub struct EngineProcess {
     pub child: Mutex<Option<Child>>,
@@ -166,9 +174,149 @@ fn resolve_paths(resource_dir: &Option<PathBuf>) -> Result<(PathBuf, PathBuf), S
     Err("Bundled OpenClaw not found. The app may need to be reinstalled.".to_string())
 }
 
+fn write_text_if_changed(path: &Path, contents: &str) -> Result<bool, String> {
+    if fs::read_to_string(path).ok().as_deref() == Some(contents) {
+        return Ok(false);
+    }
+
+    fs::write(path, contents)
+        .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
+    Ok(true)
+}
+
+fn ensure_unicore_workspace_extension(openclaw_mjs: &Path) -> Result<bool, String> {
+    let openclaw_root = openclaw_mjs
+        .parent()
+        .ok_or_else(|| "OpenClaw entry point has no parent directory".to_string())?;
+    let plugin_dir = openclaw_root
+        .join("dist")
+        .join("extensions")
+        .join(UNICORE_WORKSPACE_PLUGIN_ID);
+
+    fs::create_dir_all(&plugin_dir)
+        .map_err(|e| format!("Failed to create {}: {}", plugin_dir.display(), e))?;
+
+    let mut changed = false;
+    changed |= write_text_if_changed(
+        &plugin_dir.join("openclaw.plugin.json"),
+        UNICORE_WORKSPACE_PLUGIN_JSON,
+    )?;
+    changed |= write_text_if_changed(&plugin_dir.join("index.js"), UNICORE_WORKSPACE_PLUGIN_INDEX)?;
+    changed |= write_text_if_changed(
+        &plugin_dir.join("package.json"),
+        UNICORE_WORKSPACE_PLUGIN_PACKAGE,
+    )?;
+    Ok(changed)
+}
+
+fn ensure_unicore_workspace_config() -> Result<bool, String> {
+    let config_path = openclaw_state_dir()?.join("openclaw.json");
+    if !config_path.exists() {
+        return Ok(false);
+    }
+
+    let raw = fs::read_to_string(&config_path)
+        .map_err(|e| format!("Failed to read config: {}", e))?;
+    let mut config: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("Failed to parse config: {}", e))?;
+    let root = match config.as_object_mut() {
+        Some(root) => root,
+        None => return Ok(false),
+    };
+
+    let mut changed = false;
+
+    {
+        if !root.get("plugins").is_some_and(|value| value.is_object()) {
+            root.insert("plugins".into(), serde_json::json!({}));
+            changed = true;
+        }
+        let plugins = root
+            .get_mut("plugins")
+            .and_then(|value| value.as_object_mut())
+            .expect("plugins object was just inserted");
+
+        if !plugins.get("entries").is_some_and(|value| value.is_object()) {
+            plugins.insert("entries".into(), serde_json::json!({}));
+            changed = true;
+        }
+        let entries = plugins
+            .get_mut("entries")
+            .and_then(|value| value.as_object_mut())
+            .expect("plugin entries object was just inserted");
+
+        match entries.get_mut(UNICORE_WORKSPACE_PLUGIN_ID) {
+            Some(entry) if entry.is_object() => {
+                let entry = entry
+                    .as_object_mut()
+                    .expect("plugin entry object was just checked");
+                if entry.get("enabled") != Some(&serde_json::Value::Bool(true)) {
+                    entry.insert("enabled".into(), serde_json::Value::Bool(true));
+                    changed = true;
+                }
+            }
+            _ => {
+                entries.insert(
+                    UNICORE_WORKSPACE_PLUGIN_ID.into(),
+                    serde_json::json!({ "enabled": true }),
+                );
+                changed = true;
+            }
+        }
+    }
+
+    {
+        if !root.get("tools").is_some_and(|value| value.is_object()) {
+            root.insert("tools".into(), serde_json::json!({}));
+            changed = true;
+        }
+        let tools = root
+            .get_mut("tools")
+            .and_then(|value| value.as_object_mut())
+            .expect("tools object was just inserted");
+
+        if !tools.get("alsoAllow").is_some_and(|value| value.is_array()) {
+            tools.insert("alsoAllow".into(), serde_json::json!([]));
+            changed = true;
+        }
+        let also_allow = tools
+            .get_mut("alsoAllow")
+            .and_then(|value| value.as_array_mut())
+            .expect("alsoAllow array was just inserted");
+
+        if !also_allow
+            .iter()
+            .any(|value| value.as_str() == Some(WORKSPACE_AGENT_CREATE_TOOL))
+        {
+            also_allow.push(serde_json::Value::String(
+                WORKSPACE_AGENT_CREATE_TOOL.to_string(),
+            ));
+            changed = true;
+        }
+    }
+
+    if changed {
+        let next = serde_json::to_string_pretty(&config)
+            .map_err(|e| format!("Failed to serialize config: {}", e))?;
+        fs::write(&config_path, format!("{}\n", next))
+            .map_err(|e| format!("Failed to save config: {}", e))?;
+    }
+
+    Ok(changed)
+}
+
+fn ensure_unicore_workspace_runtime(resource_dir: &Option<PathBuf>) -> Result<bool, String> {
+    let (_node_bin, openclaw_mjs) = resolve_paths(resource_dir)?;
+    let extension_changed = ensure_unicore_workspace_extension(&openclaw_mjs)?;
+    let config_changed = ensure_unicore_workspace_config()?;
+    Ok(extension_changed || config_changed)
+}
+
 /// Run an openclaw command using the bundled node + openclaw.mjs
 fn run_openclaw(resource_dir: &Option<PathBuf>, args: &[&str]) -> Result<String, String> {
     let (node_bin, openclaw_mjs) = resolve_paths(resource_dir)?;
+    let _ = ensure_unicore_workspace_extension(&openclaw_mjs);
+    let _ = ensure_unicore_workspace_config();
 
     let output = Command::new(&node_bin)
         .arg(&openclaw_mjs)
@@ -198,6 +346,8 @@ fn shell_quote(value: &str) -> String {
 
 fn openclaw_shell_command(resource_dir: &Option<PathBuf>, args: &[String]) -> Result<String, String> {
     let (node_bin, openclaw_mjs) = resolve_paths(resource_dir)?;
+    let _ = ensure_unicore_workspace_extension(&openclaw_mjs);
+    let _ = ensure_unicore_workspace_config();
     let mut parts = vec![
         shell_quote(&node_bin.to_string_lossy()),
         shell_quote(&openclaw_mjs.to_string_lossy()),
@@ -457,9 +607,39 @@ pub async fn engine_ensure_running(
     state: tauri::State<'_, EngineProcess>,
 ) -> Result<EngineStatus, String> {
     let port = *state.port.lock().unwrap();
+    let resource_dir = state.resource_dir.lock().unwrap().clone();
+    let runtime_changed = ensure_unicore_workspace_runtime(&resource_dir).unwrap_or(false);
 
     // Already running?
     if is_port_open(port) {
+        if runtime_changed {
+            let mut child_guard = state.child.lock().unwrap();
+            if let Some(ref mut child) = *child_guard {
+                #[cfg(unix)]
+                unsafe { libc::kill(child.id() as i32, libc::SIGTERM); }
+                #[cfg(not(unix))]
+                {
+                    let _ = child.kill();
+                }
+                std::thread::sleep(Duration::from_secs(2));
+                match child.try_wait() {
+                    Ok(Some(_)) => {}
+                    _ => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                }
+                *child_guard = None;
+            } else {
+                return Ok(EngineStatus {
+                    running: true,
+                    port,
+                    pid: None,
+                    managed: false,
+                    identity: load_identity(),
+                });
+            }
+        } else {
         // Auto-approve pending devices in background (don't block)
         let resource_dir_clone = state.resource_dir.lock().unwrap().clone();
         std::thread::spawn(move || {
@@ -474,6 +654,7 @@ pub async fn engine_ensure_running(
             managed: child_guard.is_some(),
             identity: load_identity(),
         });
+        }
     }
 
     // Clear dead child
@@ -488,7 +669,6 @@ pub async fn engine_ensure_running(
     }
 
     // Resolve bundled paths
-    let resource_dir = state.resource_dir.lock().unwrap().clone();
     let (node_bin, openclaw_mjs) = resolve_paths(&resource_dir)?;
 
     // Start gateway using bundled Node + OpenClaw

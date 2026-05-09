@@ -15,12 +15,32 @@ interface UseChatReturn {
   send: (message: string, options?: { hidden?: boolean }) => Promise<void>;
 }
 
+const CHAT_HISTORY_TIMEOUT_MS = 1_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 export const HIDDEN_PROMPT_MARKER = "<!-- unicore:hidden-workspace-setup -->";
 
 export interface AppToolRequest {
-  name: "create_workspace" | "delete_workspace" | "list_workspaces";
+  name: "create_workspace" | "delete_workspace" | "list_workspaces" | "open_workspace";
   args: {
     name?: string;
+    prompt?: string;
+    workspaceId?: string;
   };
   sourceSessionKey: string;
 }
@@ -53,16 +73,36 @@ function buildToolTitle(name: string, args?: Record<string, unknown>): string {
   return name;
 }
 
+function hasWorkspaceKeyword(message: string) {
+  return /(?:workspace|work space|espacios?\s+de\s+trabajo)/i.test(message);
+}
+
+function hasListWorkspaceIntent(message: string) {
+  const listVerb = "(?:lista|listar|mu[eé]strame|mostrar|show|list)";
+  const workspaceNoun = "(?:workspaces?|work spaces?|espacios?\\s+de\\s+trabajo)";
+  return new RegExp(`\\b${listVerb}\\b[^.!?\\n]{0,80}\\b${workspaceNoun}\\b`, "i").test(message)
+    || new RegExp(`\\b${workspaceNoun}\\b[^.!?\\n]{0,80}\\b${listVerb}\\b`, "i").test(message);
+}
+
+function hasCreateWorkspaceIntent(message: string) {
+  return /(?:crea|crear|create|nuevo|new|haz|hacer)\s+(?:un\s+|una\s+|nuevo\s+|nueva\s+)?(?:workspace|work space|espacio de trabajo)/i.test(message)
+    || /(?:workspace|work space|espacio de trabajo)\s+(?:nuevo|new|llamado|named|de|para|for)\b/i.test(message);
+}
+
+function hasOpenWorkspaceIntent(message: string) {
+  return /(?:abre|abrir|open|entra|entrar|contin[uú]a|continue|seguir|sigue|trabaja|work)\b[^.!?\n]{0,80}\b(?:workspace|work space|espacio de trabajo)/i.test(message)
+    || /\b(?:workspace|work space|espacio de trabajo)\b[^.!?\n]{0,80}\b(?:abre|abrir|open|entra|entrar|contin[uú]a|continue|seguir|sigue|trabaja|work)\b/i.test(message);
+}
+
 function findWorkspaceRequest(message: string): string | null {
   const text = message.trim();
-  const lower = text.toLowerCase();
-  if (!/(workspace|work space|espacio de trabajo)/.test(lower)) return null;
-  if (!/(crea|crear|create|nuevo|new|haz|hacer)/.test(lower)) return null;
+  if (!hasWorkspaceKeyword(text)) return null;
+  if (!hasCreateWorkspaceIntent(text)) return null;
 
   const quoted = text.match(/["“']([^"”']{2,60})["”']/)?.[1]?.trim();
   if (quoted) return quoted;
 
-  const named = text.match(/(?:workspace|espacio de trabajo)(?:\s+(?:llamado|named|de|para|for))?\s+([a-z0-9][\w\s-]{1,50})/i)?.[1]?.trim();
+  const named = text.match(/(?:workspace|work space|espacio de trabajo)\s+(?:llamado|named|de|para|for)\s+([a-z0-9][\w\s.-]{1,50})/i)?.[1]?.trim();
   if (named) return named.replace(/[.!?].*$/, "").trim();
 
   return "New workspace";
@@ -78,19 +118,35 @@ function extractWorkspaceName(text: string): string | null {
   return null;
 }
 
+function extractWorkspaceIdFromSessionKey(sessionKey: string) {
+  return sessionKey.match(/^agent:workspace-([^:]+):/)?.[1] ?? null;
+}
+
 function findAppToolRequest(message: string, sessionKey: string, hidden?: boolean): Omit<AppToolRequest, "sourceSessionKey"> | null {
   if (hidden) return null;
   const text = message.trim();
   const lower = text.toLowerCase();
-  if (!/(workspace|work space|espacio de trabajo)/.test(lower)) return null;
+  const workspaceId = extractWorkspaceIdFromSessionKey(sessionKey);
 
-  if (/(lista|listar|mu[eé]strame|mostrar|show|list)/.test(lower)) {
+  // Workspace chats should behave like normal OpenClaw chats. The workspace
+  // coordinator can call OpenClaw/plugin tools itself, so do not pre-empt the
+  // user message with app-side shortcuts here.
+  if (workspaceId) return null;
+
+  if (!hasWorkspaceKeyword(text)) return null;
+
+  if (hasListWorkspaceIntent(text)) {
     return { name: "list_workspaces", args: {} };
   }
 
   if (/(elimina|eliminar|borra|borrar|delete|remove)/.test(lower)) {
     const name = extractWorkspaceName(text);
     if (name) return { name: "delete_workspace", args: { name } };
+  }
+
+  if (hasOpenWorkspaceIntent(text)) {
+    const name = extractWorkspaceName(text);
+    if (name) return { name: "open_workspace", args: { name } };
   }
 
   const name = findWorkspaceRequest(text);
@@ -120,9 +176,21 @@ export function useChat({ engine, sessionKey = "main", appTools }: UseChatOption
     async function setup() {
       if (subscribedRef.current) return;
 
+      void engine.subscribe(sessionKey)
+        .then(() => {
+          if (!cancelled) subscribedRef.current = true;
+        })
+        .catch(() => {
+          // Subscription may fail temporarily while the gateway catches up.
+        });
+
       // Load existing chat history from gateway
       try {
-        const result = await engine.rpc("chat.history", { sessionKey });
+        const result = await withTimeout(
+          engine.rpc("chat.history", { sessionKey }),
+          CHAT_HISTORY_TIMEOUT_MS,
+          "chat.history",
+        );
         if (!cancelled) {
           const history = (result as { messages?: Array<{ role: string; content: unknown; timestamp?: number }> }).messages ?? [];
 
@@ -255,13 +323,6 @@ export function useChat({ engine, sessionKey = "main", appTools }: UseChatOption
       } catch {
         // History may not be available — that's OK
         if (!cancelled) setLoading(false);
-      }
-
-      try {
-        await engine.subscribe(sessionKey);
-        subscribedRef.current = true;
-      } catch {
-        // Subscription may fail — will retry on next render
       }
     }
 
@@ -474,7 +535,28 @@ export function useChat({ engine, sessionKey = "main", appTools }: UseChatOption
           }));
         }
         await engine.sendMessage(sessionKey, content.trim());
-      } catch {
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        setMessages((prev) => prev.map((msg) => {
+          if (msg.role === "tool" && msg.tool?.status === "running") {
+            return {
+              ...msg,
+              tool: {
+                ...msg.tool,
+                status: "error",
+                output: detail,
+              },
+            };
+          }
+          if (msg.id === streamId) {
+            return {
+              ...msg,
+              content: `No pude completar esa acción todavía: ${detail}`,
+              isStreaming: false,
+            };
+          }
+          return msg;
+        }));
         setIsStreaming(false);
       }
     },
