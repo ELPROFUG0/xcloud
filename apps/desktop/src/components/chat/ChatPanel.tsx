@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback, memo } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { useChat } from "@/hooks/use-chat";
+import type { AppToolHandler } from "@/hooks/use-chat";
 import { ToolCallBadge } from "./ToolCallBadge";
 import { Blocks, Check, Clock, MessageCircle, Plus, Sparkles, X } from "lucide-react";
 import { ChatInput } from "./ChatInput";
@@ -34,6 +35,7 @@ interface ChatPanelProps {
   onToggleTerminal?: () => void;
   terminalOpen?: boolean;
   reserveCanvasControlsSpace?: boolean;
+  appTools?: AppToolHandler;
 }
 
 interface Page {
@@ -55,7 +57,7 @@ function paginate(messages: ChatMessage[]): Page[] {
   return pages;
 }
 
-export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessionKey, agentName, titleName, workspaceName, agents = [], sidebarCollapsed, isFullscreen, onRefresh, initialPrompt, initialPromptHidden = false, terminalLift = 0, onToggleTerminal, terminalOpen = false, reserveCanvasControlsSpace = false }: ChatPanelProps) {
+export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessionKey, agentName, titleName, workspaceName, agents = [], sidebarCollapsed, isFullscreen, onRefresh, initialPrompt, initialPromptHidden = false, terminalLift = 0, onToggleTerminal, terminalOpen = false, reserveCanvasControlsSpace = false, appTools }: ChatPanelProps) {
   const defaultSessionKey = externalSessionKey ?? (agentId === "main" ? "main" : `agent:${agentId}:main`);
   const [activeSession, setActiveSession] = useState(defaultSessionKey);
 
@@ -63,7 +65,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
     setActiveSession(defaultSessionKey);
   }, [defaultSessionKey]);
 
-  const { messages, isStreaming, loading, send } = useChat({ engine, sessionKey: activeSession });
+  const { messages, isStreaming, loading, send } = useChat({ engine, sessionKey: activeSession, appTools });
   const sentInitialPromptRef = useRef<string | null>(null);
 
   const pages = useMemo(() => paginate(messages), [messages]);

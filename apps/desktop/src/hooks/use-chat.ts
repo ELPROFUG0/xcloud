@@ -5,6 +5,7 @@ import type { ChatMessage, ToolCallInfo } from "@/types/chat";
 interface UseChatOptions {
   engine: BrowserEngine;
   sessionKey?: string;
+  appTools?: AppToolHandler;
 }
 
 interface UseChatReturn {
@@ -15,6 +16,21 @@ interface UseChatReturn {
 }
 
 export const HIDDEN_PROMPT_MARKER = "<!-- unicore:hidden-workspace-setup -->";
+
+export interface AppToolRequest {
+  name: "create_workspace" | "delete_workspace" | "list_workspaces";
+  args: {
+    name?: string;
+  };
+  sourceSessionKey: string;
+}
+
+export interface AppToolResult {
+  message: string;
+  output?: string;
+}
+
+export type AppToolHandler = (request: AppToolRequest) => Promise<AppToolResult>;
 
 /** Build a readable title from tool name + arguments */
 function buildToolTitle(name: string, args?: Record<string, unknown>): string {
@@ -52,7 +68,38 @@ function findWorkspaceRequest(message: string): string | null {
   return "New workspace";
 }
 
-export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseChatReturn {
+function extractWorkspaceName(text: string): string | null {
+  const quoted = text.match(/["“']([^"”']{2,60})["”']/)?.[1]?.trim();
+  if (quoted) return quoted;
+
+  const named = text.match(/(?:workspace|work space|espacio de trabajo)(?:\s+(?:llamado|named|de|para|for))?\s+([a-z0-9][\w\s.-]{1,50})/i)?.[1]?.trim();
+  if (named) return named.replace(/[.!?].*$/, "").trim();
+
+  return null;
+}
+
+function findAppToolRequest(message: string, sessionKey: string, hidden?: boolean): Omit<AppToolRequest, "sourceSessionKey"> | null {
+  if (hidden) return null;
+  const text = message.trim();
+  const lower = text.toLowerCase();
+  if (!/(workspace|work space|espacio de trabajo)/.test(lower)) return null;
+
+  if (/(lista|listar|mu[eé]strame|mostrar|show|list)/.test(lower)) {
+    return { name: "list_workspaces", args: {} };
+  }
+
+  if (/(elimina|eliminar|borra|borrar|delete|remove)/.test(lower)) {
+    const name = extractWorkspaceName(text);
+    if (name) return { name: "delete_workspace", args: { name } };
+  }
+
+  const name = findWorkspaceRequest(text);
+  if (name) return { name: "create_workspace", args: { name } };
+
+  return null;
+}
+
+export function useChat({ engine, sessionKey = "main", appTools }: UseChatOptions): UseChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -369,6 +416,56 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
       setIsStreaming(true);
 
       try {
+        const appToolRequest = findAppToolRequest(content, sessionKey, options?.hidden);
+        if (appToolRequest && appTools) {
+          const toolCallId = `${appToolRequest.name}-${Date.now()}`;
+          const toolTitle = appToolRequest.args.name ?? appToolRequest.name.replaceAll("_", " ");
+          setMessages((prev) => [
+            ...prev.slice(0, -1),
+            {
+              id: `tool-${toolCallId}`,
+              role: "tool",
+              content: "",
+              timestamp: Date.now(),
+              tool: {
+                id: toolCallId,
+                name: appToolRequest.name,
+                title: toolTitle,
+                status: "running",
+                timestamp: Date.now(),
+              },
+            },
+            prev[prev.length - 1]!,
+          ]);
+
+          const result = await appTools({
+            ...appToolRequest,
+            sourceSessionKey: sessionKey,
+          });
+
+          setMessages((prev) => prev.map((msg) => {
+            if (msg.role === "tool" && msg.tool?.id === toolCallId) {
+              return {
+                ...msg,
+                tool: {
+                  ...msg.tool,
+                  status: "done",
+                  output: result.output ?? result.message,
+                },
+              };
+            }
+            if (msg.id === streamId) {
+              return {
+                ...msg,
+                content: result.message,
+                isStreaming: false,
+              };
+            }
+            return msg;
+          }));
+          setIsStreaming(false);
+          return;
+        }
         const isWorkspaceSession = sessionKey.includes("workspace-");
         const workspaceName = options?.hidden || isWorkspaceSession ? null : findWorkspaceRequest(content);
         if (workspaceName) {
@@ -381,7 +478,7 @@ export function useChat({ engine, sessionKey = "main" }: UseChatOptions): UseCha
         setIsStreaming(false);
       }
     },
-    [engine, sessionKey],
+    [appTools, engine, sessionKey],
   );
 
   return { messages, isStreaming, loading, send };

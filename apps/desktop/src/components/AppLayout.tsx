@@ -9,6 +9,7 @@ import { cn } from "@/lib/cn";
 import { HomeScreen } from "./home/HomeScreen";
 import { useSessions } from "@/hooks/use-sessions";
 import { HIDDEN_PROMPT_MARKER } from "@/hooks/use-chat";
+import type { AppToolHandler } from "@/hooks/use-chat";
 import { ChatPanel } from "./chat/ChatPanel";
 import { ChatInput } from "./chat/ChatInput";
 import { AgentCanvas, type DetailPanel } from "./canvas/AgentCanvas";
@@ -183,6 +184,14 @@ function uniqueAgentId(base: string, existingIds: Set<string>) {
   }
   existingIds.add(id);
   return id;
+}
+
+function normalizeLookup(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 function buildPromotedIdentity(workspace: WorkspaceInfo, draft: WorkspaceDraftAgent) {
@@ -868,6 +877,76 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     }
   }, [activeWorkspaceId, deleteWorkspace, nodeDetail?.title, workspaces]);
 
+  const handleAppTool: AppToolHandler = useCallback(async (request) => {
+    if (request.name === "create_workspace") {
+      const workspace = createWorkspace(request.args.name ?? "");
+      if (!workspace) {
+        return {
+          message: "No pude crear el workspace porque el nombre está vacío.",
+          output: "Workspace creation skipped: empty name.",
+        };
+      }
+      window.setTimeout(() => handleSelectWorkspace(workspace.id), 450);
+      void ensureWorkspaceCoordinator(workspace).catch(() => {});
+      return {
+        message: `Listo, creé el workspace **${workspace.name}**. Ya lo abrí para que podamos definir su contexto, equipo y agentes vinculados.`,
+        output: `Created workspace "${workspace.name}" (${workspace.id}).`,
+      };
+    }
+
+    if (request.name === "delete_workspace") {
+      const requestedName = request.args.name?.trim();
+      if (!requestedName) {
+        return {
+          message: "Necesito el nombre del workspace que quieres eliminar.",
+          output: "Workspace deletion skipped: missing name.",
+        };
+      }
+
+      const lookup = normalizeLookup(requestedName);
+      const workspace = workspaces.find((item) => (
+        normalizeLookup(item.id) === lookup || normalizeLookup(item.name) === lookup
+      ));
+
+      if (!workspace) {
+        const available = workspaces.map((item) => item.name).join(", ") || "no hay workspaces creados";
+        return {
+          message: `No encontré un workspace llamado **${requestedName}**. Workspaces disponibles: ${available}.`,
+          output: `Workspace not found: ${requestedName}`,
+        };
+      }
+
+      handleDeleteWorkspace(workspace.id);
+      return {
+        message: `Listo, eliminé el workspace **${workspace.name}** y quité su coordinator de la configuración local.`,
+        output: `Deleted workspace "${workspace.name}" (${workspace.id}).`,
+      };
+    }
+
+    if (request.name === "list_workspaces") {
+      if (workspaces.length === 0) {
+        return {
+          message: "Todavía no hay workspaces creados.",
+          output: "No workspaces found.",
+        };
+      }
+
+      const lines = workspaces.map((workspace) => {
+        const agentCount = workspace.agentIds.filter((id) => id !== MAIN_AGENT_ID && !id.startsWith("workspace-")).length;
+        return `- ${workspace.name} (${workspace.id}) - ${agentCount} linked agent${agentCount === 1 ? "" : "s"}`;
+      });
+      return {
+        message: `Estos son los workspaces actuales:\n\n${lines.join("\n")}`,
+        output: lines.join("\n"),
+      };
+    }
+
+    return {
+      message: "Esa herramienta de workspace todavía no está disponible.",
+      output: `Unsupported app tool: ${request.name}`,
+    };
+  }, [createWorkspace, ensureWorkspaceCoordinator, handleDeleteWorkspace, handleSelectWorkspace, workspaces]);
+
   const handleRemoveAgentFromWorkspace = useCallback((workspaceId: string, agentId: string) => {
     unlinkAgent(workspaceId, agentId);
     if (activeWorkspaceId === workspaceId && activeAgentId === agentId) {
@@ -1253,6 +1332,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                   onToggleTerminal={toggleTerminal}
                   terminalOpen={showTerminal}
                   reserveCanvasControlsSpace={!showThirdPanel && !showSettings && !showPreview}
+                  appTools={handleAppTool}
                 />
               ) : showNewChat ? (
                 <NewChatView
