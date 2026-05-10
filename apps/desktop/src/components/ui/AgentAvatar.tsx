@@ -6,11 +6,12 @@ interface AgentAvatarProps {
   emoji?: string;
   avatar?: string;
   isMain?: boolean;
-  size?: "sm" | "md" | "lg";
+  size?: "xs" | "sm" | "md" | "lg";
   className?: string;
 }
 
 const SIZES = {
+  xs: { container: "h-4 w-4", icon: "h-2 w-2", emoji: "text-[9px]", img: "h-4 w-4" },
   sm: { container: "h-5 w-5", icon: "h-2.5 w-2.5", emoji: "text-[10px]", img: "h-5 w-5" },
   md: { container: "h-6 w-6", icon: "h-3 w-3", emoji: "text-xs", img: "h-6 w-6" },
   lg: { container: "h-12 w-12", icon: "h-6 w-6", emoji: "text-2xl", img: "h-12 w-12" },
