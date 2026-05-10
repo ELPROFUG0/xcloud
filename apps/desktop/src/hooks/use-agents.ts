@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
 import { resolveAvatarUrl } from "@/lib/avatar";
+import { ensureAgentDefaultAvatar, isAgentAvatarOptedOut } from "@/lib/update-identity";
 
 export interface AgentInfo {
   id: string;
@@ -158,8 +159,12 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
           : `.openclaw/workspace/${agent.id}/IDENTITY.md`;
         const content = await readTextFile(wsPath, { baseDir: BaseDirectory.Home }).catch(() => "");
         const identity = parseIdentity(content);
-        const avatar = identity.avatar
-          ? await resolveAvatarUrl(agent.id, identity.avatar).catch(() => undefined)
+        const defaultAvatar = !agent.isDefault && !identity.avatar && !isAgentAvatarOptedOut(agent.id)
+          ? await ensureAgentDefaultAvatar(agent.id).catch(() => undefined)
+          : undefined;
+        const avatarField = identity.avatar ?? defaultAvatar;
+        const avatar = avatarField
+          ? await resolveAvatarUrl(agent.id, avatarField).catch(() => undefined)
           : undefined;
         return {
           ...agent,
