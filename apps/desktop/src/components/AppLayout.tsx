@@ -410,6 +410,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const [initialChatPromptHidden, setInitialChatPromptHidden] = useState(false);
   const [showCanvas, setShowCanvas] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
+  const [sidebarAnimationKey, setSidebarAnimationKey] = useState(0);
   const [settingsSection, setSettingsSection] = useState<"models" | "keys" | "channels" | "skills" | "integrations" | "memory" | "appearance" | "engine" | "general">("models");
   const [showPreview, setShowPreview] = useState(false);
   const [nodeDetail, setNodeDetail] = useState<DetailPanel | null>(null);
@@ -451,6 +452,10 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const activeTerminalKey = showSettings ? "settings" : activeAgentId ? `agent:${currentAgentId}` : hasWorkspaceChat ? `workspace:${activeWorkspace.id}` : showNewChat ? "new-chat" : "workspace";
   const activeTerminal = terminalByContext[activeTerminalKey];
   const showTerminal = activeTerminal?.visible ?? false;
+
+  const triggerSidebarAnimation = useCallback(() => {
+    setSidebarAnimationKey((key) => key + 1);
+  }, []);
 
   const ensureWorkspaceCoordinator = useCallback(async (workspace: WorkspaceInfo) => {
     if (ensuringWorkspaceIdsRef.current.has(workspace.id)) return;
@@ -697,6 +702,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   }, []);
 
   const handleSelectWorkspace = useCallback((id: string) => {
+    triggerSidebarAnimation();
     setActiveWorkspaceId(id);
     setActiveAgentId(null);
     setActiveSessionKey(`agent:${getWorkspaceAgentId(id)}:general`);
@@ -707,15 +713,16 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setShowPreview(false);
     setShowCanvas(true);
     setCanvasExpanded(false);
-  }, []);
+  }, [triggerSidebarAnimation]);
 
   const handleLeaveWorkspace = useCallback(() => {
+    triggerSidebarAnimation();
     setActiveWorkspaceId(null);
     setActiveAgentId(null);
     setActiveSessionKey(null);
     setInitialChatPrompt(undefined);
     setInitialChatPromptHidden(false);
-  }, []);
+  }, [triggerSidebarAnimation]);
 
   const handleCreateWorkspace = useCallback((name: string) => {
     const workspace = createWorkspace(name);
@@ -1006,10 +1013,13 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
         <div className="flex flex-1 min-h-0 flex-col" style={{ minWidth: panelWidth }}>
           {showSettings ? (
             /* Settings navigation */
-            <div className="flex h-full flex-col">
+            <div key={`settings:${settingsSection}:${sidebarAnimationKey}`} className="flex h-full flex-col sidebar-view-enter">
               <div className={`px-3 pb-3 ${isFullscreen ? "pt-12" : "pt-14"}`}>
                 <button
-                  onClick={() => setShowSettings(false)}
+                  onClick={() => {
+                    triggerSidebarAnimation();
+                    setShowSettings(false);
+                  }}
                   className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text-muted transition-colors hover:bg-white/6 hover:text-text"
                 >
                   <ArrowLeft className="h-4 w-4" />
@@ -1126,6 +1136,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
               workspaces={workspaces}
               activeWorkspaceId={activeWorkspaceId}
               activeAgentId={activeAgentId}
+              sidebarAnimationKey={sidebarAnimationKey}
               onSelectAgent={handleSelectAgent}
               onSelectWorkspace={handleSelectWorkspace}
               onLeaveWorkspace={handleLeaveWorkspace}
@@ -1140,7 +1151,11 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
               getAgentSessions={getAgentSessions}
               isFullscreen={isFullscreen}
               onRefresh={refreshAgents}
-              onOpenSettings={() => { setShowSettings(true); setSettingsSection("integrations"); }}
+              onOpenSettings={() => {
+                triggerSidebarAnimation();
+                setShowSettings(true);
+                setSettingsSection("integrations");
+              }}
               onSearch={() => setShowCommandPalette(true)}
               onNewChat={handleNewChat}
             />
@@ -1151,7 +1166,11 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
         <div className="shrink-0 px-3 py-1.5" style={{ minWidth: panelWidth, display: showSettings || nodeDetail ? "none" : undefined }}>
           <div className="flex items-center justify-between">
             <button
-              onClick={() => { setShowSettings(!showSettings); setShowPreview(false); }}
+              onClick={() => {
+                triggerSidebarAnimation();
+                setShowSettings(!showSettings);
+                setShowPreview(false);
+              }}
               className="flex items-center gap-2.5 rounded-lg px-2.5 py-1 text-text transition-colors hover:bg-white/6"
             >
               <Settings className="h-4 w-4" />
@@ -1407,6 +1426,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
         onSelectAgent={(id) => { handleSelectAgent(id); }}
         onSelectSession={handleSelectSession}
         onOpenSettings={(section) => {
+          triggerSidebarAnimation();
           setShowSettings(true);
           setSettingsSection(section as typeof settingsSection);
         }}

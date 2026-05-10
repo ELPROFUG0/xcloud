@@ -208,6 +208,51 @@ html, body {
   }
 }
 
+@keyframes sidebarViewIn {
+  from {
+    opacity: 0;
+    filter: blur(14px);
+    transform: translate3d(-18px, 12px, 0) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+  }
+}
+
+.sidebar-view-enter {
+  animation: sidebarViewIn 460ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  backface-visibility: hidden;
+  transform-origin: 50% 0;
+  will-change: opacity, filter, transform;
+}
+
+@keyframes sidebarMainContentIn {
+  from {
+    opacity: 0;
+    filter: blur(12px);
+    transform: translate3d(0, 22px, 0) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+  }
+}
+
+.sidebar-agents-view-enter .sidebar-main-actions,
+.sidebar-agents-view-enter .sidebar-main-list {
+  animation: sidebarMainContentIn 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  backface-visibility: hidden;
+  transform-origin: 50% 0;
+  will-change: opacity, filter, transform;
+}
+
+.sidebar-agents-view-enter .sidebar-main-list {
+  animation-delay: 60ms;
+}
+
 @keyframes cmdPaletteIn {
   from {
     opacity: 0;

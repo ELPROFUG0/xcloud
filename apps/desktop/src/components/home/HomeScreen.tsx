@@ -18,6 +18,7 @@ interface HomeScreenProps {
   workspaces?: WorkspaceInfo[];
   activeWorkspaceId?: string | null;
   activeAgentId?: string | null;
+  sidebarAnimationKey?: number;
   onSelectAgent: (id: string) => void;
   onSelectWorkspace?: (id: string) => void;
   onLeaveWorkspace?: () => void;
@@ -174,6 +175,7 @@ export function HomeScreen({
   workspaces = [],
   activeWorkspaceId,
   activeAgentId,
+  sidebarAnimationKey = 0,
   onSelectAgent,
   onSelectWorkspace,
   onLeaveWorkspace,
@@ -414,7 +416,7 @@ export function HomeScreen({
 
   if (activeWorkspace) {
     return (
-      <div className="flex h-full flex-col">
+      <div key={`workspace:${activeWorkspace.id}:${sidebarAnimationKey}`} className="flex h-full flex-col sidebar-view-enter">
         <div className={`px-3 pb-3 ${isFullscreen ? "pt-12" : "pt-14"}`}>
           <button
             onClick={onLeaveWorkspace}
@@ -621,9 +623,9 @@ export function HomeScreen({
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div key={`agents:${sidebarAnimationKey}`} className="flex h-full flex-col sidebar-view-enter sidebar-agents-view-enter">
       {/* Top actions — padded for macOS traffic lights */}
-      <div className={`flex flex-col gap-1 px-3 pb-2 ${isFullscreen ? "pt-12" : "pt-14"}`}>
+      <div className={`sidebar-main-actions flex flex-col gap-1 px-3 pb-2 ${isFullscreen ? "pt-12" : "pt-14"}`}>
         <button onClick={onNewChat} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text transition-colors hover:bg-white/6">
           <MessageSquarePlus className="h-4 w-4" />
           <span className="text-[13px] font-medium">New chat</span>
@@ -639,7 +641,7 @@ export function HomeScreen({
       </div>
 
       {/* Agent list */}
-      <div className="flex-1 overflow-y-auto px-1.5">
+      <div className="sidebar-main-list flex-1 overflow-y-auto px-1.5">
         {/* Main agent */}
         {mainAgent && (
           <>
