@@ -69,6 +69,17 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
   const sentInitialPromptRef = useRef<string | null>(null);
 
   const pages = useMemo(() => paginate(messages), [messages]);
+  const latestMessageScrollKey = useMemo(() => {
+    const last = messages[messages.length - 1];
+    return [
+      messages.length,
+      last?.id ?? "",
+      last?.content.length ?? 0,
+      last?.isStreaming ? "streaming" : "idle",
+      last?.tool?.status ?? "",
+      last?.tool?.output?.length ?? 0,
+    ].join(":");
+  }, [messages]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const pinnedToBottomRef = useRef(true);
@@ -117,21 +128,29 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
     return () => document.removeEventListener("mousedown", handler);
   }, [showSessions]);
 
-  // Scroll to bottom instantly on mount, smoothly on new messages
+  // Keep the newest message visible as assistant text streams in.
   useLayoutEffect(() => {
-    if (messages.length > 0) {
-      const isFirstLoad = prevMsgCount.current === 0;
-      if (isFirstLoad) {
-        // Instant scroll before paint — no visible jump
-        bottomRef.current?.scrollIntoView({ behavior: "instant" as ScrollBehavior });
-      } else {
-        requestAnimationFrame(() => {
-          bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-        });
-      }
+    const scrollEl = scrollRef.current;
+    if (!scrollEl || messages.length === 0) {
+      prevMsgCount.current = messages.length;
+      return;
     }
+
+    const isFirstLoad = prevMsgCount.current === 0;
+    const messageCountChanged = prevMsgCount.current !== messages.length;
+    const shouldFollow = isFirstLoad || isStreaming || messageCountChanged || pinnedToBottomRef.current;
+
+    if (shouldFollow) {
+      requestAnimationFrame(() => {
+        scrollEl.scrollTo({
+          top: scrollEl.scrollHeight,
+          behavior: isFirstLoad ? "instant" as ScrollBehavior : isStreaming ? "auto" : "smooth",
+        });
+      });
+    }
+
     prevMsgCount.current = messages.length;
-  }, [messages.length]);
+  }, [latestMessageScrollKey, isStreaming, messages.length]);
 
   useEffect(() => {
     const scrollEl = scrollRef.current;
