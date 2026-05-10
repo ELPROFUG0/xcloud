@@ -1099,6 +1099,16 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
         </svg>
       </button>
 
+      {!sidebarCollapsed && (
+        <button
+          type="button"
+          className="fixed z-20 rounded-full bg-[#17A8FD] px-3.5 py-1 text-[12px] font-semibold text-white transition-all hover:bg-[#0798ED] active:scale-[0.98]"
+          style={{ top: 14, left: isFullscreen ? 54 : 122 }}
+        >
+          Update
+        </button>
+      )}
+
       {/* 1. Sidebar — agent list */}
       <div className="flex h-full shrink-0 flex-col" style={{ width: sidebarCollapsed ? 0 : panelWidth, backgroundColor: "rgba(30,30,30,0.30)", overflow: "hidden", transition: isDragging ? "none" : "width 150ms ease" }}>
         <div className="flex flex-1 min-h-0 flex-col" style={{ minWidth: panelWidth }}>
