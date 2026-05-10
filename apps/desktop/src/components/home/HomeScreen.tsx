@@ -314,6 +314,7 @@ export function HomeScreen({
   }, [onDeleteWorkspace]);
 
   const renderAgent = (agent: AgentInfo, isMain: boolean) => {
+    const isActive = activeAgentId === agent.id;
     return (
       <div key={agent.id}>
         <div className="flex items-center">
@@ -321,10 +322,18 @@ export function HomeScreen({
           <button
             onClick={() => onSelectAgent(agent.id)}
             className={cn(
-              "group flex flex-1 items-center gap-2.5 rounded-lg px-2 py-1.5 ml-1 text-left transition-colors",
-              activeAgentId === agent.id ? "bg-white/8" : "hover:bg-white/6 active:bg-white/8",
+              "group relative ml-1 flex flex-1 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors",
+              isActive ? "bg-white/8" : "hover:bg-white/6 active:bg-white/8",
             )}
           >
+            <span
+              className={cn(
+                "pointer-events-none absolute -left-[7px] top-1/2 -translate-y-1/2 rounded-r-full transition-all duration-150",
+                isActive
+                  ? "h-6 w-[3px] bg-[#D4D4D4] opacity-100"
+                  : "h-4 w-[3px] bg-[#D4D4D4] opacity-0 [--sidebar-indicator-height:16px] group-hover:animate-[sidebarIndicatorMorph_180ms_cubic-bezier(0.2,0.8,0.2,1)_forwards] group-hover:opacity-100",
+              )}
+            />
             <AgentAvatar emoji={agent.emoji} avatar={agent.avatar} isMain={isMain} />
             <div className="min-w-0 flex-1">
               <span className="text-[12px] font-medium text-text">
@@ -509,8 +518,8 @@ export function HomeScreen({
                     <button
                       onClick={() => onSelectAgent(agent.id)}
                       className={cn(
-                        "group flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors",
-                        isActive ? "bg-white/8" : "hover:bg-white/6",
+                        "group relative flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors",
+                        isActive ? "bg-white/8" : "hover:bg-white/6 active:bg-white/8",
                       )}
                     >
                     <AgentAvatar emoji={agent.emoji} avatar={agent.avatar} isMain={agent.isDefault} />
@@ -779,27 +788,41 @@ export function HomeScreen({
                       {previewAgents.length === 0 ? (
                         <div className="px-2 py-1 text-[10px] text-[#D4D4D4]">No linked agents</div>
                       ) : (
-                        previewAgents.map((agent) => (
-                          <button
-                            key={agent.id}
-                            onClick={() => {
-                              onSelectWorkspace?.(workspace.id);
-                              onSelectAgent(agent.id);
-                            }}
-                            className="group/mini relative flex w-full items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-white/6"
-                          >
-                            <AgentAvatar
-                              emoji={agent.emoji}
-                              avatar={agent.avatar}
-                              isMain={agent.isDefault}
-                              size="xs"
-                              className="!rounded-[5px]"
-                            />
-                            <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[#D4D4D4]">
-                              {agent.name ?? agent.id}
-                            </span>
-                          </button>
-                        ))
+                        previewAgents.map((agent) => {
+                          const isActive = activeAgentId === agent.id;
+                          return (
+                            <button
+                              key={agent.id}
+                              onClick={() => {
+                                onSelectWorkspace?.(workspace.id);
+                                onSelectAgent(agent.id);
+                              }}
+                              className={cn(
+                                "group/mini relative flex w-full items-center gap-2 rounded-md px-2 py-1 text-left transition-colors",
+                                isActive ? "bg-white/8" : "hover:bg-white/6 active:bg-white/8",
+                              )}
+                            >
+                              <span
+                                className={cn(
+                                  "pointer-events-none absolute -left-[13px] top-1/2 -translate-y-1/2 rounded-r-full transition-all duration-150",
+                                  isActive
+                                    ? "h-5 w-[3px] bg-[#D4D4D4] opacity-100"
+                                    : "h-3.5 w-[3px] bg-[#D4D4D4] opacity-0 [--sidebar-indicator-height:14px] group-hover/mini:animate-[sidebarIndicatorMorph_180ms_cubic-bezier(0.2,0.8,0.2,1)_forwards] group-hover/mini:opacity-100",
+                                )}
+                              />
+                              <AgentAvatar
+                                emoji={agent.emoji}
+                                avatar={agent.avatar}
+                                isMain={agent.isDefault}
+                                size="xs"
+                                className="!rounded-[5px]"
+                              />
+                              <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[#D4D4D4]">
+                                {agent.name ?? agent.id}
+                              </span>
+                            </button>
+                          );
+                        })
                       )}
                     </div>
                   )}

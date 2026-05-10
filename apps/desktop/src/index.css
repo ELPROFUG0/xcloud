@@ -230,6 +230,21 @@ html, body {
   }
 }
 
+@keyframes sidebarIndicatorMorph {
+  0% {
+    height: 3px;
+    border-radius: 9999px;
+  }
+  70% {
+    height: calc(var(--sidebar-indicator-height) + 2px);
+    border-radius: 9999px;
+  }
+  100% {
+    height: var(--sidebar-indicator-height);
+    border-radius: 0 9999px 9999px 0;
+  }
+}
+
 @keyframes popoverOut {
   from {
     opacity: 1;
