@@ -191,9 +191,9 @@ function notifyChatSession(sessionKey: string) {
   chatSessionListeners.get(sessionKey)?.forEach((listener) => listener());
 }
 
-function emitChatSessionActivity(sessionKey: string) {
+function emitChatSessionActivity(sessionKey: string, options?: { working?: boolean }) {
   window.dispatchEvent(new CustomEvent("xcloud-chat-session-activity", {
-    detail: { sessionKey },
+    detail: { sessionKey, ...options },
   }));
 }
 
@@ -461,7 +461,7 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
           ? ensureStreamingAssistant(state.messages, delta)
           : setStreamingAssistantText(state.messages, text),
       }));
-      emitChatSessionActivity(sessionKey);
+      emitChatSessionActivity(sessionKey, { working: true });
     }
 
     if (stream === "lifecycle") {
@@ -473,7 +473,7 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
           loading: false,
           messages: ensureStreamingAssistant(state.messages),
         }));
-        emitChatSessionActivity(sessionKey);
+        emitChatSessionActivity(sessionKey, { working: true });
       }
       if (phase === "end") {
         updateChatSession(sessionKey, (state) => ({
@@ -482,7 +482,7 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
           loading: false,
           messages: finishStreamingAssistant(state.messages),
         }));
-        emitChatSessionActivity(sessionKey);
+        emitChatSessionActivity(sessionKey, { working: false });
       }
     }
 
@@ -509,7 +509,7 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
             { id: `tool-${toolCallId}`, role: "tool" as const, content: "", timestamp: Date.now(), tool: toolInfo },
           ];
         });
-        emitChatSessionActivity(sessionKey);
+        emitChatSessionActivity(sessionKey, { working: true });
       } else if (phase === "end") {
         const finalStatus = data.status === "completed" ? "done" : "error";
         updateChatMessages(sessionKey, (messages) =>
@@ -519,7 +519,7 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
               : message,
           ),
         );
-        emitChatSessionActivity(sessionKey);
+        emitChatSessionActivity(sessionKey, { working: true });
       }
     }
 
@@ -534,7 +534,7 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
               : message,
           ),
         );
-        emitChatSessionActivity(sessionKey);
+        emitChatSessionActivity(sessionKey, { working: true });
       }
     }
   }
@@ -563,7 +563,7 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
           loading: false,
         };
       });
-      emitChatSessionActivity(sessionKey);
+      emitChatSessionActivity(sessionKey, { working: false });
     } else if (state === "final") {
       updateChatSession(sessionKey, (current) => ({
         ...current,
@@ -571,7 +571,7 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
         isStreaming: false,
         loading: false,
       }));
-      emitChatSessionActivity(sessionKey);
+      emitChatSessionActivity(sessionKey, { working: false });
     }
   }
 }
@@ -680,6 +680,7 @@ export function useChat({ engine, sessionKey = "main", appTools }: UseChatOption
           { id: streamId, role: "assistant", content: "", timestamp: Date.now(), isStreaming: true },
         ],
       }));
+      emitChatSessionActivity(sessionKey, { working: true });
 
       try {
         const appToolRequest = findAppToolRequest(content, sessionKey, options?.hidden);
@@ -733,6 +734,7 @@ export function useChat({ engine, sessionKey = "main", appTools }: UseChatOption
               return msg;
             }),
           }));
+          emitChatSessionActivity(sessionKey, { working: false });
           return;
         }
         const isWorkspaceSession = sessionKey.includes("workspace-");
@@ -770,6 +772,7 @@ export function useChat({ engine, sessionKey = "main", appTools }: UseChatOption
             return msg;
           }),
         }));
+        emitChatSessionActivity(sessionKey, { working: false });
       }
     },
     [appTools, engine, sessionKey],

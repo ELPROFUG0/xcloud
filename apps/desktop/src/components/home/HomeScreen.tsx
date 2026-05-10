@@ -6,6 +6,7 @@ import { Search, MessageSquarePlus, Download, MoreHorizontal, Pin, Boxes, Plus, 
 import { cn } from "@/lib/cn";
 import { EmojiPicker } from "../ui/EmojiPicker";
 import { AgentAvatar } from "../ui/AgentAvatar";
+import { DotmSquare12 } from "../ui/dotm-square-12";
 import { updateAgentEmoji } from "@/lib/update-identity";
 import gmailIcon from "@/assets/setup-icons/gmail.svg";
 import slackIcon from "@/assets/setup-icons/slack.svg";
@@ -20,6 +21,8 @@ interface HomeScreenProps {
   activeAgentId?: string | null;
   sidebarAnimationKey?: number;
   unreadAgentIds?: Set<string>;
+  workingAgentIds?: Set<string>;
+  agentActivityAt?: Record<string, number>;
   onSelectAgent: (id: string) => void;
   onSelectWorkspace?: (id: string) => void;
   onLeaveWorkspace?: () => void;
@@ -71,6 +74,37 @@ function isWorkspaceOwnedAgent(agent: AgentInfo, workspaces: WorkspaceInfo[]) {
   if (agent.isDefault) return false;
   if (agent.id.startsWith("workspace-")) return true;
   return workspaces.some((workspace) => isWorkspaceSpecialistAgent(agent, workspace));
+}
+
+function formatCompactRelativeTime(timestamp: number | undefined, now: number) {
+  if (!timestamp) return "";
+  const diff = Math.max(0, now - timestamp);
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return "now";
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}hr`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return `${weeks}w`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${Math.max(1, months)}M`;
+  return `${Math.floor(days / 365)}y`;
+}
+
+function AgentActivityDots() {
+  return (
+    <DotmSquare12
+      ariaLabel="Agent working"
+      size={18}
+      dotSize={2}
+      cellPadding={1.25}
+      speed={1.25}
+      color="#D4D4D4"
+      className="shrink-0 text-[#D4D4D4] group-hover:hidden"
+    />
+  );
 }
 
 function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { mainAgent: AgentInfo; agents: AgentInfo[]; onSelectAgent: (id: string) => void; onOpenSettings?: () => void }) {
@@ -178,6 +212,8 @@ export function HomeScreen({
   activeAgentId,
   sidebarAnimationKey = 0,
   unreadAgentIds = new Set(),
+  workingAgentIds = new Set(),
+  agentActivityAt = {},
   onSelectAgent,
   onSelectWorkspace,
   onLeaveWorkspace,
@@ -188,12 +224,14 @@ export function HomeScreen({
   onOpenWorkspaceContext,
   onDeleteAgent,
   onDeleteWorkspace,
+  getAgentSessions,
   isFullscreen,
   onRefresh,
   onOpenSettings,
   onSearch,
   onNewChat,
 }: HomeScreenProps) {
+  const [relativeNow, setRelativeNow] = useState(() => Date.now());
   const globalAgents = agents.filter((agent) => !isWorkspaceOwnedAgent(agent, workspaces));
   const mainAgent = globalAgents.find((a) => a.isDefault) ?? agents.find((a) => a.isDefault) ?? globalAgents[0] ?? agents[0];
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
@@ -261,6 +299,21 @@ export function HomeScreen({
     });
   }, []);
 
+  useEffect(() => {
+    const interval = window.setInterval(() => setRelativeNow(Date.now()), 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const getLastInteractionLabel = useCallback((agentId: string) => {
+    const latestSessionAt = Math.max(0, ...(getAgentSessions?.(agentId) ?? []).map((session) => session.updatedAt || 0));
+    const latestActivityAt = agentActivityAt[agentId] ?? 0;
+    return formatCompactRelativeTime(Math.max(latestSessionAt, latestActivityAt), relativeNow);
+  }, [agentActivityAt, getAgentSessions, relativeNow]);
+
+  const isAgentWorking = useCallback((agentId: string) => {
+    return workingAgentIds.has(agentId) || (getAgentSessions?.(agentId) ?? []).some((session) => session.status === "working");
+  }, [getAgentSessions, workingAgentIds]);
+
   // Close menu on click outside
   useEffect(() => {
     if (!menuAgentId) return;
@@ -320,6 +373,8 @@ export function HomeScreen({
   const renderAgent = (agent: AgentInfo, isMain: boolean) => {
     const isActive = activeAgentId === agent.id;
     const hasUnread = unreadAgentIds.has(agent.id) && !isActive;
+    const isWorking = isAgentWorking(agent.id);
+    const lastInteraction = getLastInteractionLabel(agent.id);
     return (
       <div key={agent.id}>
         <div className="flex items-center">
@@ -347,11 +402,13 @@ export function HomeScreen({
                 {agent.name ?? agent.id}
               </span>
             </div>
-            {/* Status dot — hidden on hover, replaced by 3 dots */}
-            <div className={cn(
-              "h-1.5 w-1.5 shrink-0 rounded-full group-hover:hidden",
-              agent.status === "active" ? "bg-emerald-400" : "bg-text-muted/40",
-            )} />
+            {isWorking ? (
+              <AgentActivityDots />
+            ) : lastInteraction && (
+              <span className="shrink-0 text-[10px] font-medium text-text-muted/60 group-hover:hidden">
+                {lastInteraction}
+              </span>
+            )}
             <div className="relative">
               <button
                 onClick={(e) => { e.stopPropagation(); setMenuAgentId(menuAgentId === agent.id ? null : agent.id); }}

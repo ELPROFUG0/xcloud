@@ -447,6 +447,8 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const [showOnboardingPreview, setShowOnboardingPreview] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [unreadSessionKeys, setUnreadSessionKeys] = useState<Set<string>>(() => new Set());
+  const [workingSessionKeys, setWorkingSessionKeys] = useState<Set<string>>(() => new Set());
+  const [agentActivityAt, setAgentActivityAt] = useState<Record<string, number>>({});
   const [terminalByContext, setTerminalByContext] = useState<Record<string, TerminalContextState>>({});
   const [terminalHeight, setTerminalHeight] = useState(() => {
     const saved = localStorage.getItem("terminalHeight");
@@ -474,6 +476,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     : null;
   const activeChatSessionKeyRef = useRef<string | null>(null);
   const unreadAgentIds = useMemo(() => new Set([...unreadSessionKeys].map(getAgentIdFromSessionKey)), [unreadSessionKeys]);
+  const workingAgentIds = useMemo(() => new Set([...workingSessionKeys].map(getAgentIdFromSessionKey)), [workingSessionKeys]);
   const activeTerminalKey = showSettings ? "settings" : activeAgentId ? `agent:${currentAgentId}` : hasWorkspaceChat ? `workspace:${activeWorkspace.id}` : showNewChat ? "new-chat" : "workspace";
   const activeTerminal = terminalByContext[activeTerminalKey];
   const showTerminal = activeTerminal?.visible ?? false;
@@ -503,8 +506,22 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
 
   useEffect(() => {
     const handleActivity = (event: Event) => {
-      const sessionKey = (event as CustomEvent<{ sessionKey?: string }>).detail?.sessionKey;
+      const detail = (event as CustomEvent<{ sessionKey?: string; working?: boolean }>).detail;
+      const sessionKey = detail?.sessionKey;
       if (!sessionKey) return;
+      const agentId = getAgentIdFromSessionKey(sessionKey);
+      setAgentActivityAt((current) => ({ ...current, [agentId]: Date.now() }));
+      if (typeof detail.working === "boolean") {
+        setWorkingSessionKeys((current) => {
+          const hasMatching = [...current].some((key) => sessionKeysMatch(key, sessionKey));
+          if (detail.working) {
+            if (hasMatching) return current;
+            return new Set(current).add(sessionKey);
+          }
+          if (!hasMatching) return current;
+          return new Set([...current].filter((key) => !sessionKeysMatch(key, sessionKey)));
+        });
+      }
       setUnreadSessionKeys((current) => {
         if (sessionKeysMatch(sessionKey, activeChatSessionKeyRef.current)) {
           if (![...current].some((key) => sessionKeysMatch(key, sessionKey))) return current;
@@ -1212,6 +1229,8 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
               activeAgentId={activeAgentId}
               sidebarAnimationKey={sidebarAnimationKey}
               unreadAgentIds={unreadAgentIds}
+              workingAgentIds={workingAgentIds}
+              agentActivityAt={agentActivityAt}
               onSelectAgent={handleSelectAgent}
               onSelectWorkspace={handleSelectWorkspace}
               onLeaveWorkspace={handleLeaveWorkspace}
