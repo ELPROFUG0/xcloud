@@ -3,6 +3,7 @@ import { ToolCallBadge } from "./chat/ToolCallBadge";
 import { MessageBubble } from "./chat/MessageBubble";
 import { Shimmer } from "./ai-elements/shimmer";
 import { ThinkingBlock } from "./chat/ThinkingBlock";
+import { XCloudDotLogo } from "./ui/XCloudDotLogo";
 import type { ToolCallInfo } from "@/types/chat";
 import type { ChatMessage } from "@/types/chat";
 
@@ -65,6 +66,25 @@ export function DevPreview() {
             <Shimmer className="text-sm" duration={1.5}>Thinking...</Shimmer>
             <Shimmer className="text-base" duration={2}>Analyzing your code and preparing a response</Shimmer>
             <Shimmer className="text-xs" duration={1}>Loading</Shimmer>
+          </div>
+        </section>
+
+        {/* XCloud Dot Logo */}
+        <section>
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-text-muted mb-3">XCloud Dot Logo</h2>
+          <div className="flex flex-wrap items-center gap-6 rounded-xl border border-border bg-surface/30 px-5 py-4">
+            <div className="space-y-2">
+              <XCloudDotLogo size={56} cells={22} dotSize={1.55} speed={1.15} />
+              <p className="text-[10px] text-text-muted">22 cells</p>
+            </div>
+            <div className="space-y-2">
+              <XCloudDotLogo size={80} cells={30} dotSize={1.9} speed={1.2} />
+              <p className="text-[10px] text-text-muted">30 cells</p>
+            </div>
+            <div className="space-y-2">
+              <XCloudDotLogo size={112} cells={36} dotSize={2.2} speed={1.25} />
+              <p className="text-[10px] text-text-muted">36 cells</p>
+            </div>
           </div>
         </section>
 

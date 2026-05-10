@@ -6,7 +6,7 @@ import { Search, MessageSquarePlus, Download, MoreHorizontal, Pin, Boxes, Plus, 
 import { cn } from "@/lib/cn";
 import { EmojiPicker } from "../ui/EmojiPicker";
 import { AgentAvatar } from "../ui/AgentAvatar";
-import { DotmSquare12 } from "../ui/dotm-square-12";
+import { XCloudDotLogo } from "../ui/XCloudDotLogo";
 import { updateAgentEmoji } from "@/lib/update-identity";
 import gmailIcon from "@/assets/setup-icons/gmail.svg";
 import slackIcon from "@/assets/setup-icons/slack.svg";
@@ -93,16 +93,22 @@ function formatCompactRelativeTime(timestamp: number | undefined, now: number) {
   return `${Math.floor(days / 365)}y`;
 }
 
-function AgentActivityDots() {
+function AgentActivityDots({
+  size = 18,
+  dotSize = 0.42,
+  className,
+}: {
+  size?: number;
+  dotSize?: number;
+  className?: string;
+}) {
   return (
-    <DotmSquare12
-      ariaLabel="Agent working"
-      size={18}
-      dotSize={2}
-      cellPadding={1.25}
+    <XCloudDotLogo
+      size={size}
+      cells={36}
+      dotSize={dotSize}
       speed={1.25}
-      color="#D4D4D4"
-      className="shrink-0 text-[#D4D4D4] group-hover:hidden"
+      className={cn("shrink-0", className)}
     />
   );
 }
@@ -403,7 +409,7 @@ export function HomeScreen({
               </span>
             </div>
             {isWorking ? (
-              <AgentActivityDots />
+              <AgentActivityDots className="group-hover:hidden" />
             ) : lastInteraction && (
               <span className="shrink-0 text-[10px] font-medium text-text-muted/60 group-hover:hidden">
                 {lastInteraction}
@@ -559,6 +565,8 @@ export function HomeScreen({
               )}
               {workspaceAgents.map((agent, index) => {
                 const isActive = activeAgentId === agent.id;
+                const isWorking = isAgentWorking(agent.id);
+                const lastInteraction = getLastInteractionLabel(agent.id);
                 return (
                   <div key={agent.id} className="relative py-0.5">
                     <svg
@@ -589,6 +597,13 @@ export function HomeScreen({
                     <AgentAvatar emoji={agent.emoji} avatar={agent.avatar} isMain={agent.isDefault} />
                     <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-text">{agent.name ?? agent.id}</span>
                     {agent.isDefault && <GitBranch className="h-3.5 w-3.5 text-text-muted/70" />}
+                    {isWorking ? (
+                      <AgentActivityDots className="group-hover:hidden" />
+                    ) : lastInteraction && (
+                      <span className="shrink-0 text-[10px] font-medium text-text-muted/60 group-hover:hidden">
+                        {lastInteraction}
+                      </span>
+                    )}
                     <span className="relative">
                       <span
                         role="button"
@@ -855,6 +870,8 @@ export function HomeScreen({
                         previewAgents.map((agent) => {
                           const isActive = activeAgentId === agent.id;
                           const hasUnread = unreadAgentIds.has(agent.id) && !isActive;
+                          const isWorking = isAgentWorking(agent.id);
+                          const lastInteraction = getLastInteractionLabel(agent.id);
                           return (
                             <button
                               key={agent.id}
@@ -887,6 +904,17 @@ export function HomeScreen({
                               <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[#D4D4D4]">
                                 {agent.name ?? agent.id}
                               </span>
+                              {isWorking ? (
+                                <AgentActivityDots
+                                  size={14}
+                                  dotSize={0.34}
+                                  className="group-hover/mini:hidden"
+                                />
+                              ) : lastInteraction && (
+                                <span className="shrink-0 text-[9px] font-medium text-text-muted/60 group-hover/mini:hidden">
+                                  {lastInteraction}
+                                </span>
+                              )}
                             </button>
                           );
                         })
