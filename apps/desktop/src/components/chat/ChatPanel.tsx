@@ -243,8 +243,12 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
     void send(initialPrompt, { hidden: initialPromptHidden });
   }, [initialPrompt, initialPromptHidden, loading, send]);
 
+  if (loading) {
+    return <div className="flex h-full flex-col" aria-busy="true" />;
+  }
+
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col animate-[fadeBlurInStable_220ms_ease-out]">
       {/* Header */}
       <header className="flex h-9 shrink-0 items-center px-4 border-b border-border" style={{ paddingLeft: sidebarCollapsed ? (isFullscreen ? 50 : 110) : undefined, transition: "padding-left 150ms ease" }}>
         <div className="relative flex items-center gap-2">
