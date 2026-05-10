@@ -165,6 +165,7 @@ interface ChatSessionState {
 
 const chatSessions = new Map<string, ChatSessionState>();
 const chatSessionListeners = new Map<string, Set<() => void>>();
+const runSessionKeys = new Map<string, string>();
 const engineEventBridges = new WeakSet<BrowserEngine>();
 const engineSubscribedSessions = new WeakMap<BrowserEngine, Set<string>>();
 
@@ -188,6 +189,18 @@ function getChatSessionState(sessionKey: string): ChatSessionState {
 
 function notifyChatSession(sessionKey: string) {
   chatSessionListeners.get(sessionKey)?.forEach((listener) => listener());
+}
+
+function emitChatSessionActivity(sessionKey: string) {
+  window.dispatchEvent(new CustomEvent("xcloud-chat-session-activity", {
+    detail: { sessionKey },
+  }));
+}
+
+function emitChatSessionRead(sessionKey: string) {
+  window.dispatchEvent(new CustomEvent("xcloud-chat-session-read", {
+    detail: { sessionKey },
+  }));
 }
 
 function subscribeChatSession(sessionKey: string, listener: () => void) {
@@ -223,18 +236,30 @@ function matchesSessionKey(eventSessionKey: string, sessionKey: string) {
 }
 
 function resolveEventSessionKeys(payload: Record<string, unknown>) {
+  const runId = typeof payload.runId === "string" ? payload.runId : undefined;
+  if (runId && runSessionKeys.has(runId)) return [runSessionKeys.get(runId)!];
+
   const eventSessionKey = payload.sessionKey as string | undefined;
   if (eventSessionKey) {
     for (const sessionKey of chatSessions.keys()) {
-      if (matchesSessionKey(eventSessionKey, sessionKey)) return [sessionKey];
+      if (matchesSessionKey(eventSessionKey, sessionKey)) {
+        if (runId) runSessionKeys.set(runId, sessionKey);
+        return [sessionKey];
+      }
     }
-    return [eventSessionKey === "agent:main:main" ? "main" : eventSessionKey];
+    const resolvedSessionKey = eventSessionKey === "agent:main:main" ? "main" : eventSessionKey;
+    if (runId) runSessionKeys.set(runId, resolvedSessionKey);
+    return [resolvedSessionKey];
   }
 
   const streamingSessions = [...chatSessions.entries()]
     .filter(([, state]) => state.isStreaming)
     .map(([sessionKey]) => sessionKey);
-  return streamingSessions.length === 1 ? streamingSessions : [];
+  if (streamingSessions.length === 1) {
+    if (runId) runSessionKeys.set(runId, streamingSessions[0]!);
+    return streamingSessions;
+  }
+  return [];
 }
 
 function ensureStreamingAssistant(messages: ChatMessage[], content = ""): ChatMessage[] {
@@ -245,6 +270,45 @@ function ensureStreamingAssistant(messages: ChatMessage[], content = ""): ChatMe
   return [
     ...messages,
     { id: `assistant-${Date.now()}`, role: "assistant", content, timestamp: Date.now(), isStreaming: true },
+  ];
+}
+
+function setStreamingAssistantText(messages: ChatMessage[], text: string): ChatMessage[] {
+  const last = messages[messages.length - 1];
+  if (last?.role === "assistant" && last.isStreaming) {
+    return [...messages.slice(0, -1), { ...last, content: text }];
+  }
+  return [
+    ...messages,
+    { id: `assistant-${Date.now()}`, role: "assistant", content: text, timestamp: Date.now(), isStreaming: true },
+  ];
+}
+
+function finishStreamingAssistant(messages: ChatMessage[]): ChatMessage[] {
+  const last = messages[messages.length - 1];
+  if (last?.role !== "assistant" || !last.isStreaming) return messages;
+  if (!last.content.trim() && !last.thinking) return messages.slice(0, -1);
+  return [...messages.slice(0, -1), { ...last, isStreaming: false }];
+}
+
+function applyFinalAssistantText(messages: ChatMessage[], text: string): ChatMessage[] {
+  if (!text.trim()) return finishStreamingAssistant(messages);
+
+  const last = messages[messages.length - 1];
+  if (last?.role === "assistant") {
+    const currentText = last.content.trim();
+    const finalText = text.trim();
+    if (last.isStreaming || currentText === finalText || finalText.startsWith(currentText) || currentText.startsWith(finalText)) {
+      return [
+        ...messages.slice(0, -1),
+        { ...last, content: text, isStreaming: false },
+      ];
+    }
+  }
+
+  return [
+    ...finishStreamingAssistant(messages),
+    { id: `assistant-${Date.now()}`, role: "assistant", content: text, timestamp: Date.now() },
   ];
 }
 
@@ -386,13 +450,18 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
     const stream = payload.stream as string;
     const data = payload.data as Record<string, unknown> | undefined;
 
-    if (stream === "assistant" && data?.delta) {
+    if (stream === "assistant" && (typeof data?.delta === "string" || typeof data?.text === "string")) {
+      const delta = typeof data?.delta === "string" ? data.delta : "";
+      const text = typeof data?.text === "string" ? data.text : "";
       updateChatSession(sessionKey, (state) => ({
         ...state,
         isStreaming: true,
         loading: false,
-        messages: ensureStreamingAssistant(state.messages, data.delta as string),
+        messages: delta
+          ? ensureStreamingAssistant(state.messages, delta)
+          : setStreamingAssistantText(state.messages, text),
       }));
+      emitChatSessionActivity(sessionKey);
     }
 
     if (stream === "lifecycle") {
@@ -404,6 +473,16 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
           loading: false,
           messages: ensureStreamingAssistant(state.messages),
         }));
+        emitChatSessionActivity(sessionKey);
+      }
+      if (phase === "end") {
+        updateChatSession(sessionKey, (state) => ({
+          ...state,
+          isStreaming: false,
+          loading: false,
+          messages: finishStreamingAssistant(state.messages),
+        }));
+        emitChatSessionActivity(sessionKey);
       }
     }
 
@@ -430,6 +509,7 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
             { id: `tool-${toolCallId}`, role: "tool" as const, content: "", timestamp: Date.now(), tool: toolInfo },
           ];
         });
+        emitChatSessionActivity(sessionKey);
       } else if (phase === "end") {
         const finalStatus = data.status === "completed" ? "done" : "error";
         updateChatMessages(sessionKey, (messages) =>
@@ -439,6 +519,7 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
               : message,
           ),
         );
+        emitChatSessionActivity(sessionKey);
       }
     }
 
@@ -453,6 +534,7 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
               : message,
           ),
         );
+        emitChatSessionActivity(sessionKey);
       }
     }
   }
@@ -474,26 +556,22 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
       }
 
       updateChatSession(sessionKey, (current) => {
-        const last = current.messages[current.messages.length - 1];
-        const messages = last?.role === "assistant" && last.isStreaming
-          ? [
-              ...current.messages.slice(0, -1),
-              { ...last, content: text || last.content, isStreaming: false },
-            ]
-          : text
-            ? [
-                ...current.messages,
-                { id: `assistant-${Date.now()}`, role: "assistant" as const, content: text, timestamp: Date.now() },
-              ]
-            : current.messages;
-
         return {
           ...current,
-          messages,
+          messages: applyFinalAssistantText(current.messages, text),
           isStreaming: false,
           loading: false,
         };
       });
+      emitChatSessionActivity(sessionKey);
+    } else if (state === "final") {
+      updateChatSession(sessionKey, (current) => ({
+        ...current,
+        messages: finishStreamingAssistant(current.messages),
+        isStreaming: false,
+        loading: false,
+      }));
+      emitChatSessionActivity(sessionKey);
     }
   }
 }
@@ -575,6 +653,7 @@ export function useChat({ engine, sessionKey = "main", appTools }: UseChatOption
     ensureEngineEventBridge(engine);
     ensureEngineSessionSubscription(engine, sessionKey);
     ensureSessionHistory(engine, sessionKey);
+    emitChatSessionRead(sessionKey);
     return unsubscribe;
   }, [engine, sessionKey]);
 
@@ -663,7 +742,8 @@ export function useChat({ engine, sessionKey = "main", appTools }: UseChatOption
             detail: { name: workspaceName, sourceSessionKey: sessionKey },
           }));
         }
-        await engine.sendMessage(sessionKey, content.trim());
+        const result = await engine.sendMessage(sessionKey, content.trim());
+        if (result.runId) runSessionKeys.set(result.runId, sessionKey);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         updateChatSession(sessionKey, (state) => ({

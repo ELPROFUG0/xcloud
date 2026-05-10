@@ -19,6 +19,7 @@ interface HomeScreenProps {
   activeWorkspaceId?: string | null;
   activeAgentId?: string | null;
   sidebarAnimationKey?: number;
+  unreadAgentIds?: Set<string>;
   onSelectAgent: (id: string) => void;
   onSelectWorkspace?: (id: string) => void;
   onLeaveWorkspace?: () => void;
@@ -176,6 +177,7 @@ export function HomeScreen({
   activeWorkspaceId,
   activeAgentId,
   sidebarAnimationKey = 0,
+  unreadAgentIds = new Set(),
   onSelectAgent,
   onSelectWorkspace,
   onLeaveWorkspace,
@@ -317,6 +319,7 @@ export function HomeScreen({
 
   const renderAgent = (agent: AgentInfo, isMain: boolean) => {
     const isActive = activeAgentId === agent.id;
+    const hasUnread = unreadAgentIds.has(agent.id) && !isActive;
     return (
       <div key={agent.id}>
         <div className="flex items-center">
@@ -333,7 +336,9 @@ export function HomeScreen({
                 "pointer-events-none absolute -left-[7px] top-1/2 -translate-y-1/2 rounded-r-full transition-all duration-150",
                 isActive
                   ? "h-6 w-[3px] bg-[#D4D4D4] opacity-100"
-                  : "h-4 w-[3px] bg-[#D4D4D4] opacity-0 [--sidebar-indicator-height:16px] group-hover:animate-[sidebarIndicatorMorph_180ms_cubic-bezier(0.2,0.8,0.2,1)_forwards] group-hover:opacity-100",
+                  : hasUnread
+                    ? "h-1.5 w-1.5 rounded-full bg-accent opacity-100 shadow-[0_0_8px_rgba(99,102,241,0.75)] group-hover:h-4 group-hover:w-[3px] group-hover:rounded-r-full group-hover:bg-[#D4D4D4] group-hover:shadow-none"
+                    : "h-4 w-[3px] bg-[#D4D4D4] opacity-0 [--sidebar-indicator-height:16px] group-hover:animate-[sidebarIndicatorMorph_180ms_cubic-bezier(0.2,0.8,0.2,1)_forwards] group-hover:opacity-100",
               )}
             />
             <AgentAvatar emoji={agent.emoji} avatar={agent.avatar} isMain={isMain} />
@@ -792,6 +797,7 @@ export function HomeScreen({
                       ) : (
                         previewAgents.map((agent) => {
                           const isActive = activeAgentId === agent.id;
+                          const hasUnread = unreadAgentIds.has(agent.id) && !isActive;
                           return (
                             <button
                               key={agent.id}
@@ -809,7 +815,9 @@ export function HomeScreen({
                                   "pointer-events-none absolute -left-[13px] top-1/2 -translate-y-1/2 rounded-r-full transition-all duration-150",
                                   isActive
                                     ? "h-5 w-[3px] bg-[#D4D4D4] opacity-100"
-                                    : "h-3.5 w-[3px] bg-[#D4D4D4] opacity-0 [--sidebar-indicator-height:14px] group-hover/mini:animate-[sidebarIndicatorMorph_180ms_cubic-bezier(0.2,0.8,0.2,1)_forwards] group-hover/mini:opacity-100",
+                                    : hasUnread
+                                      ? "h-1.5 w-1.5 rounded-full bg-accent opacity-100 shadow-[0_0_8px_rgba(99,102,241,0.75)] group-hover/mini:h-3.5 group-hover/mini:w-[3px] group-hover/mini:rounded-r-full group-hover/mini:bg-[#D4D4D4] group-hover/mini:shadow-none"
+                                      : "h-3.5 w-[3px] bg-[#D4D4D4] opacity-0 [--sidebar-indicator-height:14px] group-hover/mini:animate-[sidebarIndicatorMorph_180ms_cubic-bezier(0.2,0.8,0.2,1)_forwards] group-hover/mini:opacity-100",
                                 )}
                               />
                               <AgentAvatar

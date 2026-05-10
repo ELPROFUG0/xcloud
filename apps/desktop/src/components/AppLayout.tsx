@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, lazy, Suspense } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo, lazy, Suspense } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { useAgents } from "@/hooks/use-agents";
 import type { AgentInfo } from "@/hooks/use-agents";
@@ -131,6 +131,23 @@ function isWorkspaceOwnedAgent(agent: AgentInfo, workspaces: WorkspaceInfo[]) {
   return workspaces.some((workspace) => (
     workspaceAgentPrefixes(workspace).some((prefix) => agent.id.startsWith(`${prefix}-`))
   ));
+}
+
+function getAgentIdFromSessionKey(sessionKey: string) {
+  if (sessionKey === MAIN_AGENT_ID || sessionKey.startsWith(`${MAIN_AGENT_ID}:`)) return MAIN_AGENT_ID;
+  const parts = sessionKey.split(":");
+  if (parts[0] === "agent" && parts[1]) return parts[1];
+  return MAIN_AGENT_ID;
+}
+
+function getDefaultSessionKeyForAgent(agentId: string) {
+  return agentId === MAIN_AGENT_ID ? MAIN_AGENT_ID : `agent:${agentId}:main`;
+}
+
+function sessionKeysMatch(a: string | null | undefined, b: string | null | undefined) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return (a === MAIN_AGENT_ID && b === "agent:main:main") || (b === MAIN_AGENT_ID && a === "agent:main:main");
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -429,6 +446,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const [canvasOrbs, setCanvasOrbs] = useState(() => localStorage.getItem("canvasUseOrbs") === "true");
   const [showOnboardingPreview, setShowOnboardingPreview] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [unreadSessionKeys, setUnreadSessionKeys] = useState<Set<string>>(() => new Set());
   const [terminalByContext, setTerminalByContext] = useState<Record<string, TerminalContextState>>({});
   const [terminalHeight, setTerminalHeight] = useState(() => {
     const saved = localStorage.getItem("terminalHeight");
@@ -449,6 +467,13 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const activeWorkspaceCoordinatorId = activeWorkspace ? getWorkspaceAgentId(activeWorkspace.id) : null;
   const currentAgentId = activeAgentId ?? activeWorkspaceCoordinatorId ?? defaultAgentId;
   const hasChat = (activeAgentId !== null || hasWorkspaceChat) && !showNewChat;
+  const activeChatSessionKey = hasChat
+    ? hasWorkspaceChat
+      ? (activeSessionKey ?? `agent:${getWorkspaceAgentId(activeWorkspace!.id)}:general`)
+      : (activeSessionKey ?? getDefaultSessionKeyForAgent(currentAgentId))
+    : null;
+  const activeChatSessionKeyRef = useRef<string | null>(null);
+  const unreadAgentIds = useMemo(() => new Set([...unreadSessionKeys].map(getAgentIdFromSessionKey)), [unreadSessionKeys]);
   const activeTerminalKey = showSettings ? "settings" : activeAgentId ? `agent:${currentAgentId}` : hasWorkspaceChat ? `workspace:${activeWorkspace.id}` : showNewChat ? "new-chat" : "workspace";
   const activeTerminal = terminalByContext[activeTerminalKey];
   const showTerminal = activeTerminal?.visible ?? false;
@@ -456,6 +481,52 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const triggerSidebarAnimation = useCallback(() => {
     setSidebarAnimationKey((key) => key + 1);
   }, []);
+
+  const clearUnreadForAgent = useCallback((agentId: string) => {
+    setUnreadSessionKeys((current) => {
+      const next = new Set([...current].filter((sessionKey) => getAgentIdFromSessionKey(sessionKey) !== agentId));
+      return next.size === current.size ? current : next;
+    });
+  }, []);
+
+  const clearUnreadForSession = useCallback((sessionKey: string) => {
+    setUnreadSessionKeys((current) => {
+      if (![...current].some((key) => sessionKeysMatch(key, sessionKey))) return current;
+      return new Set([...current].filter((key) => !sessionKeysMatch(key, sessionKey)));
+    });
+  }, []);
+
+  useEffect(() => {
+    activeChatSessionKeyRef.current = activeChatSessionKey;
+    if (activeChatSessionKey) clearUnreadForSession(activeChatSessionKey);
+  }, [activeChatSessionKey, clearUnreadForSession]);
+
+  useEffect(() => {
+    const handleActivity = (event: Event) => {
+      const sessionKey = (event as CustomEvent<{ sessionKey?: string }>).detail?.sessionKey;
+      if (!sessionKey) return;
+      setUnreadSessionKeys((current) => {
+        if (sessionKeysMatch(sessionKey, activeChatSessionKeyRef.current)) {
+          if (![...current].some((key) => sessionKeysMatch(key, sessionKey))) return current;
+          return new Set([...current].filter((key) => !sessionKeysMatch(key, sessionKey)));
+        }
+        if ([...current].some((key) => sessionKeysMatch(key, sessionKey))) return current;
+        return new Set(current).add(sessionKey);
+      });
+    };
+
+    const handleRead = (event: Event) => {
+      const sessionKey = (event as CustomEvent<{ sessionKey?: string }>).detail?.sessionKey;
+      if (sessionKey) clearUnreadForSession(sessionKey);
+    };
+
+    window.addEventListener("xcloud-chat-session-activity", handleActivity);
+    window.addEventListener("xcloud-chat-session-read", handleRead);
+    return () => {
+      window.removeEventListener("xcloud-chat-session-activity", handleActivity);
+      window.removeEventListener("xcloud-chat-session-read", handleRead);
+    };
+  }, [clearUnreadForSession]);
 
   const ensureWorkspaceCoordinator = useCallback(async (workspace: WorkspaceInfo) => {
     if (ensuringWorkspaceIdsRef.current.has(workspace.id)) return;
@@ -692,6 +763,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   }, [terminalHeight]);
 
   const handleSelectAgent = useCallback((id: string) => {
+    clearUnreadForAgent(id);
     setActiveAgentId(id);
     setActiveSessionKey(null);
     setShowNewChat(false);
@@ -699,10 +771,11 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setInitialChatPromptHidden(false);
     setShowSettings(false);
     setShowPreview(false);
-  }, []);
+  }, [clearUnreadForAgent]);
 
   const handleSelectWorkspace = useCallback((id: string) => {
     triggerSidebarAnimation();
+    clearUnreadForAgent(getWorkspaceAgentId(id));
     setActiveWorkspaceId(id);
     setActiveAgentId(null);
     setActiveSessionKey(`agent:${getWorkspaceAgentId(id)}:general`);
@@ -713,7 +786,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setShowPreview(false);
     setShowCanvas(true);
     setCanvasExpanded(false);
-  }, [triggerSidebarAnimation]);
+  }, [clearUnreadForAgent, triggerSidebarAnimation]);
 
   const handleLeaveWorkspace = useCallback(() => {
     triggerSidebarAnimation();
@@ -933,6 +1006,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   }, [activeAgentId, agents, engine, refreshAgents, removeAgentFromWorkspaces]);
 
   const handleSelectSession = useCallback((agentId: string, sessionKey: string) => {
+    clearUnreadForSession(sessionKey);
     setActiveAgentId(agentId);
     setActiveWorkspaceId(null);
     setActiveSessionKey(sessionKey);
@@ -941,7 +1015,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setInitialChatPromptHidden(false);
     setShowSettings(false);
     setShowPreview(false);
-  }, []);
+  }, [clearUnreadForSession]);
 
   const handleNewChat = useCallback(() => {
     setShowNewChat(true);
@@ -1137,6 +1211,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
               activeWorkspaceId={activeWorkspaceId}
               activeAgentId={activeAgentId}
               sidebarAnimationKey={sidebarAnimationKey}
+              unreadAgentIds={unreadAgentIds}
               onSelectAgent={handleSelectAgent}
               onSelectWorkspace={handleSelectWorkspace}
               onLeaveWorkspace={handleLeaveWorkspace}
