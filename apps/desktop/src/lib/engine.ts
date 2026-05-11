@@ -307,6 +307,11 @@ export class BrowserEngine {
     return result as { runId: string; status: string };
   }
 
+  async abortChat(sessionKey: string, runId?: string): Promise<{ ok: boolean; aborted: boolean; runIds: string[] }> {
+    const result = await this.rpc("chat.abort", { sessionKey, ...(runId ? { runId } : {}) });
+    return result as { ok: boolean; aborted: boolean; runIds: string[] };
+  }
+
   async listCommands(): Promise<SlashCommand[]> {
     const result = await this.rpc("commands.list", {});
     return (result as { commands: SlashCommand[] }).commands ?? [];

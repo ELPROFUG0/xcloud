@@ -223,10 +223,33 @@ function withUnicoreWorkspaceSupport(config: Record<string, unknown>) {
   return { config: nextConfig, changed };
 }
 
+function withActiveRunSteering(config: Record<string, unknown>) {
+  const messages = asRecord(config.messages);
+  const queue = asRecord(messages.queue);
+  const nextQueue = { ...queue, mode: "steer" };
+  const nextConfig = {
+    ...config,
+    messages: {
+      ...messages,
+      queue: nextQueue,
+    },
+  };
+  return { config: nextConfig, changed: queue.mode !== "steer" };
+}
+
 async function ensureUnicoreWorkspaceSupportInLocalConfig() {
   const raw = await readTextFile(".openclaw/openclaw.json", { baseDir: BaseDirectory.Home });
   const parsed = JSON.parse(raw || "{}") as Record<string, unknown>;
   const { config, changed } = withUnicoreWorkspaceSupport(parsed);
+  if (!changed) return false;
+  await writeTextFile(".openclaw/openclaw.json", `${JSON.stringify(config, null, 2)}\n`, { baseDir: BaseDirectory.Home });
+  return true;
+}
+
+async function ensureActiveRunSteeringInLocalConfig() {
+  const raw = await readTextFile(".openclaw/openclaw.json", { baseDir: BaseDirectory.Home });
+  const parsed = JSON.parse(raw || "{}") as Record<string, unknown>;
+  const { config, changed } = withActiveRunSteering(parsed);
   if (!changed) return false;
   await writeTextFile(".openclaw/openclaw.json", `${JSON.stringify(config, null, 2)}\n`, { baseDir: BaseDirectory.Home });
   return true;
@@ -246,6 +269,25 @@ async function ensureUnicoreWorkspaceSupport(engine: BrowserEngine) {
   if (!changed) return;
   await withTimeout(
     engine.patchConfig(JSON.stringify({ plugins: nextConfig.plugins, tools: nextConfig.tools }), hash),
+    5_000,
+    "config.patch",
+  ).catch(() => {});
+}
+
+async function ensureActiveRunSteering(engine: BrowserEngine) {
+  await ensureActiveRunSteeringInLocalConfig().catch(() => false);
+  if (!engine.connected) return;
+
+  const configResult = await withTimeout(engine.rpc("config.get", {}), 5_000, "config.get").catch(() => null);
+  if (!configResult) return;
+  const hash = (configResult as { hash?: string }).hash ?? "";
+  const config = ((configResult as { config?: Record<string, unknown> }).config ?? configResult) as Record<string, unknown>;
+  if (!hash) return;
+
+  const { config: nextConfig, changed } = withActiveRunSteering(config);
+  if (!changed) return;
+  await withTimeout(
+    engine.patchConfig(JSON.stringify({ messages: nextConfig.messages }), hash),
     5_000,
     "config.patch",
   ).catch(() => {});
@@ -503,6 +545,10 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     activeChatSessionKeyRef.current = activeChatSessionKey;
     if (activeChatSessionKey) clearUnreadForSession(activeChatSessionKey);
   }, [activeChatSessionKey, clearUnreadForSession]);
+
+  useEffect(() => {
+    void ensureActiveRunSteering(engine).catch(() => {});
+  }, [engine]);
 
   useEffect(() => {
     const handleActivity = (event: Event) => {

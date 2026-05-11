@@ -65,7 +65,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
     setActiveSession(defaultSessionKey);
   }, [defaultSessionKey]);
 
-  const { messages, isStreaming, loading, send } = useChat({ engine, sessionKey: activeSession, appTools });
+  const { messages, isStreaming, loading, send, stop } = useChat({ engine, sessionKey: activeSession, appTools });
   const sentInitialPromptRef = useRef<string | null>(null);
 
   const pages = useMemo(() => paginate(messages), [messages]);
@@ -395,6 +395,8 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
 
               <ChatInput
                 onSend={send}
+                onStop={stop}
+                isStreaming={isStreaming}
                 disabled={!engine.connected || loading}
                 engine={engine}
                 variant="hero"
@@ -504,6 +506,8 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
         <div className="mx-auto w-full max-w-3xl animate-[fadeBlurInStable_180ms_ease-out]">
           <ChatInput
             onSend={send}
+            onStop={stop}
+            isStreaming={isStreaming}
             disabled={!engine.connected || loading}
             engine={engine}
             contextLabel={displayName}

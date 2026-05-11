@@ -62,7 +62,9 @@ const COMMAND_ICONS: Record<string, LucideIcon> = {
 
 interface ChatInputProps {
   onSend: (message: string) => void;
+  onStop?: () => void;
   disabled?: boolean;
+  isStreaming?: boolean;
   placeholder?: string;
   engine: BrowserEngine;
   variant?: "dock" | "hero";
@@ -78,7 +80,9 @@ interface ChatInputProps {
 
 export function ChatInput({
   onSend,
+  onStop,
   disabled = false,
+  isStreaming = false,
   placeholder,
   engine,
   variant = "dock",
@@ -365,12 +369,17 @@ export function ChatInput({
           return;
         }
       }
+      if (e.key === "Escape" && isStreaming) {
+        e.preventDefault();
+        onStop?.();
+        return;
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSend();
       }
     },
-    [handleSend, showSlash, filteredCommands, slashIndex],
+    [handleSend, isStreaming, onStop, showSlash, filteredCommands, slashIndex],
   );
 
   const handleInput = useCallback(() => {
@@ -609,12 +618,17 @@ export function ChatInput({
                 </div>
 
                 <button
-                  onClick={handleSend}
-                  disabled={disabled || !hasText}
-                  className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black transition-all hover:bg-white/90 disabled:cursor-not-allowed disabled:bg-white/[0.08] disabled:text-text-muted/45"
-                  title="Send"
+                  onClick={isStreaming ? onStop : handleSend}
+                  disabled={isStreaming ? disabled : disabled || !hasText}
+                  className={cn(
+                    "flex h-8 w-8 items-center justify-center rounded-full transition-all disabled:cursor-not-allowed",
+                    isStreaming
+                      ? "bg-white text-black hover:bg-white/90 disabled:bg-white/[0.08] disabled:text-text-muted/45"
+                      : "bg-white text-black hover:bg-white/90 disabled:bg-white/[0.08] disabled:text-text-muted/45",
+                  )}
+                  title={isStreaming ? "Stop" : "Send"}
                 >
-                  <ArrowUp className="h-3.5 w-3.5" />
+                  {isStreaming ? <Square className="h-3.5 w-3.5 fill-current" /> : <ArrowUp className="h-3.5 w-3.5" />}
                 </button>
               </>
             )}
