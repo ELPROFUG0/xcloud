@@ -21,6 +21,7 @@ const AGENT_MENU_WIDTH = 160;
 const WORKSPACE_AGENT_MENU_WIDTH = 188;
 const EMOJI_PICKER_WIDTH = 288;
 const FLOATING_GAP = 6;
+const LAST_INTERACTION_CLASS = "w-8 shrink-0 text-right text-[11px] font-medium leading-none text-[#8A898C]";
 
 interface FloatingAnchor {
   top: number;
@@ -538,7 +539,7 @@ export function HomeScreen({
             {isWorking ? (
               <AgentActivityDots className="group-hover:hidden" />
             ) : lastInteraction && (
-              <span className="shrink-0 text-[10px] font-medium text-text-muted/60 group-hover:hidden">
+              <span className={cn(LAST_INTERACTION_CLASS, "group-hover:hidden")}>
                 {lastInteraction}
               </span>
             )}
@@ -725,7 +726,7 @@ export function HomeScreen({
                     {isWorking ? (
                       <AgentActivityDots className="group-hover:hidden" />
                     ) : lastInteraction && (
-                      <span className="shrink-0 text-[10px] font-medium text-text-muted/60 group-hover:hidden">
+                      <span className={cn(LAST_INTERACTION_CLASS, "group-hover:hidden")}>
                         {lastInteraction}
                       </span>
                     )}
@@ -1070,7 +1071,7 @@ export function HomeScreen({
                                   className="group-hover/mini:hidden"
                                 />
                               ) : lastInteraction && (
-                                <span className="shrink-0 text-[9px] font-medium text-text-muted/60 group-hover/mini:hidden">
+                                <span className={cn(LAST_INTERACTION_CLASS, "group-hover/mini:hidden")}>
                                   {lastInteraction}
                                 </span>
                               )}
