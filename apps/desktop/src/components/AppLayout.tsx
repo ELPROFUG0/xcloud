@@ -510,7 +510,8 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const defaultAgentId = globalAgents.find((a) => a.isDefault)?.id ?? agents.find((a) => a.isDefault)?.id ?? MAIN_AGENT_ID;
   const activeWorkspaceCoordinatorId = activeWorkspace ? getWorkspaceAgentId(activeWorkspace.id) : null;
   const currentAgentId = activeAgentId ?? activeWorkspaceCoordinatorId ?? defaultAgentId;
-  const hasChat = (activeAgentId !== null || hasWorkspaceChat) && !showNewChat;
+  const isWorkspaceCoordinatorActive = Boolean(activeWorkspace && activeWorkspaceCoordinatorId && currentAgentId === activeWorkspaceCoordinatorId);
+  const hasChat = activeAgentId !== null && !showNewChat;
   const activeChatSessionKey = hasChat
     ? hasWorkspaceChat
       ? (activeSessionKey ?? `agent:${getWorkspaceAgentId(activeWorkspace!.id)}:general`)
@@ -522,6 +523,23 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const activeTerminalKey = showSettings ? "settings" : activeAgentId ? `agent:${currentAgentId}` : hasWorkspaceChat ? `workspace:${activeWorkspace.id}` : showNewChat ? "new-chat" : "workspace";
   const activeTerminal = terminalByContext[activeTerminalKey];
   const showTerminal = activeTerminal?.visible ?? false;
+
+  const getPreferredWorkspaceCoordinatorSession = useCallback((coordinatorId: string) => {
+    return getAgentSessions(coordinatorId)[0]?.key ?? getDefaultSessionKeyForAgent(coordinatorId);
+  }, [getAgentSessions]);
+
+  useEffect(() => {
+    if (!activeWorkspaceCoordinatorId || activeAgentId !== activeWorkspaceCoordinatorId || showNewChat || showSettings) return;
+    const latestSession = getAgentSessions(activeWorkspaceCoordinatorId)[0]?.key;
+    if (!latestSession) return;
+
+    const defaultSession = getDefaultSessionKeyForAgent(activeWorkspaceCoordinatorId);
+    const legacyWorkspaceSession = `agent:${activeWorkspaceCoordinatorId}:general`;
+    setActiveSessionKey((current) => {
+      if (current && current !== defaultSession && current !== legacyWorkspaceSession) return current;
+      return current === latestSession ? current : latestSession;
+    });
+  }, [activeAgentId, activeWorkspaceCoordinatorId, getAgentSessions, showNewChat, showSettings]);
 
   const triggerSidebarAnimation = useCallback(() => {
     setSidebarAnimationKey((key) => key + 1);
@@ -828,20 +846,21 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const handleSelectAgent = useCallback((id: string) => {
     clearUnreadForAgent(id);
     setActiveAgentId(id);
-    setActiveSessionKey(null);
+    setActiveSessionKey(id === activeWorkspaceCoordinatorId ? getPreferredWorkspaceCoordinatorSession(id) : null);
     setShowNewChat(false);
     setInitialChatPrompt(undefined);
     setInitialChatPromptHidden(false);
     setShowSettings(false);
     setShowPreview(false);
-  }, [clearUnreadForAgent]);
+  }, [activeWorkspaceCoordinatorId, clearUnreadForAgent, getPreferredWorkspaceCoordinatorSession]);
 
   const handleSelectWorkspace = useCallback((id: string) => {
+    const coordinatorId = getWorkspaceAgentId(id);
     triggerSidebarAnimation();
-    clearUnreadForAgent(getWorkspaceAgentId(id));
+    clearUnreadForAgent(coordinatorId);
     setActiveWorkspaceId(id);
-    setActiveAgentId(null);
-    setActiveSessionKey(`agent:${getWorkspaceAgentId(id)}:general`);
+    setActiveAgentId(coordinatorId);
+    setActiveSessionKey(getPreferredWorkspaceCoordinatorSession(coordinatorId));
     setShowNewChat(false);
     setInitialChatPrompt(undefined);
     setInitialChatPromptHidden(false);
@@ -849,7 +868,22 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setShowPreview(false);
     setShowCanvas(true);
     setCanvasExpanded(false);
-  }, [clearUnreadForAgent, triggerSidebarAnimation]);
+  }, [clearUnreadForAgent, getPreferredWorkspaceCoordinatorSession, triggerSidebarAnimation]);
+
+  const handleSelectWorkspaceOverview = useCallback((id: string) => {
+    const coordinatorId = getWorkspaceAgentId(id);
+    clearUnreadForAgent(coordinatorId);
+    setActiveWorkspaceId(id);
+    setActiveAgentId(null);
+    setActiveSessionKey(getPreferredWorkspaceCoordinatorSession(coordinatorId));
+    setShowNewChat(false);
+    setInitialChatPrompt(undefined);
+    setInitialChatPromptHidden(false);
+    setShowSettings(false);
+    setShowPreview(false);
+    setShowCanvas(true);
+    setCanvasExpanded(false);
+  }, [clearUnreadForAgent, getPreferredWorkspaceCoordinatorSession]);
 
   const handleLeaveWorkspace = useCallback(() => {
     triggerSidebarAnimation();
@@ -869,15 +903,16 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const handleCreateAgentInWorkspace = useCallback((workspaceId: string) => {
     const workspace = workspaces.find((item) => item.id === workspaceId);
     const prompt = `The workspace is "${workspace?.name ?? workspaceId}". It is a workspace/project, not an agent. Help me define one new specialist agent that belongs to this workspace. Ask only what you need about the role. When enough context is clear, create the real persistent specialist with the ${WORKSPACE_AGENT_CREATE_TOOL} tool. The agent id must start with "${workspaceId}-".`;
+    const coordinatorId = getWorkspaceAgentId(workspaceId);
     setActiveWorkspaceId(workspaceId);
-    setActiveAgentId(null);
-    setActiveSessionKey(`agent:${getWorkspaceAgentId(workspaceId)}:general`);
+    setActiveAgentId(coordinatorId);
+    setActiveSessionKey(getPreferredWorkspaceCoordinatorSession(coordinatorId));
     setInitialChatPrompt(prompt);
     setInitialChatPromptHidden(false);
     setShowNewChat(false);
     setShowSettings(false);
     setShowPreview(false);
-  }, [workspaces]);
+  }, [getPreferredWorkspaceCoordinatorSession, workspaces]);
 
   const handleOpenWorkspaceContext = useCallback(async (workspaceId: string) => {
     const workspace = workspaces.find((item) => item.id === workspaceId);
@@ -1012,10 +1047,11 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const handleRemoveAgentFromWorkspace = useCallback((workspaceId: string, agentId: string) => {
     unlinkAgent(workspaceId, agentId);
     if (activeWorkspaceId === workspaceId && activeAgentId === agentId) {
-      setActiveAgentId(null);
-      setActiveSessionKey(`agent:${getWorkspaceAgentId(workspaceId)}:general`);
+      const coordinatorId = getWorkspaceAgentId(workspaceId);
+      setActiveAgentId(coordinatorId);
+      setActiveSessionKey(getPreferredWorkspaceCoordinatorSession(coordinatorId));
     }
-  }, [activeAgentId, activeWorkspaceId, unlinkAgent]);
+  }, [activeAgentId, activeWorkspaceId, getPreferredWorkspaceCoordinatorSession, unlinkAgent]);
 
   const handleDeleteAgent = useCallback(async (agentId: string) => {
     const agent = agents.find((item) => item.id === agentId);
@@ -1118,7 +1154,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     return () => window.removeEventListener("xcloud-create-workspace-request", handleWorkspaceRequest);
   }, [handleCreateWorkspace]);
 
-  const showThirdPanel = showPreview || showSettings || showCanvas;
+  const showThirdPanel = showPreview || showSettings || (showCanvas && !hasWorkspaceChat);
   const terminalContextChanged = previousTerminalKeyRef.current !== null && previousTerminalKeyRef.current !== activeTerminalKey;
   const mountedTerminalEntries = Object.entries(terminalByContext).filter(([, state]) => state.mounted);
 
@@ -1289,6 +1325,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
               agentActivityAt={agentActivityAt}
               onSelectAgent={handleSelectAgent}
               onSelectWorkspace={handleSelectWorkspace}
+              onSelectWorkspaceOverview={handleSelectWorkspaceOverview}
               onLeaveWorkspace={handleLeaveWorkspace}
               onCreateWorkspace={handleCreateWorkspace}
               onAddAgentToWorkspace={linkAgent}
@@ -1400,15 +1437,22 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
           <div className="flex flex-1 min-w-0 min-h-0 flex-col overflow-hidden" style={{ display: canvasExpanded ? "none" : undefined }}>
             {/* Chat area */}
             <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
-              {hasChat ? (
+              {hasWorkspaceChat && activeWorkspace ? (
+                <WorkspaceCanvas
+                  key={`workspace-overview:${activeWorkspace.id}`}
+                  workspace={activeWorkspace}
+                  agents={workspaceAgents}
+                  onSelectAgent={handleSelectAgent}
+                />
+              ) : hasChat ? (
                 <ChatPanel
                   key={hasWorkspaceChat ? `${activeWorkspace!.id}-${activeSessionKey ?? "general"}` : `${currentAgentId}-${activeSessionKey ?? "default"}`}
                   engine={engine}
                   agentId={currentAgentId}
-                  sessionKey={hasWorkspaceChat ? (activeSessionKey ?? `agent:${getWorkspaceAgentId(activeWorkspace!.id)}:general`) : (activeSessionKey ?? undefined)}
+                  sessionKey={activeSessionKey ?? (hasWorkspaceChat ? getDefaultSessionKeyForAgent(getWorkspaceAgentId(activeWorkspace!.id)) : undefined)}
                   agentName={hasWorkspaceChat ? activeWorkspace!.name : agents.find((a) => a.id === currentAgentId)?.name ?? currentAgentId}
                   titleName={hasWorkspaceChat ? activeWorkspace!.name : undefined}
-                  workspaceName={hasWorkspaceChat ? activeWorkspace!.name : undefined}
+                  workspaceName={hasWorkspaceChat || isWorkspaceCoordinatorActive ? activeWorkspace!.name : undefined}
                   agents={chatAgentOptions}
                   onSwitchAgent={(id) => setActiveAgentId(id)}
                   sidebarCollapsed={sidebarCollapsed}
@@ -1462,14 +1506,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
             <div className="flex-1 min-h-0" style={{ minWidth: canvasExpanded ? undefined : canvasWidth }}>
               {/* Canvas — always mounted, hidden when preview active */}
               <div className="h-full" style={{ display: showPreview ? "none" : undefined, visibility: canvasTransitioning ? "hidden" : "visible" }}>
-                {hasWorkspaceChat && activeWorkspace ? (
-                  <WorkspaceCanvas
-                    key={`workspace:${activeWorkspace.id}`}
-                    workspace={activeWorkspace}
-                    agents={workspaceAgents}
-                    onSelectAgent={handleSelectAgent}
-                  />
-                ) : (
+                {!hasWorkspaceChat && (
                   <AgentCanvas
                     key={currentAgentId}
                     engine={engine}
