@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import type { AgentInfo } from "@/hooks/use-agents";
 import type { SessionInfo } from "@/hooks/use-sessions";
 import type { WorkspaceInfo } from "@/hooks/use-workspaces";
@@ -13,6 +14,35 @@ import slackIcon from "@/assets/setup-icons/slack.svg";
 import notionIcon from "@/assets/setup-icons/notion.svg";
 import { Letters } from "@kumailnanji/letters";
 import orbVideo from "@/assets/setup-icons/orb-video.mp4";
+
+const AGENT_MENU_WIDTH = 160;
+const WORKSPACE_AGENT_MENU_WIDTH = 188;
+const EMOJI_PICKER_WIDTH = 288;
+const FLOATING_GAP = 6;
+
+interface FloatingAnchor {
+  top: number;
+  left: number;
+}
+
+function getFloatingMenuAnchor(rect: DOMRect, width: number): FloatingAnchor {
+  return {
+    top: Math.min(window.innerHeight - FLOATING_GAP, Math.max(FLOATING_GAP, rect.bottom + FLOATING_GAP)),
+    left: Math.min(window.innerWidth - width - FLOATING_GAP, Math.max(FLOATING_GAP, rect.right - width)),
+  };
+}
+
+function getEmojiPickerAnchor(rect: DOMRect): FloatingAnchor {
+  const rightSideLeft = rect.right + FLOATING_GAP;
+  const leftSideLeft = rect.left - EMOJI_PICKER_WIDTH - FLOATING_GAP;
+  const left = rightSideLeft + EMOJI_PICKER_WIDTH <= window.innerWidth - FLOATING_GAP
+    ? rightSideLeft
+    : Math.max(FLOATING_GAP, leftSideLeft);
+  return {
+    top: Math.min(window.innerHeight - FLOATING_GAP, Math.max(FLOATING_GAP, rect.top)),
+    left,
+  };
+}
 
 interface HomeScreenProps {
   agents: AgentInfo[];
@@ -253,7 +283,9 @@ export function HomeScreen({
   const pinnedAgents = globalAgents.filter(a => a.id !== mainAgent?.id && pinnedIds.includes(a.id));
   const otherAgents = globalAgents.filter(a => a.id !== mainAgent?.id && !pinnedIds.includes(a.id));
   const [menuAgentId, setMenuAgentId] = useState<string | null>(null);
+  const [agentMenuAnchor, setAgentMenuAnchor] = useState<FloatingAnchor | null>(null);
   const [showEmojiFor, setShowEmojiFor] = useState<string | null>(null);
+  const [emojiPickerAnchor, setEmojiPickerAnchor] = useState<FloatingAnchor | null>(null);
   const [showWorkspaceCreator, setShowWorkspaceCreator] = useState(false);
   const [workspaceName, setWorkspaceName] = useState("");
   const [showAddAgent, setShowAddAgent] = useState(false);
@@ -320,17 +352,27 @@ export function HomeScreen({
     return workingAgentIds.has(agentId) || (getAgentSessions?.(agentId) ?? []).some((session) => session.status === "working");
   }, [getAgentSessions, workingAgentIds]);
 
+  const closeAgentMenu = useCallback(() => {
+    setMenuAgentId(null);
+    setAgentMenuAnchor(null);
+  }, []);
+
+  const closeEmojiPicker = useCallback(() => {
+    setShowEmojiFor(null);
+    setEmojiPickerAnchor(null);
+  }, []);
+
   // Close menu on click outside
   useEffect(() => {
     if (!menuAgentId) return;
     function handleClick(e: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuAgentId(null);
+        closeAgentMenu();
       }
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  }, [menuAgentId]);
+  }, [closeAgentMenu, menuAgentId]);
 
   useEffect(() => {
     if (!showWorkspaceCreator && !showAddAgent) return;
@@ -356,11 +398,27 @@ export function HomeScreen({
   }, [workspaceActionMenuId]);
 
   const handleEmojiSelect = useCallback(async (agentId: string, emoji: string) => {
-    setShowEmojiFor(null);
-    setMenuAgentId(null);
+    closeEmojiPicker();
+    closeAgentMenu();
     await updateAgentEmoji(agentId, emoji);
     onRefresh?.();
-  }, [onRefresh]);
+  }, [closeAgentMenu, closeEmojiPicker, onRefresh]);
+
+  const emojiPickerAgent = showEmojiFor ? agents.find((agent) => agent.id === showEmojiFor) : null;
+  const emojiPickerPortal = emojiPickerAgent && emojiPickerAnchor ? createPortal(
+    <div
+      className="fixed z-[110]"
+      style={{ top: emojiPickerAnchor.top, left: emojiPickerAnchor.left }}
+    >
+      <EmojiPicker
+        agentId={emojiPickerAgent.id}
+        onSelect={(emoji) => handleEmojiSelect(emojiPickerAgent.id, emoji)}
+        onSelectImage={() => { closeEmojiPicker(); onRefresh?.(); }}
+        onClose={closeEmojiPicker}
+      />
+    </div>,
+    document.body,
+  ) : null;
 
   const deleteAgent = useCallback((agent: AgentInfo) => {
     if (agent.isDefault) return;
@@ -417,18 +475,32 @@ export function HomeScreen({
             )}
             <div className="relative">
               <button
-                onClick={(e) => { e.stopPropagation(); setMenuAgentId(menuAgentId === agent.id ? null : agent.id); }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (menuAgentId === agent.id) {
+                    closeAgentMenu();
+                    return;
+                  }
+                  setShowEmojiFor(null);
+                  setEmojiPickerAnchor(null);
+                  setAgentMenuAnchor(getFloatingMenuAnchor(e.currentTarget.getBoundingClientRect(), AGENT_MENU_WIDTH));
+                  setMenuAgentId(agent.id);
+                }}
                 className="hidden group-hover:flex h-5 w-5 items-center justify-center rounded text-text-muted hover:text-text"
               >
                 <MoreHorizontal className="h-3.5 w-3.5" />
               </button>
 
               {/* Agent menu */}
-              {menuAgentId === agent.id && (
-                <div ref={menuRef} className="absolute right-0 top-full mt-1 z-30 w-40 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl animate-[slideUp_120ms_ease-out] p-1">
+              {menuAgentId === agent.id && agentMenuAnchor && createPortal(
+                <div
+                  ref={menuRef}
+                  className="fixed z-[100] w-40 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-2xl animate-[fadeBlurInStable_120ms_ease-out]"
+                  style={{ top: agentMenuAnchor.top, left: agentMenuAnchor.left }}
+                >
                   {!isMain && (
                     <button
-                      onClick={(e) => { e.stopPropagation(); togglePin(agent.id); setMenuAgentId(null); }}
+                      onClick={(e) => { e.stopPropagation(); togglePin(agent.id); closeAgentMenu(); }}
                       className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-text transition-colors hover:bg-surface-hover"
                     >
                       <Pin className="h-3.5 w-3.5" />
@@ -436,16 +508,21 @@ export function HomeScreen({
                     </button>
                   )}
                   <button
-                    onClick={(e) => { e.stopPropagation(); setShowEmojiFor(agent.id); setMenuAgentId(null); }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEmojiPickerAnchor(getEmojiPickerAnchor(e.currentTarget.getBoundingClientRect()));
+                      setShowEmojiFor(agent.id);
+                      closeAgentMenu();
+                    }}
                     className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-text transition-colors hover:bg-surface-hover"
                   >
-                    Change emoji
+                    Change icon
                   </button>
                   {!isMain && onDeleteAgent && (
                     <>
                       <div className="my-1 h-px bg-white/[0.06]" />
                       <button
-                        onClick={(e) => { e.stopPropagation(); deleteAgent(agent); }}
+                        onClick={(e) => { e.stopPropagation(); closeAgentMenu(); deleteAgent(agent); }}
                         className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-red-300 transition-colors hover:bg-red-500/10 hover:text-red-200"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -454,19 +531,7 @@ export function HomeScreen({
                     </>
                   )}
                 </div>
-              )}
-
-              {/* Emoji picker */}
-              {showEmojiFor === agent.id && (
-                <div className="absolute right-0 top-full mt-1 z-30">
-                  <EmojiPicker
-                    agentId={agent.id}
-                    onSelect={(emoji) => handleEmojiSelect(agent.id, emoji)}
-                    onSelectImage={() => { setShowEmojiFor(null); onRefresh?.(); }}
-                    onClose={() => setShowEmojiFor(null)}
-                  />
-                </div>
-              )}
+              , document.body)}
             </div>
           </button>
         </div>
@@ -484,16 +549,17 @@ export function HomeScreen({
 
   if (activeWorkspace) {
     return (
-      <div key={`workspace:${activeWorkspace.id}:${sidebarAnimationKey}`} className="flex h-full flex-col sidebar-view-enter">
-        <div className={`px-3 pb-3 ${isFullscreen ? "pt-12" : "pt-14"}`}>
-          <button
-            onClick={onLeaveWorkspace}
-            className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text-muted transition-colors hover:bg-white/6 hover:text-text"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            <span className="text-[13px] font-medium">Back to agents</span>
-          </button>
-        </div>
+      <>
+        <div key={`workspace:${activeWorkspace.id}:${sidebarAnimationKey}`} className="flex h-full flex-col sidebar-view-enter">
+          <div className={`px-3 pb-3 ${isFullscreen ? "pt-12" : "pt-14"}`}>
+            <button
+              onClick={onLeaveWorkspace}
+              className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text-muted transition-colors hover:bg-white/6 hover:text-text"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span className="text-[13px] font-medium">Back to agents</span>
+            </button>
+          </div>
 
         <div className="px-3 pb-3">
           <div className="rounded-[14px] border border-white/[0.08] bg-white/[0.035] p-3">
@@ -610,36 +676,67 @@ export function HomeScreen({
                         tabIndex={0}
                         onClick={(e) => {
                           e.stopPropagation();
-                          setMenuAgentId(menuAgentId === `workspace:${agent.id}` ? null : `workspace:${agent.id}`);
+                          const menuId = `workspace:${agent.id}`;
+                          if (menuAgentId === menuId) {
+                            closeAgentMenu();
+                            return;
+                          }
+                          setShowEmojiFor(null);
+                          setEmojiPickerAnchor(null);
+                          setAgentMenuAnchor(getFloatingMenuAnchor(e.currentTarget.getBoundingClientRect(), WORKSPACE_AGENT_MENU_WIDTH));
+                          setMenuAgentId(menuId);
                         }}
                         onKeyDown={(e) => {
                           if (e.key !== "Enter" && e.key !== " ") return;
                           e.preventDefault();
                           e.stopPropagation();
-                          setMenuAgentId(menuAgentId === `workspace:${agent.id}` ? null : `workspace:${agent.id}`);
+                          const menuId = `workspace:${agent.id}`;
+                          if (menuAgentId === menuId) {
+                            closeAgentMenu();
+                            return;
+                          }
+                          setShowEmojiFor(null);
+                          setEmojiPickerAnchor(null);
+                          setAgentMenuAnchor(getFloatingMenuAnchor(e.currentTarget.getBoundingClientRect(), WORKSPACE_AGENT_MENU_WIDTH));
+                          setMenuAgentId(menuId);
                         }}
                         className="flex h-5 w-5 items-center justify-center rounded-md text-text-muted opacity-0 transition-all hover:bg-white/8 hover:text-text group-hover:opacity-100"
                       >
                         <MoreHorizontal className="h-3.5 w-3.5" />
                       </span>
-                      {menuAgentId === `workspace:${agent.id}` && (
-                        <div ref={menuRef} className="absolute right-0 top-full z-40 mt-1 w-44 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-2xl animate-[slideUp_120ms_ease-out]">
+                      {menuAgentId === `workspace:${agent.id}` && agentMenuAnchor && createPortal(
+                        <div
+                          ref={menuRef}
+                          className="fixed z-[100] w-[188px] overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-2xl animate-[fadeBlurInStable_120ms_ease-out]"
+                          style={{ top: agentMenuAnchor.top, left: agentMenuAnchor.left }}
+                        >
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEmojiPickerAnchor(getEmojiPickerAnchor(e.currentTarget.getBoundingClientRect()));
+                              setShowEmojiFor(agent.id);
+                              closeAgentMenu();
+                            }}
+                            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-text transition-colors hover:bg-surface-hover"
+                          >
+                            Change icon
+                          </button>
                           {!agent.isDefault && onRemoveAgentFromWorkspace && (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setMenuAgentId(null);
+                                closeAgentMenu();
                                 onRemoveAgentFromWorkspace(activeWorkspace.id, agent.id);
                               }}
                               className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-text transition-colors hover:bg-surface-hover"
                             >
-                              <Unlink className="h-3.5 w-3.5" />
-                              Remove from workspace
+                              <Unlink className="h-3.5 w-3.5 shrink-0" />
+                              <span className="whitespace-nowrap">Remove from workspace</span>
                             </button>
                           )}
                           {!agent.isDefault && onDeleteAgent && (
                             <button
-                              onClick={(e) => { e.stopPropagation(); deleteAgent(agent); }}
+                              onClick={(e) => { e.stopPropagation(); closeAgentMenu(); deleteAgent(agent); }}
                               className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-red-300 transition-colors hover:bg-red-500/10 hover:text-red-200"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
@@ -647,7 +744,7 @@ export function HomeScreen({
                             </button>
                           )}
                         </div>
-                      )}
+                      , document.body)}
                     </span>
                     </button>
                   </div>
@@ -657,9 +754,9 @@ export function HomeScreen({
           </div>
         </div>
 
-        <div className="relative shrink-0 px-3 pb-2" ref={workspaceMenuRef}>
-          {showAddAgent && (
-            <div className="absolute bottom-full left-3 right-3 mb-2 overflow-hidden rounded-[14px] border border-border bg-surface p-1.5 shadow-2xl animate-[slideUp_120ms_ease-out]">
+          <div className="relative shrink-0 px-3 pb-2" ref={workspaceMenuRef}>
+            {showAddAgent && (
+              <div className="absolute bottom-full left-3 right-3 mb-2 overflow-hidden rounded-[14px] border border-border bg-surface p-1.5 shadow-2xl animate-[slideUp_120ms_ease-out]">
               <button
                 onClick={() => {
                   onCreateAgentInWorkspace?.(activeWorkspace.id);
@@ -687,20 +784,23 @@ export function HomeScreen({
               ))}
             </div>
           )}
-          <button
-            onClick={() => setShowAddAgent((v) => !v)}
-            className="flex w-full items-center justify-center gap-2 rounded-[12px] bg-white/10 px-3 py-2 text-[12px] font-medium text-text transition-colors hover:bg-white/15"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Add agent
-          </button>
+            <button
+              onClick={() => setShowAddAgent((v) => !v)}
+              className="flex w-full items-center justify-center gap-2 rounded-[12px] bg-white/10 px-3 py-2 text-[12px] font-medium text-text transition-colors hover:bg-white/15"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add agent
+            </button>
+          </div>
         </div>
-      </div>
+        {emojiPickerPortal}
+      </>
     );
   }
 
   return (
-    <div key={`agents:${sidebarAnimationKey}`} className="flex h-full flex-col sidebar-view-enter sidebar-agents-view-enter">
+    <>
+      <div key={`agents:${sidebarAnimationKey}`} className="flex h-full flex-col sidebar-view-enter sidebar-agents-view-enter">
       {/* Top actions — padded for macOS traffic lights */}
       <div className={`sidebar-main-actions flex flex-col gap-1 px-3 pb-2 ${isFullscreen ? "pt-12" : "pt-14"}`}>
         <button onClick={onNewChat} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text transition-colors hover:bg-white/6">
@@ -933,6 +1033,8 @@ export function HomeScreen({
       {mainAgent && (
         <SetupGuide mainAgent={mainAgent} agents={globalAgents} onSelectAgent={onSelectAgent} onOpenSettings={onOpenSettings} />
       )}
-    </div>
+      </div>
+      {emojiPickerPortal}
+    </>
   );
 }

@@ -224,7 +224,7 @@ export function EmojiPicker({ onSelect, onSelectImage, agentId, onClose }: Emoji
   return (
     <div
       ref={ref}
-      className="w-72 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl animate-[slideUp_120ms_ease-out]"
+      className="w-72 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl animate-[fadeBlurInStable_120ms_ease-out]"
     >
       {/* Emoji grid with search inside */}
       <div className="max-h-72 overflow-y-auto overscroll-contain">
