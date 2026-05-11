@@ -914,20 +914,6 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setShowPreview(false);
   }, [getPreferredWorkspaceCoordinatorSession, workspaces]);
 
-  const handleOpenWorkspaceContext = useCallback(async (workspaceId: string) => {
-    const workspace = workspaces.find((item) => item.id === workspaceId);
-    const dir = getWorkspaceDir(workspaceId);
-    const files = await Promise.all(["AGENTS.md", "TEAM.md", "GOALS.md", "MEMORY.md"].map(async (file) => {
-      const content = await readTextFile(`${dir}/${file}`, { baseDir: BaseDirectory.Home }).catch(() => `No ${file}`);
-      return `# ${file}\n\n${content}`;
-    }));
-    setNodeDetail({
-      title: workspace?.name ? `${workspace.name} Context` : "Workspace Context",
-      type: "markdown",
-      content: files.join("\n\n---\n\n"),
-    });
-  }, [workspaces]);
-
   const handleDeleteWorkspace = useCallback((workspaceId: string) => {
     const deletedWorkspace = workspaces.find((workspace) => workspace.id === workspaceId);
     const coordinatorId = getWorkspaceAgentId(workspaceId);
@@ -1331,7 +1317,6 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
               onAddAgentToWorkspace={linkAgent}
               onRemoveAgentFromWorkspace={handleRemoveAgentFromWorkspace}
               onCreateAgentInWorkspace={handleCreateAgentInWorkspace}
-              onOpenWorkspaceContext={handleOpenWorkspaceContext}
               onDeleteAgent={handleDeleteAgent}
               onDeleteWorkspace={handleDeleteWorkspace}
               onSelectSession={handleSelectSession}
@@ -1442,7 +1427,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                   key={`workspace-overview:${activeWorkspace.id}`}
                   workspace={activeWorkspace}
                   agents={workspaceAgents}
-                  onSelectAgent={handleSelectAgent}
+                  onNodeDetail={setNodeDetail}
                 />
               ) : hasChat ? (
                 <ChatPanel

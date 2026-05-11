@@ -1,13 +1,15 @@
 import { useMemo, useRef, useState, useEffect, useCallback } from "react";
 import ForceGraph2D from "react-force-graph-2d";
 import type { AgentInfo } from "@/hooks/use-agents";
-import type { WorkspaceInfo } from "@/hooks/use-workspaces";
+import { getWorkspaceDir, type WorkspaceInfo } from "@/hooks/use-workspaces";
+import { BaseDirectory, readTextFile } from "@tauri-apps/plugin-fs";
 import { AgentUIContent, AgentUIHeaderControls, useAgentUI } from "./AgentUI";
+import type { DetailPanel } from "./AgentCanvas";
 
 interface WorkspaceCanvasProps {
   workspace: WorkspaceInfo;
   agents: AgentInfo[];
-  onSelectAgent?: (agentId: string) => void;
+  onNodeDetail?: (detail: DetailPanel | null) => void;
 }
 
 interface WorkspaceNode {
@@ -15,8 +17,6 @@ interface WorkspaceNode {
   label: string;
   size: number;
   kind: "workspace" | "agent" | "ui" | "chat" | "context";
-  emoji?: string;
-  avatar?: string;
 }
 
 interface WorkspaceLink {
@@ -24,7 +24,7 @@ interface WorkspaceLink {
   target: string;
 }
 
-export function WorkspaceCanvas({ workspace, agents, onSelectAgent }: WorkspaceCanvasProps) {
+export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCanvasProps) {
   const [tab, setTab] = useState<"canvas" | "ui">("canvas");
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<any>(null);
@@ -36,6 +36,16 @@ export function WorkspaceCanvas({ workspace, agents, onSelectAgent }: WorkspaceC
   const animFrameRef = useRef<number>(0);
   const [, forceRender] = useState(0);
   const workspaceUI = useAgentUI("main", ".openclaw/workspace");
+  const agentsSignature = agents
+    .map((agent) => `${agent.id}\u001f${agent.name ?? ""}\u001f${agent.isDefault ? "1" : "0"}`)
+    .join("\u001e");
+
+  const agentNodes = useMemo(() => agents.map((agent) => ({
+    id: `agent:${agent.id}`,
+    label: agent.name ?? agent.id,
+    size: agent.isDefault ? 6 : 5,
+    kind: "agent" as const,
+  })), [agentsSignature]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -66,20 +76,13 @@ export function WorkspaceCanvas({ workspace, agents, onSelectAgent }: WorkspaceC
       { source: "context", target: "goals" },
     ];
 
-    for (const agent of agents) {
-      nodes.push({
-        id: `agent:${agent.id}`,
-        label: agent.name ?? agent.id,
-        size: agent.isDefault ? 6 : 5,
-        kind: "agent",
-        emoji: agent.emoji,
-        avatar: agent.avatar,
-      });
-      links.push({ source: "workspace", target: `agent:${agent.id}` });
+    for (const agent of agentNodes) {
+      nodes.push(agent);
+      links.push({ source: "workspace", target: agent.id });
     }
 
     return { nodes, links };
-  }, [workspace.name, agents]);
+  }, [agentNodes, workspace.name]);
 
   useEffect(() => {
     if (!graphRef.current) return;
@@ -119,6 +122,101 @@ export function WorkspaceCanvas({ workspace, agents, onSelectAgent }: WorkspaceC
     });
     return set;
   }, [graphData.links, hoveredNode]);
+
+  const readWorkspaceFile = useCallback(async (file: string) => {
+    const dir = getWorkspaceDir(workspace.id);
+    return readTextFile(`${dir}/${file}`, { baseDir: BaseDirectory.Home }).catch(() => `No ${file}`);
+  }, [workspace.id]);
+
+  const readAgentFile = useCallback(async (agentId: string, file: string) => {
+    return readTextFile(`.openclaw/workspace/${agentId}/${file}`, { baseDir: BaseDirectory.Home }).catch(() => "");
+  }, []);
+
+  const showNodeDetail = useCallback(async (node: WorkspaceNode) => {
+    if (!onNodeDetail) return;
+
+    if (node.id === "workspace") {
+      onNodeDetail({
+        title: `${workspace.name} Overview`,
+        type: "info",
+        content: `**Workspace:** ${workspace.name}\n\n**ID:** ${workspace.id}\n\n**Linked agents:** ${agents.length}\n\nThis is the project-level canvas. Use it to inspect workspace context, goals, team structure, UI, and linked agents without entering an individual agent chat.`,
+      });
+      return;
+    }
+
+    if (node.id === "chat") {
+      onNodeDetail({
+        title: "Workspace Main",
+        type: "info",
+        content: `The workspace main agent coordinates this workspace's general chat, durable memory, goals, team setup, and handoff decisions.\n\nOpen the Workspace Main node in the Team Tree to continue its latest conversation.`,
+      });
+      return;
+    }
+
+    if (node.id === "ui") {
+      onNodeDetail({
+        title: "Workspace UI",
+        type: "info",
+        content: workspaceUI.repoPath
+          ? `**UI workspace:** ${workspaceUI.repoPath}\n\nUse the UI tab to preview or edit the workspace-level interface.`
+          : "No workspace UI has been created yet.",
+      });
+      return;
+    }
+
+    if (node.id === "context") {
+      const files = await Promise.all([
+        ["Workspace instructions", "AGENTS.md"],
+        ["Team", "TEAM.md"],
+        ["Goals", "GOALS.md"],
+        ["Memory", "MEMORY.md"],
+      ].map(async ([label, file]) => {
+        const content = await readWorkspaceFile(file);
+        return `# ${label} (${file})\n\n${content}`;
+      }));
+      onNodeDetail({
+        title: `${workspace.name} Context`,
+        type: "markdown",
+        content: files.join("\n\n---\n\n"),
+      });
+      return;
+    }
+
+    const fileByNode: Record<string, { title: string; file: string }> = {
+      memory: { title: "Workspace Memory", file: "MEMORY.md" },
+      team: { title: "Workspace Team", file: "TEAM.md" },
+      goals: { title: "Workspace Goals", file: "GOALS.md" },
+    };
+    const fileInfo = fileByNode[node.id];
+    if (fileInfo) {
+      onNodeDetail({
+        title: fileInfo.title,
+        type: "markdown",
+        content: await readWorkspaceFile(fileInfo.file),
+      });
+      return;
+    }
+
+    if (node.id.startsWith("agent:")) {
+      const agentId = node.id.slice(6);
+      const agent = agents.find((item) => item.id === agentId);
+      const [identity, brief] = await Promise.all([
+        readAgentFile(agentId, "IDENTITY.md"),
+        readAgentFile(agentId, "PROJECT_BRIEF.md"),
+      ]);
+      onNodeDetail({
+        title: agent?.name ?? agentId,
+        type: "markdown",
+        content: [
+          `# ${agent?.name ?? agentId}`,
+          `**ID:** ${agentId}`,
+          agent?.isDefault ? "**Role:** Workspace Main" : "**Role:** Linked workspace agent",
+          identity ? `## Identity\n\n${identity}` : "",
+          brief ? `## Project Brief\n\n${brief}` : "",
+        ].filter(Boolean).join("\n\n"),
+      });
+    }
+  }, [agents, onNodeDetail, readAgentFile, readWorkspaceFile, workspace.id, workspace.name, workspaceUI.repoPath]);
 
   const paintNode = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
     const n = node as WorkspaceNode & { x: number; y: number };
@@ -224,9 +322,9 @@ export function WorkspaceCanvas({ workspace, agents, onSelectAgent }: WorkspaceC
               if (!draggingNode.current) setHoveredNode(node ? (node as WorkspaceNode).id : null);
             }}
             onNodeClick={(node: any) => {
-              const id = (node as WorkspaceNode).id;
-              if (id.startsWith("agent:")) onSelectAgent?.(id.slice(6));
-              if (id === "ui") setTab("ui");
+              const workspaceNode = node as WorkspaceNode;
+              void showNodeDetail(workspaceNode);
+              if (workspaceNode.id === "ui") setTab("ui");
             }}
             onNodeDrag={(node: any) => {
               draggingNode.current = (node as WorkspaceNode).id;

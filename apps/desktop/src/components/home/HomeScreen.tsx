@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { AgentInfo } from "@/hooks/use-agents";
 import type { SessionInfo } from "@/hooks/use-sessions";
 import type { WorkspaceInfo } from "@/hooks/use-workspaces";
-import { Search, MessageSquarePlus, Download, MoreHorizontal, Pin, Boxes, Plus, ArrowLeft, GitBranch, Link2, UserPlus, CornerDownRight, X, FileText, Trash2, Unlink, ChevronRight } from "lucide-react";
+import { Search, MessageSquarePlus, Download, MoreHorizontal, Pin, Boxes, Plus, ArrowLeft, GitBranch, Link2, UserPlus, CornerDownRight, X, Trash2, Unlink, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { EmojiPicker } from "../ui/EmojiPicker";
 import { AgentAvatar } from "../ui/AgentAvatar";
@@ -63,7 +63,6 @@ interface HomeScreenProps {
   onAddAgentToWorkspace?: (workspaceId: string, agentId: string) => void;
   onRemoveAgentFromWorkspace?: (workspaceId: string, agentId: string) => void;
   onCreateAgentInWorkspace?: (workspaceId: string) => void;
-  onOpenWorkspaceContext?: (workspaceId: string) => void;
   onDeleteAgent?: (agentId: string) => void | Promise<void>;
   onDeleteWorkspace?: (workspaceId: string) => void | Promise<void>;
   onSelectSession?: (agentId: string, sessionKey: string) => void;
@@ -282,7 +281,6 @@ export function HomeScreen({
   onAddAgentToWorkspace,
   onRemoveAgentFromWorkspace,
   onCreateAgentInWorkspace,
-  onOpenWorkspaceContext,
   onDeleteAgent,
   onDeleteWorkspace,
   getAgentSessions,
@@ -680,14 +678,6 @@ export function HomeScreen({
         </div>
 
         <div className="flex-1 overflow-y-auto px-1.5">
-          <button
-            onClick={() => onOpenWorkspaceContext?.(activeWorkspace.id)}
-            className="group ml-1 flex w-[calc(100%-4px)] items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/6"
-          >
-            <FileText className="h-4 w-4 text-text-muted" />
-            <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-text">Context files</span>
-          </button>
-
           <div className="px-2.5 pb-1 pt-4">
             <span className="text-[12px] font-medium text-text/90">Team tree</span>
           </div>
