@@ -30,6 +30,11 @@ export function WorkspaceCanvas({ workspace, agents, onSelectAgent }: WorkspaceC
   const graphRef = useRef<any>(null);
   const [dimensions, setDimensions] = useState({ width: 400, height: 400 });
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
+  const draggingNode = useRef<string | null>(null);
+  const hoverIntensity = useRef(0);
+  const labelOffsets = useRef<Record<string, number>>({});
+  const animFrameRef = useRef<number>(0);
+  const [, forceRender] = useState(0);
   const workspaceUI = useAgentUI("main", ".openclaw/workspace");
 
   useEffect(() => {
@@ -81,33 +86,97 @@ export function WorkspaceCanvas({ workspace, agents, onSelectAgent }: WorkspaceC
     setTimeout(() => graphRef.current?.zoomToFit(360, 64), 220);
   }, [graphData.nodes.length]);
 
+  useEffect(() => {
+    let running = true;
+    const animate = () => {
+      if (!running) return;
+      const target = hoveredNode ? 1 : 0;
+      const previous = hoverIntensity.current;
+      hoverIntensity.current += (target - previous) * 0.1;
+      if (Math.abs(hoverIntensity.current - target) > 0.005) {
+        forceRender((value) => value + 1);
+        animFrameRef.current = requestAnimationFrame(animate);
+      } else {
+        hoverIntensity.current = target;
+        forceRender((value) => value + 1);
+      }
+    };
+    animFrameRef.current = requestAnimationFrame(animate);
+    return () => {
+      running = false;
+      cancelAnimationFrame(animFrameRef.current);
+    };
+  }, [hoveredNode]);
+
+  const connectedNodes = useMemo(() => {
+    if (!hoveredNode) return new Set<string>();
+    const set = new Set<string>([hoveredNode]);
+    graphData.links.forEach((link) => {
+      const source = typeof link.source === "object" ? (link.source as any).id : link.source;
+      const target = typeof link.target === "object" ? (link.target as any).id : link.target;
+      if (source === hoveredNode) set.add(target);
+      if (target === hoveredNode) set.add(source);
+    });
+    return set;
+  }, [graphData.links, hoveredNode]);
+
   const paintNode = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
     const n = node as WorkspaceNode & { x: number; y: number };
+    const isCenter = n.kind === "workspace";
+    const isBranch = n.size >= 5 && !isCenter;
+    const isLeaf = n.size < 5;
+    const r = isCenter ? 10 : isBranch ? 6 : 3.5;
     const isHovered = hoveredNode === n.id;
-    const isDimmed = hoveredNode && !isHovered;
-    const r = n.size;
-    const brightness = isHovered ? 255 : isDimmed ? 92 : n.kind === "workspace" ? 240 : 214;
+    const isConnected = connectedNodes.has(n.id);
+    const isDimmed = hoveredNode && !isHovered && !isConnected;
+    const t = hoverIntensity.current;
+
+    let brightness: number;
+    if (isHovered) {
+      brightness = isCenter ? 255 : isBranch ? 245 : 236;
+    } else if (isConnected && hoveredNode) {
+      brightness = isCenter ? 250 : isBranch ? 235 : 225;
+    } else if (isDimmed) {
+      const normal = isCenter ? 240 : isBranch ? 224 : 208;
+      const dimmed = isCenter ? 80 : isBranch ? 60 : 45;
+      brightness = Math.round(normal + (dimmed - normal) * t);
+    } else {
+      brightness = isCenter ? 240 : isBranch ? 224 : 208;
+    }
 
     ctx.beginPath();
     ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
     ctx.fillStyle = `rgb(${brightness}, ${brightness}, ${brightness})`;
     ctx.fill();
 
-    if (n.kind === "agent" && n.emoji) {
-      ctx.font = `${r * 1.2}px sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(n.emoji, n.x, n.y + 0.5);
-    }
-
     if (globalScale > 0.35) {
-      ctx.font = `${n.kind === "workspace" ? "500" : "400"} ${n.kind === "workspace" ? 4.2 : 3.3}px Inter, system-ui, sans-serif`;
+      const targetOffset = (isHovered || (isConnected && hoveredNode)) ? 0 : hoveredNode ? -1.5 : 0;
+      const previous = labelOffsets.current[n.id] ?? 0;
+      const offset = previous + (targetOffset - previous) * 0.15;
+      labelOffsets.current[n.id] = offset;
+
+      const labelAlpha = isHovered ? 1 : (isConnected && hoveredNode) ? 0.85 : isDimmed ? Math.max(0, 1 - t * 0.8) : 1;
+      let labelBrightness: number;
+      if (isHovered) {
+        labelBrightness = 240;
+      } else if (isConnected && hoveredNode) {
+        labelBrightness = 210;
+      } else if (isDimmed) {
+        const normal = isLeaf ? 136 : 187;
+        labelBrightness = Math.round(normal + (40 - normal) * t);
+      } else {
+        labelBrightness = isLeaf ? 170 : 210;
+      }
+
+      ctx.font = `${isLeaf ? "400" : "500"} ${isCenter ? 4 : isBranch ? 3.5 : 3}px Inter, system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-      ctx.fillStyle = isDimmed ? "#666" : "#d7d7d7";
-      ctx.fillText(n.label, n.x, n.y + r + 3);
+      ctx.globalAlpha = labelAlpha;
+      ctx.fillStyle = `rgb(${labelBrightness}, ${labelBrightness}, ${labelBrightness})`;
+      ctx.fillText(n.label, n.x, n.y + r + 2 + offset);
+      ctx.globalAlpha = 1;
     }
-  }, [hoveredNode]);
+  }, [connectedNodes, hoveredNode]);
 
   return (
     <div className="flex h-full flex-col">
@@ -143,16 +212,31 @@ export function WorkspaceCanvas({ workspace, agents, onSelectAgent }: WorkspaceC
               ctx.fillStyle = color;
               ctx.fill();
             }}
-            linkColor={() => "#3a3a3a"}
+            linkColor={(link: any) => {
+              if (!hoveredNode) return "#3a3a3a";
+              const source = typeof link.source === "object" ? link.source.id : link.source;
+              const target = typeof link.target === "object" ? link.target.id : link.target;
+              if (source === hoveredNode || target === hoveredNode) return "#888888";
+              return "#2a2a2a";
+            }}
             linkWidth={1}
-            onNodeHover={(node: any) => setHoveredNode(node ? (node as WorkspaceNode).id : null)}
+            onNodeHover={(node: any) => {
+              if (!draggingNode.current) setHoveredNode(node ? (node as WorkspaceNode).id : null);
+            }}
             onNodeClick={(node: any) => {
               const id = (node as WorkspaceNode).id;
               if (id.startsWith("agent:")) onSelectAgent?.(id.slice(6));
               if (id === "ui") setTab("ui");
             }}
-            d3AlphaDecay={0.045}
-            d3VelocityDecay={0.34}
+            onNodeDrag={(node: any) => {
+              draggingNode.current = (node as WorkspaceNode).id;
+              setHoveredNode((node as WorkspaceNode).id);
+            }}
+            onNodeDragEnd={() => {
+              draggingNode.current = null;
+            }}
+            d3AlphaDecay={0.04}
+            d3VelocityDecay={0.3}
             cooldownTicks={120}
           />
         </div>
