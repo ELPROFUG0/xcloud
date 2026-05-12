@@ -1,14 +1,15 @@
 import { cn } from "@/lib/cn";
-import type { ToolCallInfo } from "@/types/chat";
+import type { CodeChangeInfo, ToolCallInfo } from "@/types/chat";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import {
   Terminal, FileText, Search, Globe, Code,
-  FolderOpen, Pencil, Database, Zap, ChevronDown,
+  FolderOpen, Pencil, Database, Zap, ChevronDown, FileDiff,
   type LucideIcon,
 } from "lucide-react";
 import { Shimmer } from "../ai-elements/shimmer";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useState } from "react";
 
 interface ToolCallBadgeProps {
   tool: ToolCallInfo;
@@ -32,17 +33,136 @@ function getToolIcon(name: string): LucideIcon {
   return Zap;
 }
 
+function summarizeChanges(changes: CodeChangeInfo[]) {
+  return changes.reduce(
+    (total, change) => ({
+      additions: total.additions + change.additions,
+      deletions: total.deletions + change.deletions,
+    }),
+    { additions: 0, deletions: 0 },
+  );
+}
+
+function displayPath(path: string) {
+  return path
+    .replace(/^\/Users\/[^/]+\/Downloads\/unicore\//, "")
+    .replace(/^\/Users\/[^/]+\/\.openclaw\/workspace\//, "~/.openclaw/workspace/")
+    .replace(/^\/Users\/[^/]+\//, "~/");
+}
+
+function splitDisplayPath(path: string) {
+  const display = displayPath(path);
+  const index = display.lastIndexOf("/");
+  if (index < 0) return { dir: "", file: display };
+  return {
+    dir: display.slice(0, index + 1),
+    file: display.slice(index + 1),
+  };
+}
+
+function diffLineClass(line: string) {
+  if (/^\s*\+\d+\s/.test(line) || (/^\+/.test(line) && !/^\+\+\+/.test(line))) {
+    return "bg-emerald-500/10 text-emerald-200";
+  }
+  if (/^\s*-\d+\s/.test(line) || (/^-/.test(line) && !/^---/.test(line))) {
+    return "bg-red-500/10 text-red-200";
+  }
+  return "text-text-muted/70";
+}
+
+function CodeChangeFileRow({ change, index }: { change: CodeChangeInfo; index: number }) {
+  const [open, setOpen] = useState(false);
+  const pathParts = splitDisplayPath(change.path);
+
+  return (
+    <div>
+      <button
+        type="button"
+        className="flex w-full cursor-pointer items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-white/[0.04]"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-controls={`code-change-diff-${index}`}
+      >
+        <span className="min-w-0 flex-1 truncate font-mono text-[12px]" title={displayPath(change.path)}>
+          {pathParts.dir && <span className="text-text-muted/55">{pathParts.dir}</span>}
+          <span className="text-text">{pathParts.file}</span>
+        </span>
+        <span className="w-10 shrink-0 text-right font-mono text-[11px] text-emerald-300">+{change.additions}</span>
+        <span className="w-10 shrink-0 text-right font-mono text-[11px] text-red-300">-{change.deletions}</span>
+        <ChevronDown
+          className={cn(
+            "h-3.5 w-3.5 shrink-0 text-text-muted/45 transition-transform",
+            open && "rotate-180",
+          )}
+        />
+      </button>
+
+      {open && (
+        <div id={`code-change-diff-${index}`} className="border-t border-white/[0.06] bg-[#101010]">
+          {change.diff ? (
+            <pre className="max-h-[280px] overflow-auto py-2 font-mono text-[11px] leading-relaxed">
+              {change.diff.split("\n").map((line, lineIndex) => (
+                <div key={lineIndex} className={cn("px-3 whitespace-pre", diffLineClass(line))}>
+                  {line || " "}
+                </div>
+              ))}
+            </pre>
+          ) : (
+            <div className="px-3 py-3 text-[12px] text-text-muted/70">
+              Diff no disponible para este evento; sólo se recibió el archivo modificado.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CodeChangeArtifact({ changes }: { changes: CodeChangeInfo[] }) {
+  const totals = summarizeChanges(changes);
+
+  return (
+    <div className="my-3 flex max-h-[460px] flex-col overflow-hidden rounded-lg bg-[#222] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+      <div className="flex shrink-0 items-center justify-between border-b border-white/[0.055] px-3 py-2.5">
+        <div className="flex min-w-0 items-center gap-2 text-[12px] font-medium text-text">
+          <FileDiff className="h-3.5 w-3.5 shrink-0 text-text-muted" />
+          <span className="truncate">{changes.length} {changes.length === 1 ? "file" : "files"} changed</span>
+          <span className="flex shrink-0 items-center gap-1 font-mono">
+            <span className="text-emerald-300">+{totals.additions}</span>
+            <span className="text-red-300">-{totals.deletions}</span>
+          </span>
+        </div>
+      </div>
+
+      <div className="min-h-0 divide-y divide-white/[0.055] overflow-y-auto">
+        {changes.map((change, index) => (
+          <CodeChangeFileRow key={`${change.path}-${index}`} change={change} index={index} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function ToolCallBadge({ tool, textContent, isTextStreaming }: ToolCallBadgeProps) {
-  const Icon = getToolIcon(tool.name);
+  const hasChanges = Boolean(tool.changes?.length);
+  const Icon = hasChanges ? FileDiff : getToolIcon(tool.name);
   const isRunning = tool.status === "running";
   const isDone = tool.status === "done";
   const hasOutput = !!tool.output?.trim();
   const hasText = !!textContent;
-  const canExpand = hasOutput || hasText || isTextStreaming;
+  const canExpand = hasOutput || hasChanges || hasText || isTextStreaming;
+  const changeTotals = tool.changes ? summarizeChanges(tool.changes) : null;
 
   const label = tool.title
     ? tool.title.replace(/^(exec|read|write|edit|search|grep|glob)\s*/i, "").trim() || tool.name
     : tool.name;
+  const displayLabel = hasChanges && tool.changes && changeTotals
+    ? `${tool.changes.length} ${tool.changes.length === 1 ? "file" : "files"} changed`
+    : label;
+
+  if (hasChanges && tool.changes) {
+    return <CodeChangeArtifact changes={tool.changes} />;
+  }
 
   return (
     <Collapsible>
@@ -67,11 +187,18 @@ export function ToolCallBadge({ tool, textContent, isTextStreaming }: ToolCallBa
           {/* Label */}
           {isRunning ? (
             <span className="flex-1 truncate">
-              <Shimmer className="text-[12px]" duration={2}>{label !== tool.name ? label : ""}</Shimmer>
+              <Shimmer className="text-[12px]" duration={2}>{displayLabel !== tool.name ? displayLabel : ""}</Shimmer>
             </span>
           ) : (
             <span className="flex-1 truncate text-[12px] text-text-muted/70">
-              {label !== tool.name ? label : ""}
+              {displayLabel !== tool.name ? displayLabel : ""}
+            </span>
+          )}
+
+          {hasChanges && changeTotals && (
+            <span className="flex shrink-0 items-center gap-1 font-mono text-[10px]">
+              <span className="text-emerald-300">+{changeTotals.additions}</span>
+              <span className="text-red-300">-{changeTotals.deletions}</span>
             </span>
           )}
 

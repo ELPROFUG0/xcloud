@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { BrowserEngine } from "@/lib/engine";
-import type { ChatMessage, ToolCallInfo } from "@/types/chat";
+import type { ChatMessage, CodeChangeInfo, ToolCallInfo } from "@/types/chat";
 import { emitAgUiEvents, openClawFrameToAgUiEvents, userMessageToAgUiEvents } from "@/lib/ag-ui-bridge";
 import { executeRegisteredUiAction, getRegisteredUiTools } from "@/lib/ui-action-registry";
 import { BaseDirectory, readTextFile } from "@tauri-apps/plugin-fs";
@@ -81,6 +81,96 @@ function buildToolTitle(name: string, args?: Record<string, unknown>): string {
     return `find ${args.pattern}`;
   }
   return name;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function getToolPath(name: string, args?: Record<string, unknown>, output?: string): string | undefined {
+  const rawPath = args?.path ?? args?.file_path ?? args?.filename;
+  if (typeof rawPath === "string" && rawPath.trim()) return rawPath.trim();
+
+  const text = output ?? "";
+  const patterns = [
+    /(?:in|to)\s+([/\w .:@-]+\.[\w-]+)\.?$/m,
+    /(?:Updated|Added|Deleted|Modified)\s+(.+?)\s*$/m,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern)?.[1]?.trim();
+    if (match) return match;
+  }
+
+  const titlePath = name.match(/(?:read|write|edit)\s+(.+)$/i)?.[1]?.trim();
+  return titlePath || undefined;
+}
+
+function countDiffStats(diff?: string) {
+  if (!diff) return { additions: 0, deletions: 0 };
+  let additions = 0;
+  let deletions = 0;
+  for (const line of diff.split("\n")) {
+    if (/^\s*\+\d+\s/.test(line) || (/^\+/.test(line) && !/^\+\+\+/.test(line))) additions += 1;
+    if (/^\s*-\d+\s/.test(line) || (/^-/.test(line) && !/^---/.test(line))) deletions += 1;
+  }
+  return { additions, deletions };
+}
+
+function buildCodeChangeFromTool(params: {
+  name: string;
+  args?: Record<string, unknown>;
+  output?: string;
+  details?: Record<string, unknown>;
+}): CodeChangeInfo[] | undefined {
+  const lowerName = params.name.toLowerCase();
+  const details = params.details;
+  const diff = typeof details?.diff === "string" ? details.diff : undefined;
+  const path = getToolPath(params.name, params.args, params.output);
+
+  if (diff && path) {
+    const stats = countDiffStats(diff);
+    return [{
+      path,
+      diff,
+      firstChangedLine: typeof details?.firstChangedLine === "number" ? details.firstChangedLine : undefined,
+      additions: stats.additions,
+      deletions: stats.deletions,
+      kind: lowerName.includes("delete") ? "deleted" : "modified",
+    }];
+  }
+
+  if ((lowerName.includes("write") || lowerName.includes("edit")) && path && params.output?.toLowerCase().includes("successfully")) {
+    return [{
+      path,
+      additions: lowerName.includes("write") ? 1 : 0,
+      deletions: 0,
+      kind: lowerName.includes("write") ? "added" : "modified",
+    }];
+  }
+
+  return undefined;
+}
+
+function buildCodeChangesFromPatchSummary(data: Record<string, unknown>): CodeChangeInfo[] | undefined {
+  const changes: CodeChangeInfo[] = [];
+  for (const [key, kind] of [
+    ["added", "added"],
+    ["modified", "modified"],
+    ["deleted", "deleted"],
+  ] as const) {
+    const value = data[key];
+    if (!Array.isArray(value)) continue;
+    for (const item of value) {
+      const path = typeof item === "string"
+        ? item
+        : isRecord(item) && typeof item.path === "string"
+          ? item.path
+          : undefined;
+      if (!path) continue;
+      changes.push({ path, additions: kind === "deleted" ? 0 : 1, deletions: kind === "deleted" ? 1 : 0, kind });
+    }
+  }
+  return changes.length ? changes : undefined;
 }
 
 function hasWorkspaceKeyword(message: string) {
@@ -639,8 +729,20 @@ function mergeHistoryWithLive(loaded: ChatMessage[], live: ChatMessage[]) {
   return merged;
 }
 
-function parseHistoryMessages(sessionKey: string, history: Array<{ role: string; content: unknown; timestamp?: number; openclawAbort?: { aborted?: boolean } }>): ChatMessage[] {
+type HistoryMessage = {
+  role: string;
+  content: unknown;
+  timestamp?: number;
+  toolCallId?: string;
+  toolName?: string;
+  details?: unknown;
+  isError?: boolean;
+  openclawAbort?: { aborted?: boolean };
+};
+
+function parseHistoryMessages(sessionKey: string, history: HistoryMessage[]): ChatMessage[] {
   const toolOutputs = new Map<string, string>();
+  const toolChanges = new Map<string, CodeChangeInfo[]>();
   const parsed: Array<{ role: string; content: string; thinking?: string; tools: ToolCallInfo[]; timestamp: number }> = [];
 
   for (let i = 0; i < history.length; i++) {
@@ -652,6 +754,15 @@ function parseHistoryMessages(sessionKey: string, history: Array<{ role: string;
         .filter(b => b.type === "text" && b.text)
         .map(b => b.text)
         .join("");
+      if (m.toolCallId) {
+        toolOutputs.set(m.toolCallId, text.slice(0, 500));
+        const changes = buildCodeChangeFromTool({
+          name: m.toolName ?? "tool",
+          output: text,
+          details: isRecord(m.details) ? m.details : undefined,
+        });
+        if (changes) toolChanges.set(m.toolCallId, changes);
+      }
       for (let j = i - 1; j >= 0; j--) {
         const prev = history[j]!;
         if (prev.role === "assistant" && Array.isArray(prev.content)) {
@@ -694,11 +805,15 @@ function parseHistoryMessages(sessionKey: string, history: Array<{ role: string;
         for (const block of blocks) {
           if (block.type === "toolCall" && block.name) {
             const toolId = block.id ?? `${block.name}-hist-${i}`;
+            const args = isRecord(block.arguments) ? block.arguments : undefined;
+            const output = toolOutputs.get(toolId);
             msgTools.push({
               id: toolId,
               name: block.name,
-              title: buildToolTitle(block.name, block.arguments),
-              output: toolOutputs.get(toolId),
+              title: buildToolTitle(block.name, args),
+              args,
+              output,
+              changes: toolChanges.get(toolId) ?? buildCodeChangeFromTool({ name: block.name, args, output }),
               status: "done",
               timestamp: m.timestamp ?? Date.now(),
             });
@@ -842,11 +957,12 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
     if (stream === "item" && data?.kind === "tool") {
       const phase = data.phase as string;
       const name = (data.name as string) ?? "unknown";
-      const title = (data.title as string) ?? name;
+      const args = isRecord(data.args) ? data.args : undefined;
+      const title = (data.title as string) ?? buildToolTitle(name, args);
       const toolCallId = (data.toolCallId as string) ?? `${name}-${Date.now()}`;
 
       if (phase === "start") {
-        const toolInfo: ToolCallInfo = { id: toolCallId, name, title, status: "running", timestamp: Date.now() };
+        const toolInfo: ToolCallInfo = { id: toolCallId, name, title, args, status: "running", timestamp: Date.now() };
         updateChatMessages(sessionKey, (messages) => {
           if (messages.some((message) => message.role === "tool" && message.tool?.id === toolCallId)) return messages;
           const last = messages[messages.length - 1];
@@ -888,6 +1004,70 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
           ),
         );
         emitChatSessionActivity(sessionKey, { working: true });
+      }
+    }
+
+    if (stream === "tool" && data) {
+      const phase = data.phase as string;
+      const name = (data.name as string) ?? "unknown";
+      const args = isRecord(data.args) ? data.args : undefined;
+      const toolCallId = (data.toolCallId as string) ?? `${name}-${Date.now()}`;
+
+      if (phase === "start") {
+        const title = buildToolTitle(name, args);
+        const toolInfo: ToolCallInfo = { id: toolCallId, name, title, args, status: "running", timestamp: Date.now() };
+        updateChatMessages(sessionKey, (messages) => {
+          if (messages.some((message) => message.role === "tool" && message.tool?.id === toolCallId)) return messages;
+          const last = messages[messages.length - 1];
+          if (last?.isStreaming && last.content === "") {
+            return [
+              ...messages.slice(0, -1),
+              { id: `tool-${toolCallId}`, role: "tool" as const, content: "", timestamp: Date.now(), tool: toolInfo },
+              last,
+            ];
+          }
+          return [...messages, { id: `tool-${toolCallId}`, role: "tool" as const, content: "", timestamp: Date.now(), tool: toolInfo }];
+        });
+      }
+
+      if (phase === "result") {
+        const result = isRecord(data.result) ? data.result : undefined;
+        const output = result ? JSON.stringify(result) : undefined;
+        const changes = buildCodeChangeFromTool({
+          name,
+          args,
+          output,
+          details: isRecord(result?.details) ? result.details : result,
+        });
+        updateChatMessages(sessionKey, (messages) =>
+          messages.map((message) =>
+            message.role === "tool" && message.tool?.id === toolCallId
+              ? {
+                  ...message,
+                  tool: {
+                    ...message.tool!,
+                    args: args ?? message.tool!.args,
+                    status: data.isError ? "error" : "done",
+                    ...(changes ? { changes } : {}),
+                  },
+                }
+              : message,
+          ),
+        );
+      }
+    }
+
+    if (stream === "patch" && data) {
+      const toolCallId = data.toolCallId as string | undefined;
+      const changes = buildCodeChangesFromPatchSummary(data);
+      if (toolCallId && changes) {
+        updateChatMessages(sessionKey, (messages) =>
+          messages.map((message) =>
+            message.role === "tool" && message.tool?.id === toolCallId
+              ? { ...message, tool: { ...message.tool!, changes } }
+              : message,
+          ),
+        );
       }
     }
   }
@@ -973,7 +1153,7 @@ function ensureSessionHistory(engine: BrowserEngine, sessionKey: string) {
     "chat.history",
   )
     .then((result) => {
-      const history = (result as { messages?: Array<{ role: string; content: unknown; timestamp?: number; openclawAbort?: { aborted?: boolean } }> }).messages ?? [];
+      const history = (result as { messages?: HistoryMessage[] }).messages ?? [];
       const loaded = parseHistoryMessages(sessionKey, history);
       updateChatSession(sessionKey, (current) => {
         const hasLiveMessages = current.isStreaming || current.messages.some((message) => message.isStreaming || message.id.startsWith("user-") || message.id.startsWith("assistant-"));
