@@ -38,9 +38,12 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 export const HIDDEN_PROMPT_MARKER = "<!-- unicore:hidden-workspace-setup -->";
+const HIDDEN_UI_ACTION_RESULT_MARKER = "<!-- unicore:hidden-ui-action-result -->";
 const APP_CONTEXT_START = "<!-- unicore:app-context -->";
 const APP_CONTEXT_END = "<!-- /unicore:app-context -->";
+const UI_ACTION_DIRECTIVE_START = "<!-- xcloud:ui-action";
 const UI_ACTION_DIRECTIVE_RE = /<!--\s*xcloud:ui-action\s+({[\s\S]*?})\s*-->/g;
+const streamingUiDirectiveBuffers = new Map<string, string>();
 
 export interface AppToolRequest {
   name: "create_workspace" | "delete_workspace" | "list_workspaces" | "open_workspace";
@@ -219,6 +222,52 @@ function extractUiActionDirectives(content: string) {
   return { visible, actions };
 }
 
+function streamingDirectiveKey(sessionKey: string, runId?: string) {
+  return `${sessionKey}:${runId ?? "active"}`;
+}
+
+function stripUiActionDirectivesForStreaming(sessionKey: string, runId: string | undefined, content: string) {
+  const key = streamingDirectiveKey(sessionKey, runId);
+  let rest = content;
+  let visible = "";
+  let buffered = streamingUiDirectiveBuffers.get(key) ?? "";
+
+  while (rest.length > 0) {
+    if (buffered) {
+      buffered += rest;
+      const end = buffered.indexOf("-->");
+      if (end === -1) {
+        streamingUiDirectiveBuffers.set(key, buffered);
+        return visible;
+      }
+      rest = buffered.slice(end + 3);
+      buffered = "";
+      streamingUiDirectiveBuffers.delete(key);
+      continue;
+    }
+
+    const start = rest.indexOf(UI_ACTION_DIRECTIVE_START);
+    if (start === -1) {
+      visible += rest;
+      rest = "";
+      continue;
+    }
+
+    visible += rest.slice(0, start);
+    buffered = rest.slice(start);
+    rest = "";
+    const end = buffered.indexOf("-->");
+    if (end !== -1) {
+      rest = buffered.slice(end + 3);
+      buffered = "";
+      streamingUiDirectiveBuffers.delete(key);
+    }
+  }
+
+  if (buffered) streamingUiDirectiveBuffers.set(key, buffered);
+  return visible;
+}
+
 async function executeUiActionDirectives(sessionKey: string, actions: Array<{ instruction: string; preferredTool?: string }>) {
   if (actions.length === 0) return;
   const agentId = extractAgentIdFromSessionKey(sessionKey);
@@ -273,6 +322,7 @@ async function executeUiActionDirectives(sessionKey: string, actions: Array<{ in
       detail: {
         sessionKey,
         message: [
+          HIDDEN_UI_ACTION_RESULT_MARKER,
           "xCloud UI action result:",
           `- Tool: ${result.toolName ?? action.preferredTool ?? "xcloud_ui_action"}`,
           `- OK: ${result.ok ? "true" : "false"}`,
@@ -649,7 +699,7 @@ function parseHistoryMessages(sessionKey: string, history: Array<{ role: string;
   for (let i = 0; i < parsed.length; i++) {
     const p = parsed[i]!;
 
-    if (p.role === "user" && p.content.includes(HIDDEN_PROMPT_MARKER)) continue;
+    if (p.role === "user" && (p.content.includes(HIDDEN_PROMPT_MARKER) || p.content.includes(HIDDEN_UI_ACTION_RESULT_MARKER) || p.content.startsWith("xCloud UI action result:"))) continue;
 
     if (p.role === "user" && p.content.length > 0) {
       const visibleContent = stripAppContext(p.content);
@@ -675,11 +725,12 @@ function parseHistoryMessages(sessionKey: string, history: Array<{ role: string;
       }
       pendingTools = [];
 
-      if (p.content.length > 0 || p.thinking) {
+      const { visible } = extractUiActionDirectives(p.content);
+      if (visible.length > 0 || p.thinking) {
         loaded.push({
           id: `history-${i}`,
           role: "assistant",
-          content: p.content,
+          content: visible,
           thinking: p.thinking || undefined,
           timestamp: p.timestamp,
         });
@@ -718,8 +769,12 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
     const data = payload.data as Record<string, unknown> | undefined;
 
     if (stream === "assistant" && (typeof data?.delta === "string" || typeof data?.text === "string")) {
-      const delta = typeof data?.delta === "string" ? data.delta : "";
-      const text = typeof data?.text === "string" ? data.text : "";
+      const delta = typeof data?.delta === "string"
+        ? stripUiActionDirectivesForStreaming(sessionKey, runId, data.delta)
+        : "";
+      const text = typeof data?.text === "string"
+        ? extractUiActionDirectives(data.text).visible
+        : "";
       updateChatSession(sessionKey, (state) => ({
         ...state,
         isStreaming: true,
@@ -824,6 +879,7 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
       }
 
       const { visible, actions } = extractUiActionDirectives(text);
+      streamingUiDirectiveBuffers.delete(streamingDirectiveKey(sessionKey, runId));
       updateChatSession(sessionKey, (current) => {
         return {
           ...current,
