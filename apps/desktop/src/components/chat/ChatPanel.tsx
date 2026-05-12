@@ -26,6 +26,7 @@ interface ChatPanelProps {
   workspaceName?: string;
   agents?: AgentInfo[];
   onSwitchAgent?: (id: string) => void;
+  onSessionChange?: (sessionKey: string) => void;
   sidebarCollapsed?: boolean;
   isFullscreen?: boolean;
   onRefresh?: () => Promise<void>;
@@ -57,7 +58,7 @@ function paginate(messages: ChatMessage[]): Page[] {
   return pages;
 }
 
-export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessionKey, agentName, titleName, workspaceName, agents = [], sidebarCollapsed, isFullscreen, onRefresh, initialPrompt, initialPromptHidden = false, terminalLift = 0, onToggleTerminal, terminalOpen = false, reserveCanvasControlsSpace = false, appTools }: ChatPanelProps) {
+export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessionKey, agentName, titleName, workspaceName, agents = [], onSessionChange, sidebarCollapsed, isFullscreen, onRefresh, initialPrompt, initialPromptHidden = false, terminalLift = 0, onToggleTerminal, terminalOpen = false, reserveCanvasControlsSpace = false, appTools }: ChatPanelProps) {
   const defaultSessionKey = externalSessionKey ?? (agentId === "main" ? "main" : `agent:${agentId}:main`);
   const [activeSession, setActiveSession] = useState(defaultSessionKey);
 
@@ -340,6 +341,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
                       const id = crypto.randomUUID().slice(0, 8);
                       const newKey = agentId === "main" ? `main:${id}` : `agent:${agentId}:${id}`;
                       setActiveSession(newKey);
+                      onSessionChange?.(newKey);
                       setShowSessions(false);
                     }}
                     className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-white/6 mb-0.5"
@@ -355,7 +357,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
                       return (
                         <button
                           key={s.key}
-                          onClick={() => { setActiveSession(s.key); setShowSessions(false); }}
+                          onClick={() => { setActiveSession(s.key); onSessionChange?.(s.key); setShowSessions(false); }}
                           className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-white/6 ${activeSession === s.key ? "bg-white/8" : ""}`}
                         >
                           <div className={`h-1.5 w-1.5 shrink-0 rounded-full ${activeSession === s.key ? "bg-emerald-400" : "bg-text-muted/40"}`} />

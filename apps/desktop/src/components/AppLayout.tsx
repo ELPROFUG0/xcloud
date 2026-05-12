@@ -460,7 +460,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   useTheme(); // Initialize theme CSS variables
   const { agents, refresh: refreshAgents } = useAgents(engine);
   const { workspaces, createWorkspace, linkAgent, unlinkAgent, removeAgentFromWorkspaces, deleteWorkspace, getWorkspaceAgents } = useWorkspaces(agents);
-  const { getAgentSessions } = useSessions(engine);
+  const { getAgentSessions, refresh: refreshSessions } = useSessions(engine);
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [activeSessionKey, setActiveSessionKey] = useState<string | null>(null);
@@ -524,17 +524,17 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const activeTerminal = terminalByContext[activeTerminalKey];
   const showTerminal = activeTerminal?.visible ?? false;
 
-  const getPreferredWorkspaceCoordinatorSession = useCallback((coordinatorId: string) => {
-    return getAgentSessions(coordinatorId)[0]?.key ?? getDefaultSessionKeyForAgent(coordinatorId);
+  const getPreferredAgentSession = useCallback((agentId: string) => {
+    return getAgentSessions(agentId)[0]?.key ?? getDefaultSessionKeyForAgent(agentId);
   }, [getAgentSessions]);
 
   useEffect(() => {
-    if (!activeWorkspaceCoordinatorId || activeAgentId !== activeWorkspaceCoordinatorId || showNewChat || showSettings) return;
-    const latestSession = getAgentSessions(activeWorkspaceCoordinatorId)[0]?.key;
+    if (!activeAgentId || showNewChat || showSettings) return;
+    const latestSession = getAgentSessions(activeAgentId)[0]?.key;
     if (!latestSession) return;
 
-    const defaultSession = getDefaultSessionKeyForAgent(activeWorkspaceCoordinatorId);
-    const legacyWorkspaceSession = `agent:${activeWorkspaceCoordinatorId}:general`;
+    const defaultSession = getDefaultSessionKeyForAgent(activeAgentId);
+    const legacyWorkspaceSession = activeAgentId === activeWorkspaceCoordinatorId ? `agent:${activeAgentId}:general` : null;
     setActiveSessionKey((current) => {
       if (current && current !== defaultSession && current !== legacyWorkspaceSession) return current;
       return current === latestSession ? current : latestSession;
@@ -567,6 +567,10 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   useEffect(() => {
     void ensureActiveRunSteering(engine).catch(() => {});
   }, [engine]);
+
+  useEffect(() => {
+    void refreshSessions();
+  }, [agents.length, refreshSessions, workspaces.length]);
 
   useEffect(() => {
     const handleActivity = (event: Event) => {
@@ -846,13 +850,13 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const handleSelectAgent = useCallback((id: string) => {
     clearUnreadForAgent(id);
     setActiveAgentId(id);
-    setActiveSessionKey(id === activeWorkspaceCoordinatorId ? getPreferredWorkspaceCoordinatorSession(id) : null);
+    setActiveSessionKey(getPreferredAgentSession(id));
     setShowNewChat(false);
     setInitialChatPrompt(undefined);
     setInitialChatPromptHidden(false);
     setShowSettings(false);
     setShowPreview(false);
-  }, [activeWorkspaceCoordinatorId, clearUnreadForAgent, getPreferredWorkspaceCoordinatorSession]);
+  }, [clearUnreadForAgent, getPreferredAgentSession]);
 
   const handleSelectWorkspace = useCallback((id: string) => {
     const coordinatorId = getWorkspaceAgentId(id);
@@ -860,7 +864,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     clearUnreadForAgent(coordinatorId);
     setActiveWorkspaceId(id);
     setActiveAgentId(coordinatorId);
-    setActiveSessionKey(getPreferredWorkspaceCoordinatorSession(coordinatorId));
+    setActiveSessionKey(getPreferredAgentSession(coordinatorId));
     setShowNewChat(false);
     setInitialChatPrompt(undefined);
     setInitialChatPromptHidden(false);
@@ -868,14 +872,14 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setShowPreview(false);
     setShowCanvas(true);
     setCanvasExpanded(false);
-  }, [clearUnreadForAgent, getPreferredWorkspaceCoordinatorSession, triggerSidebarAnimation]);
+  }, [clearUnreadForAgent, getPreferredAgentSession, triggerSidebarAnimation]);
 
   const handleSelectWorkspaceOverview = useCallback((id: string) => {
     const coordinatorId = getWorkspaceAgentId(id);
     clearUnreadForAgent(coordinatorId);
     setActiveWorkspaceId(id);
     setActiveAgentId(null);
-    setActiveSessionKey(getPreferredWorkspaceCoordinatorSession(coordinatorId));
+    setActiveSessionKey(getPreferredAgentSession(coordinatorId));
     setShowNewChat(false);
     setInitialChatPrompt(undefined);
     setInitialChatPromptHidden(false);
@@ -883,7 +887,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setShowPreview(false);
     setShowCanvas(true);
     setCanvasExpanded(false);
-  }, [clearUnreadForAgent, getPreferredWorkspaceCoordinatorSession]);
+  }, [clearUnreadForAgent, getPreferredAgentSession]);
 
   const handleLeaveWorkspace = useCallback(() => {
     triggerSidebarAnimation();
@@ -906,13 +910,13 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     const coordinatorId = getWorkspaceAgentId(workspaceId);
     setActiveWorkspaceId(workspaceId);
     setActiveAgentId(coordinatorId);
-    setActiveSessionKey(getPreferredWorkspaceCoordinatorSession(coordinatorId));
+    setActiveSessionKey(getPreferredAgentSession(coordinatorId));
     setInitialChatPrompt(prompt);
     setInitialChatPromptHidden(false);
     setShowNewChat(false);
     setShowSettings(false);
     setShowPreview(false);
-  }, [getPreferredWorkspaceCoordinatorSession, workspaces]);
+  }, [getPreferredAgentSession, workspaces]);
 
   const handleDeleteWorkspace = useCallback((workspaceId: string) => {
     const deletedWorkspace = workspaces.find((workspace) => workspace.id === workspaceId);
@@ -1035,9 +1039,9 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     if (activeWorkspaceId === workspaceId && activeAgentId === agentId) {
       const coordinatorId = getWorkspaceAgentId(workspaceId);
       setActiveAgentId(coordinatorId);
-      setActiveSessionKey(getPreferredWorkspaceCoordinatorSession(coordinatorId));
+      setActiveSessionKey(getPreferredAgentSession(coordinatorId));
     }
-  }, [activeAgentId, activeWorkspaceId, getPreferredWorkspaceCoordinatorSession, unlinkAgent]);
+  }, [activeAgentId, activeWorkspaceId, getPreferredAgentSession, unlinkAgent]);
 
   const handleDeleteAgent = useCallback(async (agentId: string) => {
     const agent = agents.find((item) => item.id === agentId);
@@ -1440,6 +1444,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                   workspaceName={hasWorkspaceChat || isWorkspaceCoordinatorActive ? activeWorkspace!.name : undefined}
                   agents={chatAgentOptions}
                   onSwitchAgent={(id) => setActiveAgentId(id)}
+                  onSessionChange={setActiveSessionKey}
                   sidebarCollapsed={sidebarCollapsed}
                   isFullscreen={isFullscreen}
                   onRefresh={refreshAgents}

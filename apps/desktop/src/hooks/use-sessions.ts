@@ -9,8 +9,37 @@ export interface SessionInfo {
   status: "working" | "completed" | "idle";
 }
 
+const SESSIONS_CACHE_KEY = "xcloudCachedSessions";
+
+function readCachedSessions(): SessionInfo[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SESSIONS_CACHE_KEY) ?? "[]") as SessionInfo[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((session) => session && typeof session.key === "string")
+      .map((session) => ({
+        key: session.key,
+        agentId: session.agentId || extractAgentId(session.key),
+        preview: session.preview || "",
+        updatedAt: Number(session.updatedAt || 0),
+        status: session.status || "idle",
+      }))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedSessions(sessions: SessionInfo[]) {
+  try {
+    localStorage.setItem(SESSIONS_CACHE_KEY, JSON.stringify(sessions));
+  } catch {
+    // Ignore storage failures; live sessions still work.
+  }
+}
+
 export function useSessions(engine: BrowserEngine) {
-  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [sessions, setSessions] = useState<SessionInfo[]>(() => readCachedSessions());
 
   const refresh = useCallback(async () => {
     try {
@@ -67,13 +96,23 @@ export function useSessions(engine: BrowserEngine) {
         }
       }
 
+      writeCachedSessions(list);
       setSessions(list);
     } catch {
       // sessions.list may not be available
     }
   }, [engine]);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    let cancelled = false;
+    const timers = [0, 500, 1500, 3000].map((delay) => window.setTimeout(() => {
+      if (!cancelled) void refresh();
+    }, delay));
+    return () => {
+      cancelled = true;
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [refresh]);
 
   // Auto-refresh on session changes
   useEffect(() => {
