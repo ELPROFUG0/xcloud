@@ -6,32 +6,40 @@ use std::process::Command as StdCommand;
 use tauri::Manager;
 
 #[tauri::command]
-fn run_shell(cmd: String) -> Result<String, String> {
-    let output = StdCommand::new("sh")
-        .arg("-c")
-        .arg(&cmd)
-        .output()
-        .map_err(|e| format!("spawn failed: {}", e))?;
+async fn run_shell(cmd: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = StdCommand::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .output()
+            .map_err(|e| format!("spawn failed: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    if !stdout.is_empty() {
-        Ok(stdout)
-    } else if output.status.success() {
-        Ok(String::new())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("exit {}: {}", output.status.code().unwrap_or(-1), stderr))
-    }
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        if !stdout.is_empty() {
+            Ok(stdout)
+        } else if output.status.success() {
+            Ok(String::new())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("exit {}: {}", output.status.code().unwrap_or(-1), stderr))
+        }
+    })
+    .await
+    .map_err(|e| format!("shell task failed: {}", e))?
 }
 
 #[tauri::command]
-fn spawn_shell(cmd: String) -> Result<u32, String> {
-    let child = StdCommand::new("sh")
-        .arg("-c")
-        .arg(&cmd)
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    Ok(child.id())
+async fn spawn_shell(cmd: String) -> Result<u32, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let child = StdCommand::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(child.id())
+    })
+    .await
+    .map_err(|e| format!("spawn task failed: {}", e))?
 }
 
 #[tauri::command]
