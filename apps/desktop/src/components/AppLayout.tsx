@@ -1174,7 +1174,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
       {!sidebarCollapsed && (
         <button
           type="button"
-          className="fixed z-20 rounded-full bg-[#17A8FD] px-3.5 py-1 text-[12px] font-semibold text-white transition-all hover:bg-[#0798ED] active:scale-[0.98]"
+          className="fixed z-20 rounded-full bg-[#17A8FD] px-3.5 py-0.5 text-[12px] font-semibold text-white transition-all hover:bg-[#0798ED] active:scale-[0.98]"
           style={{ top: 14, left: isFullscreen ? 54 : 122 }}
         >
           Update
@@ -1339,7 +1339,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
         </div>
 
         {/* Sidebar footer — hidden when settings open or detail open */}
-        <div className="shrink-0 px-3 py-1.5" style={{ minWidth: panelWidth, display: showSettings || nodeDetail ? "none" : undefined }}>
+        <div className="shrink-0 px-3 pb-3.5 pt-1.5" style={{ minWidth: panelWidth, display: showSettings || nodeDetail ? "none" : undefined }}>
           <div className="flex items-center justify-between">
             <button
               onClick={() => {
