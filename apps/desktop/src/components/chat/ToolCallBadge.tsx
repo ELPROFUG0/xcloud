@@ -10,6 +10,8 @@ import { Shimmer } from "../ai-elements/shimmer";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useState } from "react";
+import { Diff, Hunk, parseDiff } from "react-diff-view";
+import "react-diff-view/style/index.css";
 
 interface ToolCallBadgeProps {
   tool: ToolCallInfo;
@@ -60,14 +62,39 @@ function splitDisplayPath(path: string) {
   };
 }
 
-function diffLineClass(line: string) {
-  if (/^\s*\+\d+\s/.test(line) || (/^\+/.test(line) && !/^\+\+\+/.test(line))) {
-    return "bg-emerald-500/10 text-emerald-200";
+function CodeDiffView({ diff }: { diff: string }) {
+  let files: ReturnType<typeof parseDiff> = [];
+  try {
+    files = parseDiff(diff, { nearbySequences: "zip" });
+  } catch {
+    files = [];
   }
-  if (/^\s*-\d+\s/.test(line) || (/^-/.test(line) && !/^---/.test(line))) {
-    return "bg-red-500/10 text-red-200";
+
+  if (!files.length) {
+    return (
+      <pre className="max-h-[360px] overflow-auto px-3 py-2 font-mono text-[11px] leading-relaxed text-text-muted/75">
+        {diff}
+      </pre>
+    );
   }
-  return "text-text-muted/70";
+
+  return (
+    <div className="code-change-diff max-h-[360px] overflow-auto">
+      {files.map((file, fileIndex) => (
+        <Diff
+          key={`${file.oldRevision}-${file.newRevision}-${fileIndex}`}
+          viewType="unified"
+          diffType={file.type}
+          hunks={file.hunks}
+          gutterType="default"
+        >
+          {(hunks) => hunks.map((hunk) => (
+            <Hunk key={hunk.content} hunk={hunk} />
+          ))}
+        </Diff>
+      ))}
+    </div>
+  );
 }
 
 function CodeChangeFileRow({ change, index }: { change: CodeChangeInfo; index: number }) {
@@ -100,13 +127,7 @@ function CodeChangeFileRow({ change, index }: { change: CodeChangeInfo; index: n
       {open && (
         <div id={`code-change-diff-${index}`} className="border-t border-white/[0.06] bg-[#101010]">
           {change.diff ? (
-            <pre className="max-h-[280px] overflow-auto py-2 font-mono text-[11px] leading-relaxed">
-              {change.diff.split("\n").map((line, lineIndex) => (
-                <div key={lineIndex} className={cn("px-3 whitespace-pre", diffLineClass(line))}>
-                  {line || " "}
-                </div>
-              ))}
-            </pre>
+            <CodeDiffView diff={change.diff} />
           ) : (
             <div className="px-3 py-3 text-[12px] text-text-muted/70">
               Diff no disponible para este evento; sólo se recibió el archivo modificado.

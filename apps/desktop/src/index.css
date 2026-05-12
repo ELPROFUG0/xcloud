@@ -385,3 +385,38 @@ html, body {
 .hide-scrollbar::-webkit-scrollbar {
   display: none;
 }
+
+.code-change-diff {
+  --diff-background-color: #101010;
+  --diff-text-color: rgba(244, 244, 245, 0.82);
+  --diff-font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --diff-gutter-insert-background-color: rgba(16, 185, 129, 0.12);
+  --diff-gutter-insert-text-color: rgba(167, 243, 208, 0.72);
+  --diff-gutter-delete-background-color: rgba(239, 68, 68, 0.12);
+  --diff-gutter-delete-text-color: rgba(252, 165, 165, 0.72);
+  --diff-code-insert-background-color: rgba(16, 185, 129, 0.11);
+  --diff-code-insert-text-color: rgba(209, 250, 229, 0.95);
+  --diff-code-delete-background-color: rgba(239, 68, 68, 0.11);
+  --diff-code-delete-text-color: rgba(254, 226, 226, 0.95);
+  --diff-code-insert-edit-background-color: rgba(16, 185, 129, 0.2);
+  --diff-code-delete-edit-background-color: rgba(239, 68, 68, 0.2);
+  --diff-omit-gutter-line-color: rgba(255, 255, 255, 0.18);
+}
+
+.code-change-diff .diff {
+  font-size: 11px;
+}
+
+.code-change-diff .diff-gutter {
+  min-width: 4.5ch;
+  padding: 0 0.75ch;
+  color: rgba(161, 161, 170, 0.56);
+  background: rgba(255, 255, 255, 0.025);
+  border-right: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.code-change-diff .diff-code {
+  padding-left: 1ch;
+  white-space: pre;
+  word-break: normal;
+}

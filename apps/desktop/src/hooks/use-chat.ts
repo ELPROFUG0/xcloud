@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { createTwoFilesPatch } from "diff";
 import type { BrowserEngine } from "@/lib/engine";
 import type { ChatMessage, CodeChangeInfo, ToolCallInfo } from "@/types/chat";
 import { emitAgUiEvents, openClawFrameToAgUiEvents, userMessageToAgUiEvents } from "@/lib/ag-ui-bridge";
@@ -44,6 +46,8 @@ const APP_CONTEXT_END = "<!-- /unicore:app-context -->";
 const UI_ACTION_DIRECTIVE_START = "<!-- xcloud:ui-action";
 const UI_ACTION_DIRECTIVE_RE = /<!--\s*xcloud:ui-action\s+({[\s\S]*?})\s*-->/g;
 const streamingUiDirectiveBuffers = new Map<string, string>();
+const toolFileSnapshots = new Map<string, Promise<FileSnapshot | undefined>>();
+const sessionFileSnapshots = new Map<string, Promise<FileSnapshot | undefined>>();
 
 export interface AppToolRequest {
   name: "create_workspace" | "delete_workspace" | "list_workspaces" | "open_workspace";
@@ -61,6 +65,11 @@ export interface AppToolResult {
 }
 
 export type AppToolHandler = (request: AppToolRequest) => Promise<AppToolResult>;
+
+type FileSnapshot = {
+  root: string;
+  files: Map<string, string>;
+};
 
 /** Build a readable title from tool name + arguments */
 function buildToolTitle(name: string, args?: Record<string, unknown>): string {
@@ -105,6 +114,20 @@ function getToolPath(name: string, args?: Record<string, unknown>, output?: stri
   return titlePath || undefined;
 }
 
+function isShellTool(name: string) {
+  const lower = name.toLowerCase();
+  return lower.includes("exec") || lower.includes("shell") || lower.includes("bash");
+}
+
+function isCodeChangeTool(name: string) {
+  const lower = name.toLowerCase();
+  return isShellTool(name)
+    || lower.includes("write")
+    || lower.includes("edit")
+    || lower.includes("patch")
+    || lower.includes("apply");
+}
+
 function countDiffStats(diff?: string) {
   if (!diff) return { additions: 0, deletions: 0 };
   let additions = 0;
@@ -114,6 +137,184 @@ function countDiffStats(diff?: string) {
     if (/^\s*-\d+\s/.test(line) || (/^-/.test(line) && !/^---/.test(line))) deletions += 1;
   }
   return { additions, deletions };
+}
+
+function shellQuote(value: string) {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function shellCd(dir: string) {
+  if (dir === "~") return 'cd "$HOME"';
+  if (dir.startsWith("~/")) return `cd "$HOME"/${shellQuote(dir.slice(2))}`;
+  return `cd ${shellQuote(dir)}`;
+}
+
+function unquoteShellPath(value: string) {
+  const trimmed = value.trim();
+  if ((trimmed.startsWith("'") && trimmed.endsWith("'")) || (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function dirname(path: string) {
+  const index = path.lastIndexOf("/");
+  return index <= 0 ? "/" : path.slice(0, index);
+}
+
+function getCommandText(args?: Record<string, unknown>) {
+  const command = args?.command ?? args?.cmd ?? args?.input;
+  return typeof command === "string" ? command : undefined;
+}
+
+function inferCommandCwd(args?: Record<string, unknown>) {
+  const cwd = args?.cwd ?? args?.workdir ?? args?.workingDirectory;
+  if (typeof cwd === "string" && cwd.trim()) return cwd.trim();
+
+  const command = getCommandText(args);
+  const cdMatch = command?.match(/(?:^|[;&|]\s*)cd\s+((?:"[^"]+")|(?:'[^']+')|(?:[^\s;&|]+))/);
+  const cdPath = cdMatch?.[1] ? unquoteShellPath(cdMatch[1]) : undefined;
+  if (cdPath) return cdPath;
+
+  const absolutePath = command?.match(/\/Users\/[^'"\s;&|]+/)?.[0];
+  return absolutePath ? dirname(absolutePath) : undefined;
+}
+
+async function gitRootForDir(dir: string): Promise<string | undefined> {
+  const rootCmd = `${shellCd(dir)} && git rev-parse --show-toplevel 2>/dev/null`;
+  const root = (await invoke<string>("run_shell", { cmd: rootCmd }).catch(() => "")).trim();
+  return root || undefined;
+}
+
+async function resolvedDir(dir: string): Promise<string | undefined> {
+  const resolved = (await invoke<string>("run_shell", { cmd: `${shellCd(dir)} && pwd -P` }).catch(() => "")).trim();
+  return resolved || undefined;
+}
+
+async function gitDiffForPath(path: string): Promise<string | undefined> {
+  if (!path.startsWith("/")) return undefined;
+
+  const dir = dirname(path);
+  const root = await gitRootForDir(dir);
+  if (!root) return undefined;
+
+  const rel = path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
+  const diffCmd = [
+    shellCd(root),
+    `git diff --no-ext-diff --no-color --unified=80 -- ${shellQuote(rel)}`,
+    `git diff --cached --no-ext-diff --no-color --unified=80 -- ${shellQuote(rel)}`,
+  ].join(" && ");
+  const diff = (await invoke<string>("run_shell", { cmd: diffCmd }).catch(() => "")).trimEnd();
+  return diff || undefined;
+}
+
+async function fileSnapshotForDir(dir: string | undefined): Promise<FileSnapshot | undefined> {
+  if (!dir) return undefined;
+  const root = await resolvedDir(dir);
+  if (!root) return undefined;
+
+  const filesCmd = [
+    shellCd(root),
+    "find . \\( -path './.git' -o -path './node_modules' -o -path './.next' -o -path './dist' -o -path './build' -o -path './coverage' \\) -prune -o -type f -size -256k -print",
+  ].join(" && ");
+  const rels = (await invoke<string>("run_shell", { cmd: filesCmd }).catch(() => ""))
+    .split("\n")
+    .map((line) => line.trim().replace(/^\.\//, ""))
+    .filter(Boolean)
+    .filter((rel) => /\.(?:[cm]?[jt]sx?|css|scss|sass|html|json|md|mdx|yml|yaml|txt|env|svg)$/.test(rel));
+
+  const files = new Map<string, string>();
+  for (const rel of rels.slice(0, 400)) {
+    const content = await invoke<string>("run_shell", {
+      cmd: `${shellCd(root)} && cat ${shellQuote(rel)} 2>/dev/null`,
+    }).catch(() => "");
+    files.set(rel, content);
+  }
+
+  return { root, files };
+}
+
+function buildUnifiedDiff(path: string, before: string, after: string, kind: CodeChangeInfo["kind"]) {
+  const oldPath = kind === "added" ? "/dev/null" : `a/${path}`;
+  const newPath = kind === "deleted" ? "/dev/null" : `b/${path}`;
+  const patch = createTwoFilesPatch(oldPath, newPath, before, after, "", "", {
+    context: 3,
+    stripTrailingCr: true,
+  }).trimEnd();
+  return [`diff --git a/${path} b/${path}`, patch].join("\n");
+}
+
+function fileChangeKind(before: FileSnapshot, after: FileSnapshot, rel: string): CodeChangeInfo["kind"] {
+  if (!before.files.has(rel)) return "added";
+  if (!after.files.has(rel)) return "deleted";
+  return "modified";
+}
+
+async function buildFileChangesSinceSnapshot(snapshotPromise: Promise<FileSnapshot | undefined> | undefined) {
+  const before = await snapshotPromise;
+  if (!before) return undefined;
+  const after = await fileSnapshotForDir(before.root);
+  if (!after) return undefined;
+
+  const changes: CodeChangeInfo[] = [];
+  const rels = new Set([...before.files.keys(), ...after.files.keys()]);
+  for (const rel of rels) {
+    const beforeContent = before.files.get(rel) ?? "";
+    const afterContent = after.files.get(rel) ?? "";
+    if (beforeContent === afterContent) continue;
+
+    const kind = fileChangeKind(before, after, rel);
+    const diff = buildUnifiedDiff(rel, beforeContent, afterContent, kind);
+    const stats = countDiffStats(diff);
+    changes.push({
+      path: `${after.root}/${rel}`,
+      diff,
+      additions: stats.additions,
+      deletions: stats.deletions,
+      kind,
+    });
+  }
+
+  return changes.length ? changes : undefined;
+}
+
+async function hydrateCodeChangesWithGitDiff(changes: CodeChangeInfo[] | undefined): Promise<CodeChangeInfo[] | undefined> {
+  if (!changes?.length) return changes;
+
+  const hydrated = await Promise.all(changes.map(async (change) => {
+    if (change.diff) return change;
+    const diff = await gitDiffForPath(change.path);
+    if (!diff) return change;
+    const stats = countDiffStats(diff);
+    return {
+      ...change,
+      diff,
+      additions: stats.additions || change.additions,
+      deletions: stats.deletions || change.deletions,
+    };
+  }));
+
+  return hydrated;
+}
+
+function pathsMatch(changePath: string, candidatePath: string) {
+  if (changePath === candidatePath) return true;
+  return changePath.endsWith(`/${candidatePath}`) || candidatePath.endsWith(`/${changePath}`);
+}
+
+async function hydrateCodeChangesWithSnapshotDiff(sessionKey: string, changes: CodeChangeInfo[] | undefined) {
+  const gitHydrated = await hydrateCodeChangesWithGitDiff(changes);
+  if (!gitHydrated?.some((change) => !change.diff)) return gitHydrated;
+
+  const fileSnapshot = sessionFileSnapshots.get(sessionKey);
+  const fileChanges = await buildFileChangesSinceSnapshot(fileSnapshot);
+  if (!fileChanges?.length) return gitHydrated;
+
+  return gitHydrated.map((change) => {
+    if (change.diff) return change;
+    const snapshotChange = fileChanges.find((candidate) => pathsMatch(change.path, candidate.path));
+    return snapshotChange ? { ...change, ...snapshotChange } : change;
+  });
 }
 
 function buildCodeChangeFromTool(params: {
@@ -171,6 +372,71 @@ function buildCodeChangesFromPatchSummary(data: Record<string, unknown>): CodeCh
     }
   }
   return changes.length ? changes : undefined;
+}
+
+function mergeCodeChanges(existing: CodeChangeInfo[] | undefined, incoming: CodeChangeInfo[] | undefined) {
+  if (!existing?.length) return incoming;
+  if (!incoming?.length) return existing;
+
+  const merged = new Map<string, CodeChangeInfo>();
+  for (const change of existing) merged.set(change.path, change);
+  for (const change of incoming) {
+    const previous = merged.get(change.path);
+    merged.set(change.path, {
+      ...previous,
+      ...change,
+      diff: change.diff ?? previous?.diff,
+      firstChangedLine: change.firstChangedLine ?? previous?.firstChangedLine,
+      additions: change.additions || previous?.additions || 0,
+      deletions: change.deletions || previous?.deletions || 0,
+      kind: change.kind ?? previous?.kind,
+    });
+  }
+  return Array.from(merged.values());
+}
+
+function attachCodeChangesToTool(sessionKey: string, toolCallId: string, changes: CodeChangeInfo[] | undefined) {
+  if (!changes?.length) return;
+  updateChatMessages(sessionKey, (messages) =>
+    messages.map((message) =>
+      message.role === "tool" && message.tool?.id === toolCallId
+        ? { ...message, tool: { ...message.tool!, changes: mergeCodeChanges(message.tool!.changes, changes) } }
+        : message,
+    ),
+  );
+}
+
+async function startCodeChangeSnapshot(sessionKey: string, toolCallId: string, args?: Record<string, unknown>) {
+  const inferred = inferCommandCwd(args);
+  const uiRepoPath = await readUiRepoPath(extractAgentIdFromSessionKey(sessionKey));
+  const targetDir = inferred ?? uiRepoPath ?? undefined;
+  toolFileSnapshots.set(toolCallId, !inferred && sessionFileSnapshots.has(sessionKey)
+    ? sessionFileSnapshots.get(sessionKey)!
+    : fileSnapshotForDir(targetDir));
+}
+
+async function startSessionChangeSnapshots(sessionKey: string) {
+  const uiRepoPath = await readUiRepoPath(extractAgentIdFromSessionKey(sessionKey));
+  if (!uiRepoPath) return;
+
+  const fileSnapshot = fileSnapshotForDir(uiRepoPath);
+  sessionFileSnapshots.set(sessionKey, fileSnapshot);
+  await fileSnapshot.catch(() => undefined);
+}
+
+async function detectFileChanges(fileSnapshot: Promise<FileSnapshot | undefined> | undefined) {
+  return buildFileChangesSinceSnapshot(fileSnapshot);
+}
+
+function forgetCodeChangeSnapshot(toolCallId: string) {
+  toolFileSnapshots.delete(toolCallId);
+}
+
+function attachDetectedCodeChanges(sessionKey: string, toolCallId: string) {
+  const fileSnapshot = toolFileSnapshots.get(toolCallId);
+  void detectFileChanges(fileSnapshot)
+    .then((changes) => attachCodeChangesToTool(sessionKey, toolCallId, changes))
+    .finally(() => forgetCodeChangeSnapshot(toolCallId));
 }
 
 function hasWorkspaceKeyword(message: string) {
@@ -963,6 +1229,9 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
 
       if (phase === "start") {
         const toolInfo: ToolCallInfo = { id: toolCallId, name, title, args, status: "running", timestamp: Date.now() };
+        if (isCodeChangeTool(name)) {
+          void startCodeChangeSnapshot(sessionKey, toolCallId, args);
+        }
         updateChatMessages(sessionKey, (messages) => {
           if (messages.some((message) => message.role === "tool" && message.tool?.id === toolCallId)) return messages;
           const last = messages[messages.length - 1];
@@ -988,6 +1257,9 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
               : message,
           ),
         );
+        if (isCodeChangeTool(name)) {
+          attachDetectedCodeChanges(sessionKey, toolCallId);
+        }
         emitChatSessionActivity(sessionKey, { working: true });
       }
     }
@@ -1016,6 +1288,9 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
       if (phase === "start") {
         const title = buildToolTitle(name, args);
         const toolInfo: ToolCallInfo = { id: toolCallId, name, title, args, status: "running", timestamp: Date.now() };
+        if (isCodeChangeTool(name)) {
+          void startCodeChangeSnapshot(sessionKey, toolCallId, args);
+        }
         updateChatMessages(sessionKey, (messages) => {
           if (messages.some((message) => message.role === "tool" && message.tool?.id === toolCallId)) return messages;
           const last = messages[messages.length - 1];
@@ -1054,6 +1329,12 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
               : message,
           ),
         );
+        void hydrateCodeChangesWithSnapshotDiff(sessionKey, changes).then((hydrated) => {
+          attachCodeChangesToTool(sessionKey, toolCallId, hydrated);
+        });
+        if (isCodeChangeTool(name)) {
+          attachDetectedCodeChanges(sessionKey, toolCallId);
+        }
       }
     }
 
@@ -1064,10 +1345,13 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
         updateChatMessages(sessionKey, (messages) =>
           messages.map((message) =>
             message.role === "tool" && message.tool?.id === toolCallId
-              ? { ...message, tool: { ...message.tool!, changes } }
+              ? { ...message, tool: { ...message.tool!, changes: mergeCodeChanges(message.tool!.changes, changes) } }
               : message,
           ),
         );
+        void hydrateCodeChangesWithSnapshotDiff(sessionKey, changes).then((hydrated) => {
+          attachCodeChangesToTool(sessionKey, toolCallId, hydrated);
+        });
       }
     }
   }
@@ -1296,6 +1580,9 @@ export function useChat({ engine, sessionKey = "main", appTools }: UseChatOption
           window.dispatchEvent(new CustomEvent("xcloud-create-workspace-request", {
             detail: { name: workspaceName, sourceSessionKey: sessionKey },
           }));
+        }
+        if (!options?.hidden && !isSteeringActiveRun) {
+          await startSessionChangeSnapshots(sessionKey);
         }
         const messageForEngine = options?.hidden ? trimmed : await withXCloudAppContext(sessionKey, trimmed);
         const result = await engine.sendMessage(sessionKey, messageForEngine);
