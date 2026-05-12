@@ -21,7 +21,10 @@ const AGENT_MENU_WIDTH = 160;
 const WORKSPACE_AGENT_MENU_WIDTH = 188;
 const EMOJI_PICKER_WIDTH = 288;
 const FLOATING_GAP = 6;
-const LAST_INTERACTION_CLASS = "w-8 shrink-0 text-right text-[11px] font-medium leading-none text-[#8A898C]";
+const ROW_META_SLOT_CLASS = "relative flex h-5 w-8 shrink-0 items-center justify-end";
+const LAST_INTERACTION_CLASS = "absolute right-0 top-1/2 -translate-y-1/2 text-right text-[11px] font-medium leading-none text-[#8A898C]";
+const ROW_MENU_BUTTON_CLASS = "absolute right-0 top-1/2 hidden h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-text-muted hover:text-text";
+const WORKSPACE_ROW_MENU_BUTTON_CLASS = "absolute right-0 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-text-muted opacity-0 transition-all hover:bg-white/8 hover:text-text";
 
 interface FloatingAnchor {
   top: number;
@@ -536,14 +539,14 @@ export function HomeScreen({
                 {agent.name ?? agent.id}
               </span>
             </div>
-            {isWorking ? (
-              <AgentActivityDots className="group-hover:hidden" />
-            ) : lastInteraction && (
-              <span className={cn(LAST_INTERACTION_CLASS, "group-hover:hidden")}>
-                {lastInteraction}
-              </span>
-            )}
-            <div className="relative">
+            <div className={ROW_META_SLOT_CLASS}>
+              {isWorking ? (
+                <AgentActivityDots className="absolute right-0 top-1/2 -translate-y-1/2 group-hover:hidden" />
+              ) : lastInteraction && (
+                <span className={cn(LAST_INTERACTION_CLASS, "group-hover:hidden")}>
+                  {lastInteraction}
+                </span>
+              )}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -556,7 +559,7 @@ export function HomeScreen({
                   setAgentMenuAnchor(getFloatingMenuAnchor(e.currentTarget.getBoundingClientRect(), AGENT_MENU_WIDTH));
                   setMenuAgentId(agent.id);
                 }}
-                className="hidden group-hover:flex h-5 w-5 items-center justify-center rounded text-text-muted hover:text-text"
+                className={cn(ROW_MENU_BUTTON_CLASS, "group-hover:flex")}
               >
                 <MoreHorizontal className="h-3.5 w-3.5" />
               </button>
@@ -723,14 +726,14 @@ export function HomeScreen({
                     <AgentAvatar emoji={agent.emoji} avatar={agent.avatar} isMain={agent.isDefault} />
                     <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-text">{agent.name ?? agent.id}</span>
                     {(agent.isDefault || isWorkspaceMain) && <GitBranch className="h-3.5 w-3.5 text-text-muted/70" />}
-                    {isWorking ? (
-                      <AgentActivityDots className="group-hover:hidden" />
-                    ) : lastInteraction && (
-                      <span className={cn(LAST_INTERACTION_CLASS, "group-hover:hidden")}>
-                        {lastInteraction}
-                      </span>
-                    )}
-                    <span className="relative">
+                    <span className={ROW_META_SLOT_CLASS}>
+                      {isWorking ? (
+                        <AgentActivityDots className="absolute right-0 top-1/2 -translate-y-1/2 group-hover:hidden" />
+                      ) : lastInteraction && (
+                        <span className={cn(LAST_INTERACTION_CLASS, "group-hover:hidden")}>
+                          {lastInteraction}
+                        </span>
+                      )}
                       <span
                         role="button"
                         tabIndex={0}
@@ -760,7 +763,7 @@ export function HomeScreen({
                           setAgentMenuAnchor(getFloatingMenuAnchor(e.currentTarget.getBoundingClientRect(), WORKSPACE_AGENT_MENU_WIDTH));
                           setMenuAgentId(menuId);
                         }}
-                        className="flex h-5 w-5 items-center justify-center rounded-md text-text-muted opacity-0 transition-all hover:bg-white/8 hover:text-text group-hover:opacity-100"
+                        className={cn(WORKSPACE_ROW_MENU_BUTTON_CLASS, "group-hover:opacity-100")}
                       >
                         <MoreHorizontal className="h-3.5 w-3.5" />
                       </span>
@@ -1064,17 +1067,19 @@ export function HomeScreen({
                               <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[#D4D4D4]">
                                 {agent.name ?? agent.id}
                               </span>
-                              {isWorking ? (
-                                <AgentActivityDots
-                                  size={14}
-                                  dotSize={0.34}
-                                  className="group-hover/mini:hidden"
-                                />
-                              ) : lastInteraction && (
-                                <span className={cn(LAST_INTERACTION_CLASS, "group-hover/mini:hidden")}>
-                                  {lastInteraction}
-                                </span>
-                              )}
+                              <span className={ROW_META_SLOT_CLASS}>
+                                {isWorking ? (
+                                  <AgentActivityDots
+                                    size={14}
+                                    dotSize={0.34}
+                                    className="absolute right-0 top-1/2 -translate-y-1/2 group-hover/mini:hidden"
+                                  />
+                                ) : lastInteraction && (
+                                  <span className={LAST_INTERACTION_CLASS}>
+                                    {lastInteraction}
+                                  </span>
+                                )}
+                              </span>
                             </button>
                           );
                         })
