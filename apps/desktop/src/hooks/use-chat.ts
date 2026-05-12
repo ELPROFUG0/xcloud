@@ -268,6 +268,23 @@ function stripUiActionDirectivesForStreaming(sessionKey: string, runId: string |
   return visible;
 }
 
+function parseHiddenUiActionTool(content: string, timestamp: number, index: number): ToolCallInfo | null {
+  if (!content.includes(HIDDEN_UI_ACTION_RESULT_MARKER) && !content.startsWith("xCloud UI action result:")) return null;
+  const toolName = content.match(/^- Tool:\s*(.+)$/m)?.[1]?.trim() || "xcloud_ui_action";
+  const ok = content.match(/^- OK:\s*(.+)$/m)?.[1]?.trim() !== "false";
+  const message = content.match(/^- Message:\s*(.+)$/m)?.[1]?.trim();
+  const output = content.match(/^- Output:\s*([\s\S]+)$/m)?.[1]?.trim() ?? message;
+
+  return {
+    id: `ui-action-history-${index}-${timestamp}`,
+    name: toolName,
+    title: toolName,
+    status: ok ? "done" : "error",
+    output,
+    timestamp,
+  };
+}
+
 async function executeUiActionDirectives(sessionKey: string, actions: Array<{ instruction: string; preferredTool?: string }>) {
   if (actions.length === 0) return;
   const agentId = extractAgentIdFromSessionKey(sessionKey);
@@ -699,7 +716,21 @@ function parseHistoryMessages(sessionKey: string, history: Array<{ role: string;
   for (let i = 0; i < parsed.length; i++) {
     const p = parsed[i]!;
 
-    if (p.role === "user" && (p.content.includes(HIDDEN_PROMPT_MARKER) || p.content.includes(HIDDEN_UI_ACTION_RESULT_MARKER) || p.content.startsWith("xCloud UI action result:"))) continue;
+    if (p.role === "user" && (p.content.includes(HIDDEN_UI_ACTION_RESULT_MARKER) || p.content.startsWith("xCloud UI action result:"))) {
+      const tool = parseHiddenUiActionTool(p.content, p.timestamp, i);
+      if (tool) {
+        loaded.push({
+          id: `tool-${tool.id}`,
+          role: "tool",
+          content: "",
+          timestamp: tool.timestamp,
+          tool,
+        });
+      }
+      continue;
+    }
+
+    if (p.role === "user" && p.content.includes(HIDDEN_PROMPT_MARKER)) continue;
 
     if (p.role === "user" && p.content.length > 0) {
       const visibleContent = stripAppContext(p.content);
