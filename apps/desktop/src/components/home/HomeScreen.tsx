@@ -68,6 +68,8 @@ interface HomeScreenProps {
   onRemoveAgentFromWorkspace?: (workspaceId: string, agentId: string) => void;
   onCreateAgentInWorkspace?: (workspaceId: string) => void;
   onDeleteAgent?: (agentId: string) => void | Promise<void>;
+  onExportAgent?: (agentId: string) => void | Promise<void>;
+  onImportAgent?: () => void | Promise<void>;
   onDeleteWorkspace?: (workspaceId: string) => void | Promise<void>;
   onSelectSession?: (agentId: string, sessionKey: string) => void;
   getAgentSessions?: (agentId: string) => SessionInfo[];
@@ -286,6 +288,8 @@ export function HomeScreen({
   onRemoveAgentFromWorkspace,
   onCreateAgentInWorkspace,
   onDeleteAgent,
+  onExportAgent,
+  onImportAgent,
   onDeleteWorkspace,
   getAgentSessions,
   isFullscreen,
@@ -591,6 +595,15 @@ export function HomeScreen({
                   >
                     Change icon
                   </button>
+                  {onExportAgent && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); closeAgentMenu(); void onExportAgent(agent.id); }}
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-text transition-colors hover:bg-surface-hover"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Export package
+                    </button>
+                  )}
                   {!isMain && onDeleteAgent && (
                     <>
                       <div className="my-1 h-px bg-white/[0.06]" />
@@ -784,6 +797,15 @@ export function HomeScreen({
                           >
                             Change icon
                           </button>
+                          {onExportAgent && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); closeAgentMenu(); void onExportAgent(agent.id); }}
+                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-text transition-colors hover:bg-surface-hover"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                              Export package
+                            </button>
+                          )}
                           {!agent.isDefault && !isWorkspaceMain && onRemoveAgentFromWorkspace && (
                             <button
                               onClick={(e) => {
@@ -874,7 +896,7 @@ export function HomeScreen({
           <Search className="h-4 w-4" />
           <span className="text-[13px] font-medium">Search</span>
         </button>
-        <button className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text transition-colors hover:bg-white/6">
+        <button onClick={() => void onImportAgent?.()} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text transition-colors hover:bg-white/6">
           <Download className="h-4 w-4" />
           <span className="text-[13px] font-medium">Import agent</span>
         </button>

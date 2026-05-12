@@ -9,6 +9,7 @@ import { cn } from "@/lib/cn";
 import { HomeScreen } from "./home/HomeScreen";
 import { useSessions } from "@/hooks/use-sessions";
 import type { AppToolHandler } from "@/hooks/use-chat";
+import { exportAgentPackage, importAgentPackage } from "@/lib/agent-package";
 import { ChatPanel } from "./chat/ChatPanel";
 import { ChatInput } from "./chat/ChatInput";
 import { AgentCanvas, type DetailPanel } from "./canvas/AgentCanvas";
@@ -1094,6 +1095,37 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setTimeout(() => void refreshAgents(), 1400);
   }, [activeAgentId, agents, engine, refreshAgents, removeAgentFromWorkspaces]);
 
+  const handleExportAgentPackage = useCallback(async (agentId: string) => {
+    const agent = agents.find((item) => item.id === agentId);
+    if (!agent) return;
+    try {
+      const path = await exportAgentPackage(agent);
+      if (path) window.alert(`Agent package exported:\n${path}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      window.alert(`Could not export agent package:\n${message}`);
+    }
+  }, [agents]);
+
+  const handleImportAgentPackage = useCallback(async () => {
+    try {
+      const imported = await importAgentPackage();
+      if (!imported) return;
+      await syncAgentsToGatewayConfig(engine, [imported]).catch(() => {});
+      await refreshAgents();
+      setActiveAgentId(imported.id);
+      setActiveWorkspaceId(null);
+      setActiveSessionKey(getPreferredAgentSession(imported.id));
+      setShowNewChat(false);
+      setShowSettings(false);
+      setShowPreview(false);
+      window.alert(`Agent imported: ${imported.name}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      window.alert(`Could not import agent package:\n${message}`);
+    }
+  }, [engine, getPreferredAgentSession, refreshAgents]);
+
   const handleSelectSession = useCallback((agentId: string, sessionKey: string) => {
     clearUnreadForSession(sessionKey);
     setActiveAgentId(agentId);
@@ -1322,6 +1354,8 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
               onRemoveAgentFromWorkspace={handleRemoveAgentFromWorkspace}
               onCreateAgentInWorkspace={handleCreateAgentInWorkspace}
               onDeleteAgent={handleDeleteAgent}
+              onExportAgent={handleExportAgentPackage}
+              onImportAgent={handleImportAgentPackage}
               onDeleteWorkspace={handleDeleteWorkspace}
               onSelectSession={handleSelectSession}
               getAgentSessions={getAgentSessions}
