@@ -8,7 +8,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { LigaturesAddon } from "@xterm/addon-ligatures";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { X, Plus, Search, AlertTriangle, ArrowDown, ChevronUp, ChevronDown } from "lucide-react";
+import { X, Search, AlertTriangle, ArrowDown, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/cn";
 import "@xterm/xterm/css/xterm.css";
 
@@ -17,7 +17,6 @@ import claudeIcon from "@/assets/editors/claude-code.svg";
 import codexIcon from "@/assets/editors/codex.svg";
 import cursorIcon from "@/assets/editors/cursor.svg";
 import opencodeIcon from "@/assets/editors/opencode.svg";
-import terminalIcon from "@/assets/editors/terminal.svg";
 // Providers for agents without editor icons
 import geminiIcon from "@/assets/providers/google.svg";
 import copilotIcon from "@/assets/providers/github.svg";

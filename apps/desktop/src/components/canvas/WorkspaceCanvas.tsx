@@ -3,7 +3,7 @@ import ForceGraph2D from "react-force-graph-2d";
 import type { AgentInfo } from "@/hooks/use-agents";
 import { getWorkspaceDir, type WorkspaceInfo } from "@/hooks/use-workspaces";
 import { BaseDirectory, readTextFile } from "@tauri-apps/plugin-fs";
-import { AgentUIContent, AgentUIHeaderControls, useAgentUI } from "./AgentUI";
+import { AgentUIContent, useAgentUI } from "./AgentUI";
 import type { DetailPanel } from "./AgentCanvas";
 
 interface WorkspaceCanvasProps {
@@ -291,7 +291,6 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
           </button>
         </div>
         <div className="min-w-0 flex-1 truncate text-[11px] text-text-muted">{workspace.name}</div>
-        {tab === "ui" && <AgentUIHeaderControls uiView={workspaceUI.uiView} repoPath={workspaceUI.repoPath} devServerUrl={workspaceUI.devServerUrl} setUiView={workspaceUI.setUiView} />}
       </div>
 
       {tab === "canvas" ? (

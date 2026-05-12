@@ -5,7 +5,7 @@ import type { BrowserEngine } from "@/lib/engine";
 import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
 import orbOverlayUrl from "@/assets/orb-overlay.png?url";
 // lucide icons removed — detail panel moved to sidebar
-import { useAgentUI, AgentUIHeaderControls, AgentUIContent } from "./AgentUI";
+import { useAgentUI, AgentUIContent } from "./AgentUI";
 
 export interface DetailPanel {
   title: string;
@@ -628,7 +628,6 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
           </button>
         </div>
         <div className="flex-1" />
-        {tab === "ui" && <AgentUIHeaderControls uiView={agentUI.uiView} repoPath={agentUI.repoPath} devServerUrl={agentUI.devServerUrl} setUiView={agentUI.setUiView} />}
       </div>
 
       {/* Content */}

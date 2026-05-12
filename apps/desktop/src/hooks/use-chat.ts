@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import type { ChatMessage, ToolCallInfo } from "@/types/chat";
+import { emitAgUiEvents, openClawFrameToAgUiEvents, userMessageToAgUiEvents } from "@/lib/ag-ui-bridge";
+import { executeRegisteredUiAction, getRegisteredUiTools } from "@/lib/ui-action-registry";
+import { BaseDirectory, readTextFile } from "@tauri-apps/plugin-fs";
 
 interface UseChatOptions {
   engine: BrowserEngine;
@@ -35,6 +38,9 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 export const HIDDEN_PROMPT_MARKER = "<!-- unicore:hidden-workspace-setup -->";
+const APP_CONTEXT_START = "<!-- unicore:app-context -->";
+const APP_CONTEXT_END = "<!-- /unicore:app-context -->";
+const UI_ACTION_DIRECTIVE_RE = /<!--\s*xcloud:ui-action\s+({[\s\S]*?})\s*-->/g;
 
 export interface AppToolRequest {
   name: "create_workspace" | "delete_workspace" | "list_workspaces" | "open_workspace";
@@ -121,6 +127,166 @@ function extractWorkspaceName(text: string): string | null {
 
 function extractWorkspaceIdFromSessionKey(sessionKey: string) {
   return sessionKey.match(/^agent:workspace-([^:]+):/)?.[1] ?? null;
+}
+
+function extractAgentIdFromSessionKey(sessionKey: string) {
+  if (sessionKey === "main") return "main";
+  return sessionKey.match(/^agent:([^:]+):/)?.[1] ?? "main";
+}
+
+function agentWorkspacePath(agentId: string) {
+  return agentId === "main" ? ".openclaw/workspace" : `.openclaw/workspace/${agentId}`;
+}
+
+function stripAppContext(content: string) {
+  let next = content;
+  while (next.includes(APP_CONTEXT_START) && next.includes(APP_CONTEXT_END)) {
+    const start = next.indexOf(APP_CONTEXT_START);
+    const end = next.indexOf(APP_CONTEXT_END, start);
+    if (start < 0 || end < 0) break;
+    next = `${next.slice(0, start)}${next.slice(end + APP_CONTEXT_END.length)}`;
+  }
+  return next.trim();
+}
+
+async function readUiRepoPath(agentId: string) {
+  const configPath = `${agentWorkspacePath(agentId)}/ui-config.json`;
+  const content = await readTextFile(configPath, { baseDir: BaseDirectory.Home }).catch(() => "");
+  if (!content.trim()) return null;
+  try {
+    const config = JSON.parse(content) as { repoPath?: string };
+    return config.repoPath?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildXCloudAppContext(sessionKey: string) {
+  const agentId = extractAgentIdFromSessionKey(sessionKey);
+  const uiRepoPath = await readUiRepoPath(agentId);
+  const uiTools = getRegisteredUiTools(agentId);
+  const workspacePath = agentWorkspacePath(agentId);
+  const uiLines = uiRepoPath
+    ? [
+        `- Connected UI repo: ${uiRepoPath}`,
+        `- UI bridge guide in that repo: ${uiRepoPath}/XCLOUD-UI.md`,
+        "- If asked to change the UI/interface/preview, edit the connected UI repo.",
+      ]
+    : [
+        "- No connected UI repo is currently configured for this agent.",
+        "- If asked to change the UI/interface/preview, ask the user to connect or create an Agent UI first.",
+      ];
+
+  return [
+    "xCloud app context for this turn:",
+    "- You are running inside the xCloud desktop app.",
+    "- The app has a Chat panel, an Agent Canvas tab, and an Agent UI tab.",
+    "- The Canvas tab is the visual map/settings surface for this agent inside xCloud; do not confuse it with a source-code canvas library.",
+    "- The UI tab previews a web app connected to this agent.",
+    `- Current agent id: ${agentId}`,
+    `- Current agent workspace: ~/${workspacePath}`,
+    ...uiLines,
+    "- Connected UI repos receive realtime agent state through window.xcloud.agent and AG-UI events.",
+    uiTools.length
+      ? `- The connected UI registered these frontend tools: ${uiTools.map((tool) => `${tool.name}${tool.description ? ` (${tool.description})` : ""}`).join(", ")}.`
+      : "- The connected UI has not registered frontend tools yet.",
+    "- To ask xCloud to execute a registered UI tool, include a hidden HTML directive exactly like: <!-- xcloud:ui-action {\"instruction\":\"what to do\",\"preferredTool\":\"optionalToolName\"} -->",
+    "- Do not show that directive to the user as prose; it is consumed by xCloud.",
+    "- Prefer the running xCloud preview/dev server while iterating on UI.",
+    "- Do not run npm run build repeatedly after small UI edits; run it at most once near the end unless the user asks or a build failed.",
+    "- Do not ask the user to paste hidden bridge instructions; the app manages the bridge automatically.",
+  ].join("\n");
+}
+
+function extractUiActionDirectives(content: string) {
+  const actions: Array<{ instruction: string; preferredTool?: string }> = [];
+  const visible = content.replace(UI_ACTION_DIRECTIVE_RE, (_match, rawJson: string) => {
+    try {
+      const parsed = JSON.parse(rawJson) as { instruction?: unknown; preferredTool?: unknown };
+      if (typeof parsed.instruction === "string" && parsed.instruction.trim()) {
+        actions.push({
+          instruction: parsed.instruction.trim(),
+          ...(typeof parsed.preferredTool === "string" && parsed.preferredTool.trim()
+            ? { preferredTool: parsed.preferredTool.trim() }
+            : {}),
+        });
+      }
+    } catch {
+      // Leave malformed directives out of the visible transcript.
+    }
+    return "";
+  }).trim();
+  return { visible, actions };
+}
+
+async function executeUiActionDirectives(sessionKey: string, actions: Array<{ instruction: string; preferredTool?: string }>) {
+  if (actions.length === 0) return;
+  const agentId = extractAgentIdFromSessionKey(sessionKey);
+  for (const action of actions) {
+    const toolCallId = `ui-action-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    updateChatMessages(sessionKey, (messages) => [
+      ...messages,
+      {
+        id: `tool-${toolCallId}`,
+        role: "tool" as const,
+        content: "",
+        timestamp: Date.now(),
+        tool: {
+          id: toolCallId,
+          name: action.preferredTool ?? "xcloud_ui_action",
+          title: action.instruction,
+          status: "running",
+          timestamp: Date.now(),
+        },
+      },
+    ]);
+
+    const result = await executeRegisteredUiAction({ agentId, ...action }).catch((error) => ({
+      ok: false,
+      message: error instanceof Error ? error.message : String(error),
+      output: undefined,
+      toolName: action.preferredTool,
+    }));
+    const output = result.output == null
+      ? result.message
+      : typeof result.output === "string"
+        ? result.output
+        : JSON.stringify(result.output);
+
+    updateChatMessages(sessionKey, (messages) =>
+      messages.map((message) =>
+        message.role === "tool" && message.tool?.id === toolCallId
+          ? {
+              ...message,
+              tool: {
+                ...message.tool,
+                name: result.toolName ?? message.tool.name,
+                status: result.ok ? "done" : "error",
+                output,
+              },
+            }
+          : message,
+      ),
+    );
+
+    window.dispatchEvent(new CustomEvent("xcloud-ui-action-result-for-agent", {
+      detail: {
+        sessionKey,
+        message: [
+          "xCloud UI action result:",
+          `- Tool: ${result.toolName ?? action.preferredTool ?? "xcloud_ui_action"}`,
+          `- OK: ${result.ok ? "true" : "false"}`,
+          `- Message: ${result.message}`,
+          output ? `- Output: ${output}` : "",
+        ].filter(Boolean).join("\n"),
+      },
+    }));
+  }
+}
+
+async function withXCloudAppContext(sessionKey: string, message: string) {
+  const context = await buildXCloudAppContext(sessionKey);
+  return `${APP_CONTEXT_START}\n${context}\n${APP_CONTEXT_END}\n\n${message}`;
 }
 
 function findAppToolRequest(message: string, sessionKey: string, hidden?: boolean): Omit<AppToolRequest, "sourceSessionKey"> | null {
@@ -486,10 +652,12 @@ function parseHistoryMessages(sessionKey: string, history: Array<{ role: string;
     if (p.role === "user" && p.content.includes(HIDDEN_PROMPT_MARKER)) continue;
 
     if (p.role === "user" && p.content.length > 0) {
+      const visibleContent = stripAppContext(p.content);
+      if (!visibleContent) continue;
       loaded.push({
         id: `history-${i}`,
         role: "user",
-        content: p.content,
+        content: visibleContent,
         timestamp: p.timestamp,
       });
       continue;
@@ -543,6 +711,7 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
   }
 
   rememberActiveRun(sessionKey, runId);
+  emitAgUiEvents(sessionKey, openClawFrameToAgUiEvents(sessionKey, event, payload));
 
   if (event === "agent") {
     const stream = payload.stream as string;
@@ -654,14 +823,16 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
         text = content;
       }
 
+      const { visible, actions } = extractUiActionDirectives(text);
       updateChatSession(sessionKey, (current) => {
         return {
           ...current,
-          messages: applyFinalAssistantText(current.messages, text),
+          messages: applyFinalAssistantText(current.messages, visible),
           isStreaming: false,
           loading: false,
         };
       });
+      void executeUiActionDirectives(sessionKey, actions);
       emitChatSessionActivity(sessionKey, { working: false });
     } else if (state === "final" || state === "aborted" || state === "error") {
       forgetActiveRun(sessionKey, runId);
@@ -754,7 +925,16 @@ export function useChat({ engine, sessionKey = "main", appTools }: UseChatOption
     ensureEngineSessionSubscription(engine, sessionKey);
     ensureSessionHistory(engine, sessionKey);
     emitChatSessionRead(sessionKey);
-    return unsubscribe;
+    const handleUiActionResult = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionKey?: string; message?: string }>).detail;
+      if (detail?.sessionKey !== sessionKey || !detail.message) return;
+      void engine.sendMessage(sessionKey, detail.message).catch(() => {});
+    };
+    window.addEventListener("xcloud-ui-action-result-for-agent", handleUiActionResult);
+    return () => {
+      unsubscribe();
+      window.removeEventListener("xcloud-ui-action-result-for-agent", handleUiActionResult);
+    };
   }, [engine, sessionKey]);
 
   const send = useCallback(
@@ -786,6 +966,7 @@ export function useChat({ engine, sessionKey = "main", appTools }: UseChatOption
           ...(streamId ? [{ id: streamId, role: "assistant" as const, content: "", timestamp: Date.now(), isStreaming: true }] : []),
         ],
       }));
+      if (!options?.hidden) emitAgUiEvents(sessionKey, userMessageToAgUiEvents(trimmed));
       emitChatSessionActivity(sessionKey, { working: true });
 
       try {
@@ -849,7 +1030,8 @@ export function useChat({ engine, sessionKey = "main", appTools }: UseChatOption
             detail: { name: workspaceName, sourceSessionKey: sessionKey },
           }));
         }
-        const result = await engine.sendMessage(sessionKey, trimmed);
+        const messageForEngine = options?.hidden ? trimmed : await withXCloudAppContext(sessionKey, trimmed);
+        const result = await engine.sendMessage(sessionKey, messageForEngine);
         if (result.runId) {
           runSessionKeys.set(result.runId, sessionKey);
           rememberActiveRun(sessionKey, result.runId);

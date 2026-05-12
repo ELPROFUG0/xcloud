@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
-import { Search, X, Star, ChevronDown, Eye, Brain, FileText } from "lucide-react";
+import { Search, X, Star, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/cn";
 import {
   Anthropic, OpenAI, Gemini, Mistral, Groq, DeepSeek, Fireworks,
@@ -7,7 +7,7 @@ import {
   Azure, Together, Perplexity, Cohere, Replicate, Meta, Nvidia, Cloudflare,
   SambaNova, DeepInfra, Minimax, Moonshot, Baichuan, Yi, Zhipu, Qwen,
   AlibabaCloud, Kimi, Doubao, Stepfun, SiliconCloud, Novita, LeptonAI,
-  Hyperbolic, Lambda, OpenCode, OpenClaw, Aws, Claude, Codex, Stability,
+  Hyperbolic, Lambda, OpenCode, OpenClaw, Aws, Claude, Stability,
   Inception, Inflection, Ai21, Voyage, Jina, Upstage, Nebius, Featherless,
   Inference, LmStudio, Anyscale, Baseten, CentML, Friendli, Parasail, PPIO,
   Venice, Kluster, Straico, SpeedAI, WorkersAI, VertexAI, Spark,
@@ -76,21 +76,6 @@ function formatModelName(raw: string): string {
   return id.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 
-// ── Capabilities ────────────────────────────────────────────────────────────
-const REASONING = ["o1", "o3", "o4", "deepseek-r1", "deepseek-reasoner", "r1", "claude-3-7", "claude-opus-4", "claude-sonnet-4", "qwq", "qwen3", "gemini-2.5", "grok-3"];
-const PDF = ["claude-3", "claude-opus", "claude-sonnet", "claude-haiku", "gpt-4o", "gpt-4-turbo", "gpt-5", "gemini-2", "gemini-1.5"];
-function hasVision(m: ModelInfo) { return m.input?.some(i => i.includes("image")) ?? false; }
-function hasReasoning(m: ModelInfo) { return m.reasoning || REASONING.some(r => m.id.toLowerCase().includes(r)); }
-function hasPDF(m: ModelInfo) { return PDF.some(p => m.id.toLowerCase().includes(p)); }
-function getCostTier(m: ModelInfo): number {
-  const id = m.id.toLowerCase();
-  if (id.includes("o1-pro") || id.includes("o3-pro") || id.includes("gpt-5.5") || id.includes("opus-4-6")) return 4;
-  if (id.includes("opus") || id.includes("gpt-5") || id.includes("o1") || id.includes("o3") || id.includes("o4")) return 3;
-  if (id.includes("sonnet") || id.includes("gpt-4o") || id.includes("pro") || id.includes("gemini-2.5")) return 2;
-  if (id.includes("haiku") || id.includes("mini") || id.includes("lite") || id.includes("micro") || id.includes("flash") || id.includes("nano")) return 0;
-  return 1;
-}
-
 function ProviderIcon({ provider, size = 18 }: { provider: string; size?: number }) {
   const Icon = PROVIDER_ICONS[provider];
   if (!Icon) return <div style={{ width: size, height: size }} />;
@@ -157,100 +142,6 @@ function getModelStats(m: ModelInfo): { speed: number; intelligence: number; tok
   else if (id.includes("llama")) description = "Meta's open-source model family.";
 
   return { speed, intelligence, tokenUsage, description };
-}
-
-// ── Floating tooltip ────────────────────────────────────────────────────────
-function ModelInfoTooltip({ model, provider, anchorRect }: { model: ModelInfo | null; provider: string; anchorRect: DOMRect | null }) {
-  if (!model || !anchorRect) return null;
-
-  let stats: ReturnType<typeof getModelStats>;
-  try { stats = getModelStats(model); } catch { return null; }
-
-  const Icon = PI[provider];
-  let vision = false, reasoning = false, pdf = false;
-  try { vision = hasVision(model); reasoning = hasReasoning(model); pdf = hasPDF(model); } catch {}
-
-  // Clamp position to viewport
-  const top = Math.max(8, Math.min(anchorRect.top, window.innerHeight - 220));
-  const left = Math.min(anchorRect.right + 8, window.innerWidth - 280);
-
-  return (
-    <div
-      className="fixed z-[100] pointer-events-none"
-      style={{ top, left }}
-    >
-      <div className="w-[260px] rounded-lg border border-border bg-surface p-3.5 shadow-xl text-xs">
-        {/* Header */}
-        <div className="flex items-center gap-2">
-          {Icon && <div className="text-text-muted"><Icon size={16} /></div>}
-          <span className="font-semibold text-text">{formatModelName(model.name || model.id)}</span>
-        </div>
-
-        {/* Description */}
-        <p className="mt-1.5 text-text-muted leading-relaxed">{stats.description}</p>
-
-        {/* Capabilities */}
-        {(vision || reasoning || pdf) && (
-          <div className="mt-2 flex items-center gap-2">
-            {vision && (
-              <div className="flex items-center gap-1 text-teal-400/80">
-                <Eye className="h-3 w-3" />
-                <span className="text-[10px]">Vision</span>
-              </div>
-            )}
-            {reasoning && (
-              <div className="flex items-center gap-1 text-purple-400/80">
-                <Brain className="h-3 w-3" />
-                <span className="text-[10px]">Reasoning</span>
-              </div>
-            )}
-            {pdf && (
-              <div className="flex items-center gap-1 text-blue-400/80">
-                <FileText className="h-3 w-3" />
-                <span className="text-[10px]">PDF</span>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Bars */}
-        <div className="mt-2.5 grid gap-1.5">
-          {[
-            { label: "Speed", value: stats.speed },
-            { label: "Intelligence", value: stats.intelligence },
-            { label: "Token usage", value: stats.tokenUsage },
-          ].map(({ label, value }) => (
-            <div key={label} className="flex items-center justify-between">
-              <span className="text-text-muted">{label}</span>
-              <div className="flex gap-1">
-                {[1, 2, 3, 4, 5].map(i => (
-                  <div
-                    key={i}
-                    className={cn(
-                      "w-4 h-1 rounded-full",
-                      i <= value ? "bg-accent" : "bg-white/8",
-                    )}
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Context window */}
-        {model.contextWindow && (
-          <div className="mt-2 flex items-center justify-between text-text-muted">
-            <span>Context</span>
-            <span className="font-mono">
-              {model.contextWindow >= 1_000_000
-                ? `${(model.contextWindow / 1_000_000).toFixed(0)}M tokens`
-                : `${Math.round(model.contextWindow / 1000)}k tokens`}
-            </span>
-          </div>
-        )}
-      </div>
-    </div>
-  );
 }
 
 export function ModelSelector({ open, closing = false, onClose, providers, currentModel, onSelectModel, placement = "above" }: ModelSelectorProps) {
@@ -460,12 +351,6 @@ export function ModelSelector({ open, closing = false, onClose, providers, curre
               const fullId = model.id.includes("/") ? model.id : `${model._provider}/${model.id}`;
               const isActive = currentModel === fullId || currentModel === model.id;
               const isFav = favorites.has(fullId) || favorites.has(model.id);
-
-              const vision = hasVision(model);
-              const reasoning = hasReasoning(model);
-              const pdf = hasPDF(model);
-              const cost = getCostTier(model);
-              const hasCapabilities = vision || reasoning || pdf;
 
               return (
                 <div key={model.id} className="group/item">

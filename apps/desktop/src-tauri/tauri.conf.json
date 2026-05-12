@@ -36,6 +36,20 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "fileAssociations": [
+      {
+        "ext": ["xcloud-agent"],
+        "name": "xCloud Agent Package",
+        "description": "Portable xCloud agent package",
+        "role": "Editor",
+        "rank": "Owner",
+        "mimeType": "application/vnd.xcloud.agent+zip",
+        "exportedType": {
+          "identifier": "com.xcloud.agent-package",
+          "conformsTo": ["public.zip-archive", "public.data"]
+        }
+      }
+    ],
     "resources": {
       "resources/node-aarch64-apple-darwin": "node-aarch64-apple-darwin",
       "resources/openclaw": "openclaw"

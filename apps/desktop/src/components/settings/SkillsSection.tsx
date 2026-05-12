@@ -36,8 +36,6 @@ export function SkillsSection({ engine: _engine }: SkillsSectionProps) {
         const emoji = content.match(/emoji.*?["']([^"']+)["']/)?.[1] ?? content.match(/"emoji":\s*"([^"]+)"/)?.[1] ?? "";
         const author = content.match(/^author:\s*(.+)/m)?.[1]?.trim() ?? "";
         const version = content.match(/^version:\s*(.+)/m)?.[1]?.trim() ?? "";
-        const isWorkspace = content.includes("workspace") || !output.includes("node_modules");
-
         if (!seen.has(name)) {
           seen.add(name);
           parsed.push({ name, description: desc.slice(0, 120), emoji, author, version, installed: false });

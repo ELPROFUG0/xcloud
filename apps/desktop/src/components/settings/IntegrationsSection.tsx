@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { Search, Plug, Loader2, ExternalLink } from "lucide-react";
+import { Search, Plug, Loader2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import composioAppsData from "@/data/composio-apps.json";
@@ -13,7 +13,7 @@ interface IntegrationsSectionProps {
 export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProps) {
   const [composioKey, setComposioKey] = useState(() => localStorage.getItem("composioApiKey") ?? "");
   const [composioApps, setComposioApps] = useState<ComposioApp[]>([]);
-  const [composioLoading, setComposioLoading] = useState(false);
+  const [composioLoading] = useState(false);
   const [composioError, setComposioError] = useState<string | null>(null);
   const [composioSearch, setComposioSearch] = useState("");
 

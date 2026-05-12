@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/cn";
 import xcloudLogo from "@/assets/xcloud-logo.svg?url";
-import { ArrowRight, Loader2 } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 // Provider logos
@@ -141,7 +141,7 @@ export function OnboardingScreen({ onComplete, preview }: OnboardingScreenProps)
     const setupAndListen = async () => {
       // Register listener FIRST
       const unlisten = await listen<boolean>("engine-setup-complete", () => {
-        window.__onboardDone = true;
+        (window as Window & { __onboardDone?: boolean }).__onboardDone = true;
       });
 
       // Launch setup (fire and forget)

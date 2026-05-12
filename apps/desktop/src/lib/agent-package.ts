@@ -265,7 +265,8 @@ unzip -q ${shellQuote(selected)} -d ${shellQuote(stage)}
   const agentsConfig = config.agents ?? {};
   const list = Array.isArray(agentsConfig.list) ? agentsConfig.list.filter(Boolean) : [];
   const existingIds = new Set(list.map((agent) => agent.id).filter(Boolean));
-  const agentId = uniqueAgentId(manifest.agent.id || manifest.agent.name, existingIds);
+  const baseAgentId = manifest.agent.id === "main" ? manifest.agent.name : manifest.agent.id;
+  const agentId = uniqueAgentId(baseAgentId || manifest.agent.name, existingIds);
   const agentName = manifest.agent.name || agentId;
   const workspacePath = `${home}/.openclaw/workspace/${agentId}`;
 

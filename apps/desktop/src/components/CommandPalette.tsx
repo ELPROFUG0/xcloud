@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import {
-  Search, MessageSquare, Settings, Layers, KeyRound, Globe, Sparkles,
-  Plug, Brain, Server, Palette, SlidersHorizontal, Terminal, X,
+  Search, MessageSquare, Layers, KeyRound, Globe, Sparkles,
+  Plug, Brain, Server, Palette, SlidersHorizontal, Terminal,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { AgentInfo } from "@/hooks/use-agents";

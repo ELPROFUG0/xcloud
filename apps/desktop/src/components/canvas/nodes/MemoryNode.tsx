@@ -1,8 +1,7 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { Brain } from "lucide-react";
 
-export function MemoryNode({ data }: NodeProps) {
-  const d = data as unknown as { label: string };
+export function MemoryNode(_props: NodeProps) {
   return (
     <div className="flex flex-col items-center gap-1.5">
       <Handle type="target" position={Position.Top} id="top" className="opacity-0! w-2! h-2!" />
