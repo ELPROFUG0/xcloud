@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { homeDir } from "@tauri-apps/api/path";
-import { FolderOpen, Plus, RefreshCw, ExternalLink, ArrowLeft, X, ChevronDown } from "lucide-react";
+import { FolderOpen, Plus, RefreshCw, ExternalLink, ArrowLeft, ArrowRight, X, ChevronDown, MoreHorizontal } from "lucide-react";
 import { XCLOUD_AG_UI_EVENT, xcloudCapabilities } from "@/lib/ag-ui-bridge";
 import { setRegisteredUiTools, type XCloudUiToolDefinition, type XCloudUiActionResult } from "@/lib/ui-action-registry";
 import xcloudLogo from "@/assets/xcloud-logo.svg?url";
@@ -1039,7 +1039,9 @@ export function AgentUIContent({
   setUiView, selectRepo, disconnectRepo, launchPreview, createUI,
 }: ReturnType<typeof useAgentUI>) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const uiToolsRef = useRef<XCloudUiToolDefinition[]>([]);
+  const [browserMenuOpen, setBrowserMenuOpen] = useState(false);
   const pendingUiToolCallsRef = useRef(new Map<string, {
     resolve: (result: XCloudUiActionResult) => void;
     timeout: number;
@@ -1187,79 +1189,125 @@ export function AgentUIContent({
     });
   }, [agentId, postToPreview, repoPath]);
 
-  const actionButtonClass = "inline-flex h-6 items-center gap-1.5 rounded-lg px-2 text-[10px] font-medium text-text-muted transition-colors hover:bg-white/8 hover:text-text";
-  const dangerButtonClass = "inline-flex h-6 items-center gap-1.5 rounded-lg px-2 text-[10px] font-medium text-red-400/70 transition-colors hover:bg-red-400/10 hover:text-red-300";
-  const iconButtonClass = "inline-flex h-6 w-6 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-white/8 hover:text-text";
+  useEffect(() => {
+    if (!browserMenuOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (menuRef.current?.contains(event.target as Node)) return;
+      setBrowserMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [browserMenuOpen]);
+
+  const browserButtonClass = "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-white/8 hover:text-text disabled:pointer-events-none disabled:opacity-30";
+  const menuItemClass = "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] text-text transition-colors hover:bg-white/6";
+  const dangerMenuItemClass = "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] text-red-400/80 transition-colors hover:bg-red-400/10 hover:text-red-300";
+  const browserUrl = devServerUrl ?? (repoPath ? `file://${repoPath}` : "");
+  const canGoBackToMenu = uiView === "preview";
+
+  const refreshPreview = () => {
+    const iframe = document.querySelector<HTMLIFrameElement>(".ui-preview-iframe");
+    if (iframe && devServerUrl) iframe.src = devServerUrl;
+  };
+
+  const openInBrowser = () => {
+    if (!devServerUrl) return;
+    import("@tauri-apps/plugin-opener").then(({ openUrl }) => openUrl(devServerUrl)).catch(() => {});
+  };
 
   const renderSubHeader = () => (
-    <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/70 bg-[#111111] px-3">
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[11px] font-medium text-text">
-          {repoPath ? repoPath.split("/").pop() : "Agent UI"}
-        </div>
-        <div className="truncate text-[10px] text-text-muted/70">
-          {repoPath ?? "Connect or create an interface for this agent"}
-        </div>
+    <div className="relative flex h-10 shrink-0 items-center gap-2 border-b border-border/70 bg-[#111111] px-2.5">
+      <div className="flex shrink-0 items-center gap-1">
+        <button
+          onClick={() => setUiView("menu")}
+          className={browserButtonClass}
+          disabled={!canGoBackToMenu}
+          title="Back"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+        </button>
+        <button className={browserButtonClass} disabled title="Forward">
+          <ArrowRight className="h-3.5 w-3.5" />
+        </button>
+        <button
+          onClick={refreshPreview}
+          className={browserButtonClass}
+          disabled={!devServerUrl}
+          title="Refresh"
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+        </button>
       </div>
 
-      <div className="flex shrink-0 items-center gap-1">
-        {repoPath && uiView !== "preview" && hasProject && (
-          <button onClick={launchPreview} className={actionButtonClass} title="Open preview">
-            <ExternalLink className="h-3 w-3" />
-            Preview
-          </button>
-        )}
+      <div className="absolute left-1/2 top-1/2 flex min-w-0 w-[240px] max-w-[calc(100%-10rem)] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-xl bg-black/20 px-3 py-1.5 transition-colors hover:bg-white/[0.08] sm:w-[260px]">
+        <span className="truncate text-center text-[13px] font-normal text-white">
+          {browserUrl || "Connect or create an interface for this agent"}
+        </span>
+      </div>
 
-        {uiView === "preview" && devServerUrl && (
-          <>
-            <button
-              onClick={() => {
-                const iframe = document.querySelector<HTMLIFrameElement>(".ui-preview-iframe");
-                if (iframe) iframe.src = devServerUrl;
-              }}
-              className={iconButtonClass}
-              title="Refresh preview"
-            >
-              <RefreshCw className="h-3 w-3" />
-            </button>
-            <button
-              onClick={() => { import("@tauri-apps/plugin-opener").then(({ openUrl }) => openUrl(devServerUrl)).catch(() => {}); }}
-              className={actionButtonClass}
-              title="Open in browser"
-            >
-              <ExternalLink className="h-3 w-3" />
-              Open
-            </button>
-          </>
-        )}
+      <div ref={menuRef} className="relative ml-auto shrink-0">
+        <button
+          onClick={() => setBrowserMenuOpen((open) => !open)}
+          className={browserButtonClass}
+          title="UI options"
+          aria-expanded={browserMenuOpen}
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </button>
 
-        {repoPath ? (
-          <>
-            <button onClick={selectRepo} className={actionButtonClass} title="Change UI repo">
-              <FolderOpen className="h-3 w-3" />
-              Change
-            </button>
-            {uiView === "preview" && (
-              <button onClick={() => setUiView("menu")} className={iconButtonClass} title="Back to UI menu">
-                <ArrowLeft className="h-3 w-3" />
+        {browserMenuOpen && (
+          <div className="absolute right-0 top-full z-40 mt-1 w-44 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-2xl animate-[slideUp_120ms_ease-out]">
+            {repoPath && uiView !== "preview" && hasProject && (
+              <button
+                onClick={() => { setBrowserMenuOpen(false); launchPreview(); }}
+                className={menuItemClass}
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Preview
               </button>
             )}
-            <button onClick={disconnectRepo} className={dangerButtonClass} title="Disconnect UI repo">
-              <X className="h-3 w-3" />
-              Disconnect
+
+            {devServerUrl && (
+              <button
+                onClick={() => { setBrowserMenuOpen(false); openInBrowser(); }}
+                className={menuItemClass}
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Open
+              </button>
+            )}
+
+            <button
+              onClick={() => { setBrowserMenuOpen(false); selectRepo(); }}
+              className={menuItemClass}
+            >
+              <FolderOpen className="h-3.5 w-3.5" />
+              {repoPath ? "Change" : "Open Repo"}
             </button>
-          </>
-        ) : (
-          <>
-            <button onClick={selectRepo} className={actionButtonClass} title="Open repo">
-              <FolderOpen className="h-3 w-3" />
-              Open Repo
-            </button>
-            <button onClick={() => setUiView("create")} className={actionButtonClass} title="Create UI">
-              <Plus className="h-3 w-3" />
-              Create
-            </button>
-          </>
+
+            {!repoPath && (
+              <button
+                onClick={() => { setBrowserMenuOpen(false); setUiView("create"); }}
+                className={menuItemClass}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Create
+              </button>
+            )}
+
+            {repoPath && (
+              <>
+                <div className="my-1 h-px bg-white/[0.06]" />
+                <button
+                  onClick={() => { setBrowserMenuOpen(false); disconnectRepo(); }}
+                  className={dangerMenuItemClass}
+                >
+                  <X className="h-3.5 w-3.5" />
+                  Disconnect
+                </button>
+              </>
+            )}
+          </div>
         )}
       </div>
     </div>
