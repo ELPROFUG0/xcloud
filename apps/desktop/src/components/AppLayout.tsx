@@ -797,17 +797,27 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     e.preventDefault();
     draggingCanvas.current = true;
     setIsDragging(true);
+    let frameId = 0;
+    let nextWidth = canvasWidth;
 
     const onMouseMove = (ev: MouseEvent) => {
       if (!draggingCanvas.current || !cardRef.current) return;
       const cardRect = cardRef.current.getBoundingClientRect();
-      const newWidth = Math.min(cardRect.width - 200, Math.max(200, cardRect.right - ev.clientX));
-      setCanvasWidth(newWidth);
+      nextWidth = Math.round(Math.min(cardRect.width - 200, Math.max(200, cardRect.right - ev.clientX)));
+      if (frameId) return;
+      frameId = requestAnimationFrame(() => {
+        frameId = 0;
+        setCanvasWidth(nextWidth);
+      });
     };
 
     const onMouseUp = () => {
       draggingCanvas.current = false;
       setIsDragging(false);
+      if (frameId) {
+        cancelAnimationFrame(frameId);
+        setCanvasWidth(nextWidth);
+      }
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
       document.body.style.cursor = "";
@@ -818,7 +828,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     document.addEventListener("mouseup", onMouseUp);
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
-  }, []);
+  }, [canvasWidth]);
 
   const onTerminalMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -1185,7 +1195,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   }, [activeTerminalKey]);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className={cn("flex h-full flex-col", isDragging && "resize-active")}>
       <div className="flex flex-1 min-h-0">
       {/* Toggle sidebar — fixed next to macOS traffic lights */}
       <button
@@ -1524,7 +1534,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
             className={cn("flex h-full flex-col overflow-hidden", canvasExpanded ? "flex-1" : "shrink-0")}
             style={{
               width: canvasExpanded ? undefined : (showThirdPanel ? canvasWidth : 0),
-              transition: canvasExpanded ? "none" : "width 200ms cubic-bezier(0.4, 0, 0.2, 1)",
+              transition: canvasExpanded || isDragging ? "none" : "width 200ms cubic-bezier(0.4, 0, 0.2, 1)",
             }}
           >
             <div className="flex-1 min-h-0" style={{ minWidth: canvasExpanded ? undefined : canvasWidth }}>

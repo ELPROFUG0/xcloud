@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useEffect, useCallback } from "react";
+import { useMemo, useRef, useState, useEffect, useCallback, useLayoutEffect } from "react";
 import ForceGraph2D from "react-force-graph-2d";
 import type { AgentInfo } from "@/hooks/use-agents";
 import { getWorkspaceDir, type WorkspaceInfo } from "@/hooks/use-workspaces";
@@ -47,14 +47,27 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
     kind: "agent" as const,
   })), [agentsSignature]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!containerRef.current) return;
+    let frameId = 0;
     const obs = new ResizeObserver((entries) => {
       const { width, height } = entries[0]!.contentRect;
-      setDimensions({ width, height });
+      const next = {
+        width: Math.max(1, Math.round(width)),
+        height: Math.max(1, Math.round(height)),
+      };
+      cancelAnimationFrame(frameId);
+      frameId = requestAnimationFrame(() => {
+        setDimensions((current) => (
+          current.width === next.width && current.height === next.height ? current : next
+        ));
+      });
     });
     obs.observe(containerRef.current);
-    return () => obs.disconnect();
+    return () => {
+      cancelAnimationFrame(frameId);
+      obs.disconnect();
+    };
   }, [tab]);
 
   const graphData = useMemo(() => {

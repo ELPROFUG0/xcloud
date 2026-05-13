@@ -386,6 +386,10 @@ html, body {
   display: none;
 }
 
+.resize-active iframe {
+  pointer-events: none;
+}
+
 .code-change-diff {
   --diff-background-color: #101010;
   --diff-text-color: rgba(244, 244, 245, 0.82);
