@@ -6,6 +6,7 @@ import type { AgentInfo } from "@/hooks/use-agents";
 import { ShowQr } from "@/components/ui/show-qr";
 import type { ChannelField, ChannelConfig } from "./types";
 import { invoke } from "@tauri-apps/api/core";
+import { QRCodeSVG } from "qrcode.react";
 
 import telegramLogo from "@/assets/channels/telegram.svg";
 import whatsappLogo from "@/assets/channels/whatsapp.svg";
@@ -128,6 +129,16 @@ const TELEGRAM_DM_POLICIES = [
 ] as const;
 
 const BOTFATHER_URL = "https://t.me/BotFather";
+
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+function isWhatsAppLoginProviderUnavailable(error: unknown) {
+  return error instanceof Error && error.message.toLowerCase().includes("web login provider is not available");
+}
+
+function isQrDataImage(value: string) {
+  return value.startsWith("data:image/");
+}
 
 function stringFromConfigValue(value: unknown): string {
   if (Array.isArray(value)) return value.map(String).join(", ");
@@ -259,6 +270,11 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
   const [telegramPairingRunning, setTelegramPairingRunning] = useState(false);
   const [telegramTokenVisible, setTelegramTokenVisible] = useState(false);
   const [showTelegramSecurity, setShowTelegramSecurity] = useState(false);
+  const [showWhatsAppSecurity, setShowWhatsAppSecurity] = useState(false);
+  const [whatsAppLoginRunning, setWhatsAppLoginRunning] = useState(false);
+  const [whatsAppLoginOutput, setWhatsAppLoginOutput] = useState("");
+  const [whatsAppQrDataUrl, setWhatsAppQrDataUrl] = useState("");
+  const [whatsAppLoginConnected, setWhatsAppLoginConnected] = useState<boolean | null>(null);
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [selectedTelegramAgentId, setSelectedTelegramAgentId] = useState<string>("");
   const [channelEnabled, setChannelEnabled] = useState<Record<string, boolean>>({});
@@ -400,6 +416,22 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
         }
         patch.bindings = buildTelegramBindingsPatch(existingConfig.bindings);
       }
+      if (channelId === "whatsapp") {
+        const existingChannels = (existingConfig.channels ?? {}) as Record<string, Record<string, unknown>>;
+        const existingWhatsApp = existingChannels.whatsapp ?? {};
+        const existingAccounts = existingWhatsApp.accounts && typeof existingWhatsApp.accounts === "object" && !Array.isArray(existingWhatsApp.accounts)
+          ? existingWhatsApp.accounts as Record<string, unknown>
+          : {};
+        channelConfig.accounts = {
+          ...existingAccounts,
+          default: {
+            ...((existingAccounts.default && typeof existingAccounts.default === "object" && !Array.isArray(existingAccounts.default)) ? existingAccounts.default as Record<string, unknown> : {}),
+            name: "WhatsApp",
+            enabled: true,
+          },
+        };
+        patch.plugins = { entries: { whatsapp: { enabled: true } } };
+      }
       await engine.patchConfig(
         JSON.stringify(patch),
         hash,
@@ -412,12 +444,12 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
     setTimeout(() => setChannelSaved((prev) => ({ ...prev, [channelId]: false })), 3000);
   }, [buildTelegramAccountsPatch, buildTelegramBindingsPatch, channelValues, channelEnabled, engine]);
 
-  const listTelegramPairings = useCallback(async () => {
+  const listPairings = useCallback(async (channelId: "telegram" | "whatsapp") => {
     setTelegramPairingRunning(true);
     setTelegramPairingOutput("");
     try {
-      const output = await invoke<string>("xcloud_run", { args: ["pairing", "list", "telegram", "--json"] });
-      setTelegramPairingOutput(output.trim() || "No pending Telegram pairing requests.");
+      const output = await invoke<string>("xcloud_run", { args: ["pairing", "list", channelId, "--json"] });
+      setTelegramPairingOutput(output.trim() || `No pending ${channelId} pairing requests.`);
     } catch (error) {
       setTelegramPairingOutput(error instanceof Error ? error.message : String(error));
     } finally {
@@ -425,7 +457,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
     }
   }, []);
 
-  const approveTelegramPairing = useCallback(async () => {
+  const approvePairing = useCallback(async (channelId: "telegram" | "whatsapp") => {
     const code = telegramPairingCode.trim();
     if (!code) {
       setTelegramPairingOutput("Paste the pairing code first.");
@@ -434,8 +466,8 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
     setTelegramPairingRunning(true);
     setTelegramPairingOutput("");
     try {
-      const output = await invoke<string>("xcloud_run", { args: ["pairing", "approve", "telegram", code, "--notify"] });
-      setTelegramPairingOutput(output.trim() || "Telegram user approved.");
+      const output = await invoke<string>("xcloud_run", { args: ["pairing", "approve", channelId, code, "--notify"] });
+      setTelegramPairingOutput(output.trim() || `${channelId} user approved.`);
       setTelegramPairingCode("");
     } catch (error) {
       setTelegramPairingOutput(error instanceof Error ? error.message : String(error));
@@ -443,6 +475,73 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
       setTelegramPairingRunning(false);
     }
   }, [telegramPairingCode]);
+
+  const startWhatsAppQrLogin = useCallback(async (force = false) => {
+    setWhatsAppLoginRunning(true);
+    setWhatsAppLoginOutput("");
+    setWhatsAppLoginConnected(null);
+    try {
+      const startLogin = () => engine.rpc("web.login.start", {
+        force,
+        accountId: "default",
+        timeoutMs: 25_000,
+      });
+      let result: Record<string, unknown> | null = null;
+      try {
+        result = await startLogin();
+      } catch (error) {
+        if (!isWhatsAppLoginProviderUnavailable(error)) throw error;
+        setWhatsAppLoginOutput("Preparing WhatsApp...");
+        await invoke<string>("xcloud_run", {
+          args: ["channels", "add", "--channel", "whatsapp", "--account", "default", "--name", "WhatsApp"],
+        });
+        setChannelEnabled((prev) => ({ ...prev, whatsapp: true }));
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          await sleep(1_000);
+          try {
+            result = await startLogin();
+            break;
+          } catch (retryError) {
+            if (!isWhatsAppLoginProviderUnavailable(retryError) || attempt === 5) throw retryError;
+          }
+        }
+      }
+      if (!result) throw new Error("WhatsApp login did not start.");
+      const qrDataUrl = typeof result.qrDataUrl === "string" ? result.qrDataUrl : "";
+      const message = typeof result.message === "string" ? result.message : "Scan this QR in WhatsApp > Linked Devices.";
+      setWhatsAppQrDataUrl(qrDataUrl);
+      setWhatsAppLoginConnected(typeof result.connected === "boolean" ? result.connected : null);
+      setWhatsAppLoginOutput(message);
+    } catch (error) {
+      setWhatsAppQrDataUrl("");
+      setWhatsAppLoginOutput(error instanceof Error ? error.message : String(error));
+    } finally {
+      setWhatsAppLoginRunning(false);
+    }
+  }, [engine]);
+
+  const waitForWhatsAppQrScan = useCallback(async () => {
+    setWhatsAppLoginRunning(true);
+    setWhatsAppLoginOutput("Waiting for WhatsApp to confirm the scan...");
+    try {
+      const result = await engine.rpc("web.login.wait", {
+        accountId: "default",
+        timeoutMs: 25_000,
+        ...(whatsAppQrDataUrl ? { currentQrDataUrl: whatsAppQrDataUrl } : {}),
+      });
+      if (typeof result.qrDataUrl === "string" && result.qrDataUrl) {
+        setWhatsAppQrDataUrl(result.qrDataUrl);
+      } else if (result.connected) {
+        setWhatsAppQrDataUrl("");
+      }
+      setWhatsAppLoginConnected(typeof result.connected === "boolean" ? result.connected : null);
+      setWhatsAppLoginOutput(typeof result.message === "string" ? result.message : "WhatsApp login updated.");
+    } catch (error) {
+      setWhatsAppLoginOutput(error instanceof Error ? error.message : String(error));
+    } finally {
+      setWhatsAppLoginRunning(false);
+    }
+  }, [engine, whatsAppQrDataUrl]);
 
   return (
     <div className="flex-1 min-w-0 flex flex-col">
@@ -499,6 +598,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
           const error = channelError[ch.id] ?? null;
           const enabled = channelEnabled[ch.id] ?? false;
           const isTelegram = ch.id === "telegram";
+          const isWhatsApp = ch.id === "whatsapp";
           const hasTelegramCredential = Object.values(telegramAgentBots).some((botToken) => botToken.trim());
           const selectedTelegramAgent = agents.find((agent) => agent.id === selectedTelegramAgentId) ?? agents[0];
           const mainTelegramAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
@@ -693,7 +793,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                           />
                           <div className="mt-2 flex flex-wrap gap-2">
                             <button
-                              onClick={() => void approveTelegramPairing()}
+                              onClick={() => void approvePairing("telegram")}
                               disabled={telegramPairingRunning || !telegramPairingCode.trim()}
                               className="flex h-9 items-center gap-1.5 rounded-xl bg-text px-3 text-sm font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
                             >
@@ -701,7 +801,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                               {telegramPairingRunning ? "Approving..." : "Approve user"}
                             </button>
                             <button
-                              onClick={() => void listTelegramPairings()}
+                              onClick={() => void listPairings("telegram")}
                               disabled={telegramPairingRunning}
                               className="flex h-9 items-center gap-1.5 rounded-xl bg-[#262626] px-3 text-sm font-medium text-text-muted transition-colors hover:bg-white/10 hover:text-text disabled:opacity-50"
                             >
@@ -726,6 +826,201 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                         void saveChannel(ch.id, true);
                       }}
                       disabled={saving || !hasTelegramCredential}
+                      className="rounded-2xl bg-text text-bg px-8 py-2 text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+                    >
+                      {saving ? "Saving..." : saved ? "Saved" : "Save"}
+                    </button>
+                  </div>
+
+                  {error && (
+                    <div className="flex items-center gap-1 text-[10px] text-red-400">
+                      <AlertCircle className="h-3 w-3" />{error}
+                    </div>
+                  )}
+                </>
+              ) : isWhatsApp ? (
+                <>
+                  <div className="border-b border-border/50 py-3.5">
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#262626] text-[11px] font-medium text-text-muted">1</div>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="text-sm font-semibold text-text">Choose access</h4>
+                        <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                          WhatsApp links through WhatsApp Web. Pairing is recommended so unknown senders must request access first.
+                        </p>
+                        <div className="mt-3 space-y-3">
+                          <div className="flex items-center justify-between border-b border-border/50 py-3.5">
+                            <div className="min-w-0 mr-4">
+                              <span className="block text-sm font-medium text-text">Personal number</span>
+                              <span className="block truncate text-[10px] text-text-muted">Use the linked WhatsApp number as the bot</span>
+                            </div>
+                            <button
+                              onClick={() => updateChannelField(ch.id, "selfPhoneMode", values.selfPhoneMode === "true" ? "false" : "true")}
+                              className={cn(
+                                "relative h-5 w-9 rounded-full transition-colors",
+                                values.selfPhoneMode === "true" ? "bg-emerald-500" : "bg-text-muted/20",
+                              )}
+                            >
+                              <div className={cn(
+                                "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform",
+                                values.selfPhoneMode === "true" ? "translate-x-4" : "translate-x-0.5",
+                              )} />
+                            </button>
+                          </div>
+
+                          <div className="border-t border-border/50 pt-3">
+                            <button
+                              onClick={() => setShowWhatsAppSecurity((value) => !value)}
+                              className="flex h-9 w-full items-center justify-between rounded-xl bg-[#262626] px-3 text-sm text-text-muted transition-colors hover:text-text"
+                            >
+                              <span>Advanced security</span>
+                              <span className="text-[10px] uppercase tracking-wide">{values.dmPolicy || "pairing"}</span>
+                            </button>
+                            {showWhatsAppSecurity && (
+                              <div className="mt-3 space-y-3">
+                                <div className="flex items-center justify-between border-b border-border/50 py-3.5">
+                                  <div className="min-w-0 mr-4">
+                                    <span className="block text-sm font-medium text-text">Who can DM</span>
+                                    <span className="block truncate text-[10px] text-text-muted">Pairing is recommended for WhatsApp</span>
+                                  </div>
+                                  <select
+                                    value={values.dmPolicy || "pairing"}
+                                    onChange={(e) => updateChannelField(ch.id, "dmPolicy", e.target.value)}
+                                    className="h-9 w-48 appearance-none rounded-xl bg-[#262626] py-1.5 pl-3 pr-9 text-sm text-text transition-colors hover:bg-[#2d2d2d] focus:outline-none cursor-pointer"
+                                  >
+                                    {TELEGRAM_DM_POLICIES.map((policy) => (
+                                      <option key={policy.id} value={policy.id}>{policy.label}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                {["allowlist", "open"].includes(values.dmPolicy || "pairing") && (
+                                  <div className="border-b border-border/50 py-3.5">
+                                    <div className="mb-2">
+                                      <span className="block text-sm font-medium text-text">Allowlist</span>
+                                      <span className="block text-[10px] text-text-muted">Use phone numbers like +15551234567, separated by commas or new lines</span>
+                                    </div>
+                                    <textarea
+                                      value={values.allowFrom ?? ((values.dmPolicy || "pairing") === "open" ? "*" : "")}
+                                      onChange={(e) => updateChannelField(ch.id, "allowFrom", e.target.value)}
+                                      placeholder={"+15551234567\n+525512345678"}
+                                      className="min-h-20 w-full resize-none rounded-xl bg-[#262626] px-3 py-2 text-sm font-mono text-text placeholder:text-text-muted focus:outline-none"
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="border-b border-border/50 py-3.5">
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#262626] text-[11px] font-medium text-text-muted">2</div>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="text-sm font-semibold text-text">Link WhatsApp with QR</h4>
+                        <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                          Generate the QR here, then scan it from WhatsApp on your phone under Settings → Linked Devices → Link a device. Do not use the camera app.
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            onClick={() => void startWhatsAppQrLogin(false)}
+                            disabled={whatsAppLoginRunning}
+                            className="flex h-9 items-center gap-1.5 rounded-xl bg-[#262626] px-3 text-sm font-medium text-text transition-colors hover:bg-[#2d2d2d] disabled:opacity-50"
+                          >
+                            <PlayCircle className="h-3.5 w-3.5" />
+                            {whatsAppLoginRunning ? "Loading..." : "Show QR"}
+                          </button>
+                          <button
+                            onClick={() => void startWhatsAppQrLogin(true)}
+                            disabled={whatsAppLoginRunning}
+                            className="flex h-9 items-center gap-1.5 rounded-xl bg-[#262626] px-3 text-sm font-medium text-text-muted transition-colors hover:bg-[#2d2d2d] hover:text-text disabled:opacity-50"
+                          >
+                            Relink
+                          </button>
+                          {whatsAppQrDataUrl && (
+                            <button
+                              onClick={() => void waitForWhatsAppQrScan()}
+                              disabled={whatsAppLoginRunning}
+                              className="flex h-9 items-center gap-1.5 rounded-xl bg-text px-3 text-sm font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
+                            >
+                              <CheckCircle className="h-3.5 w-3.5" />
+                              I scanned it
+                            </button>
+                          )}
+                        </div>
+                        {whatsAppQrDataUrl && (
+                          <div className="mt-3 inline-flex rounded-[28px] bg-white p-4 shadow-lg shadow-black/20">
+                            {isQrDataImage(whatsAppQrDataUrl) ? (
+                              <img src={whatsAppQrDataUrl} alt="WhatsApp login QR" className="h-56 w-56" />
+                            ) : (
+                              <QRCodeSVG value={whatsAppQrDataUrl} size={224} level="H" className="h-56 w-56 text-black" />
+                            )}
+                          </div>
+                        )}
+                        {whatsAppLoginOutput && (
+                          <div className={cn(
+                            "mt-3 rounded-xl bg-black/30 p-3 text-xs leading-relaxed",
+                            whatsAppLoginConnected ? "text-emerald-300" : "text-[#D4D4D4]",
+                          )}>
+                            {whatsAppLoginOutput}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="border-b border-border/50 py-3.5">
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#262626] text-[11px] font-medium text-text-muted">3</div>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="text-sm font-semibold text-text">Approve WhatsApp users</h4>
+                        <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                          Ask the user to message the linked WhatsApp number. The agent will reply with a pairing code to paste here.
+                        </p>
+                        <div className="mt-3">
+                          <input
+                            value={telegramPairingCode}
+                            onChange={(e) => setTelegramPairingCode(e.target.value.toUpperCase())}
+                            placeholder="Pairing code, e.g. FXH8P3C7"
+                            className="h-9 w-full rounded-xl bg-[#262626] px-3 text-sm font-mono uppercase text-text placeholder:text-text-muted focus:outline-none"
+                          />
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <button
+                              onClick={() => void approvePairing("whatsapp")}
+                              disabled={telegramPairingRunning || !telegramPairingCode.trim()}
+                              className="flex h-9 items-center gap-1.5 rounded-xl bg-text px-3 text-sm font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
+                            >
+                              <CheckCircle className="h-3.5 w-3.5" />
+                              {telegramPairingRunning ? "Approving..." : "Approve user"}
+                            </button>
+                            <button
+                              onClick={() => void listPairings("whatsapp")}
+                              disabled={telegramPairingRunning}
+                              className="flex h-9 items-center gap-1.5 rounded-xl bg-[#262626] px-3 text-sm font-medium text-text-muted transition-colors hover:bg-white/10 hover:text-text disabled:opacity-50"
+                            >
+                              <PlayCircle className="h-3.5 w-3.5" />
+                              List pending
+                            </button>
+                          </div>
+                        </div>
+                        {telegramPairingOutput && (
+                          <pre className="mt-3 max-h-40 overflow-auto rounded-xl bg-black/30 p-3 text-[10px] leading-relaxed text-[#D4D4D4]">
+                            {telegramPairingOutput}
+                          </pre>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-center mt-4">
+                    <button
+                      onClick={() => {
+                        setChannelEnabled((prev) => ({ ...prev, [ch.id]: true }));
+                        void saveChannel(ch.id, true);
+                      }}
+                      disabled={saving}
                       className="rounded-2xl bg-text text-bg px-8 py-2 text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
                     >
                       {saving ? "Saving..." : saved ? "Saved" : "Save"}
