@@ -255,7 +255,6 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
   const [channelChecking, setChannelChecking] = useState<Record<string, boolean>>({});
   const [copiedHint, setCopiedHint] = useState<string | null>(null);
   const [telegramPairingCode, setTelegramPairingCode] = useState("");
-  const [telegramPairingAccountId, setTelegramPairingAccountId] = useState("__default__");
   const [telegramPairingOutput, setTelegramPairingOutput] = useState("");
   const [telegramPairingRunning, setTelegramPairingRunning] = useState(false);
   const [telegramTokenVisible, setTelegramTokenVisible] = useState(false);
@@ -410,25 +409,18 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
     }
   }, []);
 
-  const withTelegramPairingAccount = useCallback((args: string[]) => {
-    if (telegramPairingAccountId === "__default__") return args;
-    if (!(telegramAgentBots[telegramPairingAccountId] ?? "").trim()) return args;
-    return [...args, "--account", telegramPairingAccountId];
-  }, [telegramAgentBots, telegramPairingAccountId]);
-
   const listTelegramPairings = useCallback(async () => {
     setTelegramPairingRunning(true);
     setTelegramPairingOutput("");
     try {
-      const args = withTelegramPairingAccount(["pairing", "list", "telegram", "--json"]);
-      const output = await invoke<string>("xcloud_run", { args });
+      const output = await invoke<string>("xcloud_run", { args: ["pairing", "list", "telegram", "--json"] });
       setTelegramPairingOutput(output.trim() || "No pending Telegram pairing requests.");
     } catch (error) {
       setTelegramPairingOutput(error instanceof Error ? error.message : String(error));
     } finally {
       setTelegramPairingRunning(false);
     }
-  }, [withTelegramPairingAccount]);
+  }, []);
 
   const approveTelegramPairing = useCallback(async () => {
     const code = telegramPairingCode.trim();
@@ -439,8 +431,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
     setTelegramPairingRunning(true);
     setTelegramPairingOutput("");
     try {
-      const args = withTelegramPairingAccount(["pairing", "approve", "telegram", code, "--notify"]);
-      const output = await invoke<string>("xcloud_run", { args });
+      const output = await invoke<string>("xcloud_run", { args: ["pairing", "approve", "telegram", code, "--notify"] });
       setTelegramPairingOutput(output.trim() || "Telegram user approved.");
       setTelegramPairingCode("");
     } catch (error) {
@@ -448,7 +439,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
     } finally {
       setTelegramPairingRunning(false);
     }
-  }, [telegramPairingCode, withTelegramPairingAccount]);
+  }, [telegramPairingCode]);
 
   return (
     <div className="flex-1 min-w-0 flex flex-col">
@@ -759,30 +750,6 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                             placeholder="Pairing code, e.g. FXH8P3C7"
                             className="w-full rounded-lg bg-black/20 px-3 py-2 text-xs font-mono uppercase text-text placeholder:text-text-muted focus:outline-none"
                           />
-                          {configuredTelegramAgentCount > 0 && (
-                            <>
-                              <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <span className="text-[11px] font-medium text-text-muted">Code came from</span>
-                                <select
-                                  value={telegramPairingAccountId}
-                                  onChange={(e) => setTelegramPairingAccountId(e.target.value)}
-                                  className="min-w-[160px] flex-1 rounded-lg bg-black/20 px-3 py-2 text-xs font-medium text-text outline-none"
-                                >
-                                  <option value="__default__">Main bot</option>
-                                  {agents
-                                    .filter((agent) => (telegramAgentBots[agent.id] ?? "").trim())
-                                    .map((agent) => (
-                                      <option key={agent.id} value={agent.id}>
-                                        {agent.name ?? agent.id}
-                                      </option>
-                                    ))}
-                                </select>
-                              </div>
-                              <p className="mt-2 text-[11px] leading-snug text-text-muted">
-                                Leave Main bot unless the pairing code came from an agent-specific bot.
-                              </p>
-                            </>
-                          )}
                           <div className="mt-2 flex flex-wrap gap-2">
                             <button
                               onClick={() => void approveTelegramPairing()}
