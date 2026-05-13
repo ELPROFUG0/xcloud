@@ -254,8 +254,6 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
   const [channelSaving, setChannelSaving] = useState<Record<string, boolean>>({});
   const [channelSaved, setChannelSaved] = useState<Record<string, boolean>>({});
   const [channelError, setChannelError] = useState<Record<string, string | null>>({});
-  const [channelStatus, setChannelStatus] = useState<Record<string, string>>({});
-  const [channelChecking, setChannelChecking] = useState<Record<string, boolean>>({});
   const [telegramPairingCode, setTelegramPairingCode] = useState("");
   const [telegramPairingOutput, setTelegramPairingOutput] = useState("");
   const [telegramPairingRunning, setTelegramPairingRunning] = useState(false);
@@ -413,22 +411,6 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
     setChannelSaved((prev) => ({ ...prev, [channelId]: true }));
     setTimeout(() => setChannelSaved((prev) => ({ ...prev, [channelId]: false })), 3000);
   }, [buildTelegramAccountsPatch, buildTelegramBindingsPatch, channelValues, channelEnabled, engine]);
-
-  const probeChannels = useCallback(async (channelId: string) => {
-    setChannelChecking((prev) => ({ ...prev, [channelId]: true }));
-    setChannelStatus((prev) => ({ ...prev, [channelId]: "" }));
-    try {
-      const output = await invoke<string>("xcloud_run", { args: ["channels", "status", "--probe"] });
-      setChannelStatus((prev) => ({ ...prev, [channelId]: output.trim() || "Channel probe completed." }));
-    } catch (error) {
-      setChannelStatus((prev) => ({
-        ...prev,
-        [channelId]: error instanceof Error ? error.message : String(error),
-      }));
-    } finally {
-      setChannelChecking((prev) => ({ ...prev, [channelId]: false }));
-    }
-  }, []);
 
   const listTelegramPairings = useCallback(async () => {
     setTelegramPairingRunning(true);
@@ -698,47 +680,9 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                     <div className="flex items-start gap-3">
                       <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#262626] text-[11px] font-medium text-text-muted">3</div>
                       <div className="min-w-0 flex-1">
-                        <h4 className="text-sm font-semibold text-text">Enable and verify</h4>
-                        <p className="mt-1 text-xs leading-relaxed text-text-muted">
-                          Save writes <span className="font-mono text-text">channels.telegram.enabled=true</span>, then you can probe channel health.
-                        </p>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <button
-                            onClick={() => {
-                              setChannelEnabled((prev) => ({ ...prev, [ch.id]: true }));
-                              void saveChannel(ch.id, true);
-                            }}
-                            disabled={saving || !hasTelegramCredential}
-                            className="flex h-9 items-center gap-1.5 rounded-xl bg-text px-3 text-sm font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
-                          >
-                            {saved ? <CheckCircle className="h-3.5 w-3.5" /> : null}
-                            {saving ? "Saving..." : saved ? "Saved" : "Save and enable Telegram"}
-                          </button>
-                          <button
-                            onClick={() => void probeChannels(ch.id)}
-                            disabled={channelChecking[ch.id]}
-                            className="flex h-9 items-center gap-1.5 rounded-xl bg-[#262626] px-3 text-sm font-medium text-text transition-colors hover:bg-white/10 disabled:opacity-50"
-                          >
-                            <PlayCircle className="h-3.5 w-3.5" />
-                            {channelChecking[ch.id] ? "Checking..." : "Run channel probe"}
-                          </button>
-                        </div>
-                        {channelStatus[ch.id] && (
-                          <pre className="mt-3 max-h-40 overflow-auto rounded-xl bg-black/30 p-3 text-[10px] leading-relaxed text-[#D4D4D4]">
-                            {channelStatus[ch.id]}
-                          </pre>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="border-b border-border/50 py-3.5">
-                    <div className="flex items-start gap-3">
-                      <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#262626] text-[11px] font-medium text-text-muted">4</div>
-                      <div className="min-w-0 flex-1">
                         <h4 className="text-sm font-semibold text-text">Approve Telegram users</h4>
                         <p className="mt-1 text-xs leading-relaxed text-text-muted">
-                          Paste the code Telegram sent you. The app will approve that user and notify them.
+                          Ask the user to message this agent on Telegram. The agent will reply with a pairing code to paste here.
                         </p>
                         <div className="mt-3">
                           <input
@@ -773,6 +717,19 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                         )}
                       </div>
                     </div>
+                  </div>
+
+                  <div className="flex justify-center mt-4">
+                    <button
+                      onClick={() => {
+                        setChannelEnabled((prev) => ({ ...prev, [ch.id]: true }));
+                        void saveChannel(ch.id, true);
+                      }}
+                      disabled={saving || !hasTelegramCredential}
+                      className="rounded-2xl bg-text text-bg px-8 py-2 text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+                    >
+                      {saving ? "Saving..." : saved ? "Saved" : "Save"}
+                    </button>
                   </div>
 
                   {error && (
