@@ -1043,7 +1043,9 @@ export function AgentUIContent({
   const uiToolsRef = useRef<XCloudUiToolDefinition[]>([]);
   const loadStartedAtRef = useRef(0);
   const loadFinishTimerRef = useRef<number | null>(null);
+  const menuCloseTimerRef = useRef<number | null>(null);
   const [browserMenuOpen, setBrowserMenuOpen] = useState(false);
+  const [browserMenuClosing, setBrowserMenuClosing] = useState(false);
   const [previewLoadPhase, setPreviewLoadPhase] = useState<"idle" | "loading" | "finishing">("idle");
   const pendingUiToolCallsRef = useRef(new Map<string, {
     resolve: (result: XCloudUiActionResult) => void;
@@ -1193,14 +1195,14 @@ export function AgentUIContent({
   }, [agentId, postToPreview, repoPath]);
 
   useEffect(() => {
-    if (!browserMenuOpen) return;
+    if (!browserMenuOpen || browserMenuClosing) return;
     const onPointerDown = (event: MouseEvent) => {
       if (menuRef.current?.contains(event.target as Node)) return;
-      setBrowserMenuOpen(false);
+      closeBrowserMenu();
     };
     document.addEventListener("mousedown", onPointerDown);
     return () => document.removeEventListener("mousedown", onPointerDown);
-  }, [browserMenuOpen]);
+  }, [browserMenuClosing, browserMenuOpen]);
 
   useEffect(() => {
     if (loadFinishTimerRef.current !== null) {
@@ -1219,11 +1221,14 @@ export function AgentUIContent({
     if (loadFinishTimerRef.current !== null) {
       window.clearTimeout(loadFinishTimerRef.current);
     }
+    if (menuCloseTimerRef.current !== null) {
+      window.clearTimeout(menuCloseTimerRef.current);
+    }
   }, []);
 
   const browserButtonClass = "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-white/8 hover:text-text disabled:pointer-events-none disabled:opacity-30";
-  const menuItemClass = "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] text-text transition-colors hover:bg-white/6";
-  const dangerMenuItemClass = "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] text-red-400/80 transition-colors hover:bg-red-400/10 hover:text-red-300";
+  const menuItemClass = "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[12px] text-text transition-colors hover:bg-white/6";
+  const dangerMenuItemClass = "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[12px] text-red-400/80 transition-colors hover:bg-red-400/10 hover:text-red-300";
   const browserUrl = devServerUrl ?? (repoPath ? `file://${repoPath}` : "");
   const canGoBackToMenu = uiView === "preview";
   const browserIsLoading = uiView === "preview" && (devServerLoading || previewLoadPhase !== "idle");
@@ -1256,6 +1261,30 @@ export function AgentUIContent({
   const openInBrowser = () => {
     if (!devServerUrl) return;
     import("@tauri-apps/plugin-opener").then(({ openUrl }) => openUrl(devServerUrl)).catch(() => {});
+  };
+
+  const openBrowserMenu = () => {
+    if (menuCloseTimerRef.current !== null) {
+      window.clearTimeout(menuCloseTimerRef.current);
+      menuCloseTimerRef.current = null;
+    }
+    setBrowserMenuClosing(false);
+    setBrowserMenuOpen(true);
+  };
+
+  const closeBrowserMenu = (afterClose?: () => void) => {
+    if (!browserMenuOpen || browserMenuClosing) {
+      afterClose?.();
+      return;
+    }
+    setBrowserMenuClosing(true);
+    if (menuCloseTimerRef.current !== null) window.clearTimeout(menuCloseTimerRef.current);
+    menuCloseTimerRef.current = window.setTimeout(() => {
+      setBrowserMenuOpen(false);
+      setBrowserMenuClosing(false);
+      menuCloseTimerRef.current = null;
+      afterClose?.();
+    }, 140);
   };
 
   const renderSubHeader = () => (
@@ -1292,19 +1321,22 @@ export function AgentUIContent({
 
       <div ref={menuRef} className="relative shrink-0">
         <button
-          onClick={() => setBrowserMenuOpen((open) => !open)}
+          onClick={() => {
+            if (browserMenuOpen && !browserMenuClosing) closeBrowserMenu();
+            else openBrowserMenu();
+          }}
           className={browserButtonClass}
           title="UI options"
-          aria-expanded={browserMenuOpen}
+          aria-expanded={browserMenuOpen && !browserMenuClosing}
         >
           <MoreHorizontal className="h-4 w-4" />
         </button>
 
         {browserMenuOpen && (
-          <div className="absolute right-0 top-full z-40 mt-1 w-44 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-2xl animate-[slideUp_120ms_ease-out]">
+          <div className={`absolute right-0 top-full z-40 mt-1 w-44 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-2xl ${browserMenuClosing ? "animate-[popoverOut_140ms_ease-in_forwards]" : "animate-[slideUp_120ms_ease-out]"}`}>
             {repoPath && uiView !== "preview" && hasProject && (
               <button
-                onClick={() => { setBrowserMenuOpen(false); launchPreview(); }}
+                onClick={() => closeBrowserMenu(launchPreview)}
                 className={menuItemClass}
               >
                 <ExternalLink className="h-3.5 w-3.5" />
@@ -1314,7 +1346,7 @@ export function AgentUIContent({
 
             {devServerUrl && (
               <button
-                onClick={() => { setBrowserMenuOpen(false); openInBrowser(); }}
+                onClick={() => closeBrowserMenu(openInBrowser)}
                 className={menuItemClass}
               >
                 <ExternalLink className="h-3.5 w-3.5" />
@@ -1323,7 +1355,7 @@ export function AgentUIContent({
             )}
 
             <button
-              onClick={() => { setBrowserMenuOpen(false); selectRepo(); }}
+              onClick={() => closeBrowserMenu(selectRepo)}
               className={menuItemClass}
             >
               <FolderOpen className="h-3.5 w-3.5" />
@@ -1332,7 +1364,7 @@ export function AgentUIContent({
 
             {!repoPath && (
               <button
-                onClick={() => { setBrowserMenuOpen(false); setUiView("create"); }}
+                onClick={() => closeBrowserMenu(() => setUiView("create"))}
                 className={menuItemClass}
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -1344,7 +1376,7 @@ export function AgentUIContent({
               <>
                 <div className="my-1 h-px bg-white/[0.06]" />
                 <button
-                  onClick={() => { setBrowserMenuOpen(false); disconnectRepo(); }}
+                  onClick={() => closeBrowserMenu(disconnectRepo)}
                   className={dangerMenuItemClass}
                 >
                   <X className="h-3.5 w-3.5" />
@@ -1357,8 +1389,8 @@ export function AgentUIContent({
       </div>
 
       {browserIsLoading && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-[-3px] z-30 h-[4px] bg-[#17A7FD]/10">
-          <div className={`browser-loading-bar h-[2px] bg-[#17A7FD] shadow-[0_0_5px_rgba(23,167,253,0.55)] blur-[0.5px] ${browserLoadingBarClass}`} />
+        <div className="pointer-events-none absolute inset-x-0 bottom-[-2px] z-30 h-[3px] bg-[#17A7FD]/10">
+          <div className={`browser-loading-bar h-px bg-[#17A7FD] shadow-[0_0_4px_rgba(23,167,253,0.5)] blur-[0.4px] ${browserLoadingBarClass}`} />
         </div>
       )}
     </div>
