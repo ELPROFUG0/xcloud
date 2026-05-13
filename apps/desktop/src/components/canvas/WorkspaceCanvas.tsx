@@ -6,6 +6,7 @@ import { BaseDirectory, readTextFile } from "@tauri-apps/plugin-fs";
 import { AgentUIContent, useAgentUI } from "./AgentUI";
 import type { DetailPanel } from "./AgentCanvas";
 import { ContinuousTabs } from "./ContinuousTabs";
+import { CanvasSearchControl } from "./CanvasSearchControl";
 
 interface WorkspaceCanvasProps {
   workspace: WorkspaceInfo;
@@ -31,6 +32,8 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
   const graphRef = useRef<any>(null);
   const [dimensions, setDimensions] = useState({ width: 400, height: 400 });
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchFocusedNode, setSearchFocusedNode] = useState<string | null>(null);
   const draggingNode = useRef<string | null>(null);
   const hoverIntensity = useRef(0);
   const labelOffsets = useRef<Record<string, number>>({});
@@ -41,6 +44,7 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
     { id: "canvas" as const, label: "Canvas" },
     { id: "ui" as const, label: "UI" },
   ], []);
+  const activeNode = hoveredNode ?? searchFocusedNode;
   const agentsSignature = agents
     .map((agent) => `${agent.id}\u001f${agent.name ?? ""}\u001f${agent.isDefault ? "1" : "0"}`)
     .join("\u001e");
@@ -102,6 +106,26 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
     return { nodes, links };
   }, [agentNodes, workspace.name]);
 
+  const searchMatches = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return [];
+    return graphData.nodes.filter((node) => `${node.label} ${node.id}`.toLowerCase().includes(query));
+  }, [graphData.nodes, searchQuery]);
+
+  useEffect(() => {
+    setSearchFocusedNode(searchMatches[0]?.id ?? null);
+  }, [searchMatches]);
+
+  const focusSearchMatch = useCallback(() => {
+    const match = searchMatches[0] as (WorkspaceNode & { x?: number; y?: number }) | undefined;
+    if (!match) return;
+    setSearchFocusedNode(match.id);
+    if (typeof match.x === "number" && typeof match.y === "number") {
+      graphRef.current?.centerAt(match.x, match.y, 320);
+      graphRef.current?.zoom(2, 320);
+    }
+  }, [searchMatches]);
+
   useEffect(() => {
     if (!graphRef.current) return;
     setTimeout(() => graphRef.current?.zoomToFit(360, 64), 220);
@@ -111,7 +135,7 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
     let running = true;
     const animate = () => {
       if (!running) return;
-      const target = hoveredNode ? 1 : 0;
+      const target = activeNode ? 1 : 0;
       const previous = hoverIntensity.current;
       hoverIntensity.current += (target - previous) * 0.1;
       if (Math.abs(hoverIntensity.current - target) > 0.005) {
@@ -127,19 +151,19 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
       running = false;
       cancelAnimationFrame(animFrameRef.current);
     };
-  }, [hoveredNode]);
+  }, [activeNode]);
 
   const connectedNodes = useMemo(() => {
-    if (!hoveredNode) return new Set<string>();
-    const set = new Set<string>([hoveredNode]);
+    if (!activeNode) return new Set<string>();
+    const set = new Set<string>([activeNode]);
     graphData.links.forEach((link) => {
       const source = typeof link.source === "object" ? (link.source as any).id : link.source;
       const target = typeof link.target === "object" ? (link.target as any).id : link.target;
-      if (source === hoveredNode) set.add(target);
-      if (target === hoveredNode) set.add(source);
+      if (source === activeNode) set.add(target);
+      if (target === activeNode) set.add(source);
     });
     return set;
-  }, [graphData.links, hoveredNode]);
+  }, [graphData.links, activeNode]);
 
   const readWorkspaceFile = useCallback(async (file: string) => {
     const dir = getWorkspaceDir(workspace.id);
@@ -242,15 +266,15 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
     const isBranch = n.size >= 5 && !isCenter;
     const isLeaf = n.size < 5;
     const r = isCenter ? 10 : isBranch ? 6 : 3.5;
-    const isHovered = hoveredNode === n.id;
+    const isHovered = activeNode === n.id;
     const isConnected = connectedNodes.has(n.id);
-    const isDimmed = hoveredNode && !isHovered && !isConnected;
+    const isDimmed = activeNode && !isHovered && !isConnected;
     const t = hoverIntensity.current;
 
     let brightness: number;
     if (isHovered) {
       brightness = isCenter ? 255 : isBranch ? 245 : 236;
-    } else if (isConnected && hoveredNode) {
+    } else if (isConnected && activeNode) {
       brightness = isCenter ? 250 : isBranch ? 235 : 225;
     } else if (isDimmed) {
       const normal = isCenter ? 240 : isBranch ? 224 : 208;
@@ -266,16 +290,16 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
     ctx.fill();
 
     if (globalScale > 0.35) {
-      const targetOffset = (isHovered || (isConnected && hoveredNode)) ? 0 : hoveredNode ? -1.5 : 0;
+      const targetOffset = (isHovered || (isConnected && activeNode)) ? 0 : activeNode ? -1.5 : 0;
       const previous = labelOffsets.current[n.id] ?? 0;
       const offset = previous + (targetOffset - previous) * 0.15;
       labelOffsets.current[n.id] = offset;
 
-      const labelAlpha = isHovered ? 1 : (isConnected && hoveredNode) ? 0.85 : isDimmed ? Math.max(0, 1 - t * 0.8) : 1;
+      const labelAlpha = isHovered ? 1 : (isConnected && activeNode) ? 0.85 : isDimmed ? Math.max(0, 1 - t * 0.8) : 1;
       let labelBrightness: number;
       if (isHovered) {
         labelBrightness = 240;
-      } else if (isConnected && hoveredNode) {
+      } else if (isConnected && activeNode) {
         labelBrightness = 210;
       } else if (isDimmed) {
         const normal = isLeaf ? 136 : 187;
@@ -292,7 +316,7 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
       ctx.fillText(n.label, n.x, n.y + r + 2 + offset);
       ctx.globalAlpha = 1;
     }
-  }, [connectedNodes, hoveredNode]);
+  }, [connectedNodes, activeNode]);
 
   return (
     <div className="flex h-full flex-col">
@@ -312,7 +336,15 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
       </div>
 
       {tab === "canvas" ? (
-        <div ref={containerRef} className="min-h-0 flex-1">
+        <div ref={containerRef} className="relative min-h-0 flex-1">
+          <div className="absolute top-3 right-3 z-10">
+            <CanvasSearchControl
+              value={searchQuery}
+              onChange={setSearchQuery}
+              onSubmit={focusSearchMatch}
+              resultLabel={searchQuery.trim() ? String(searchMatches.length) : undefined}
+            />
+          </div>
           <ForceGraph2D
             ref={graphRef}
             graphData={graphData}
@@ -328,10 +360,10 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
               ctx.fill();
             }}
             linkColor={(link: any) => {
-              if (!hoveredNode) return "#3a3a3a";
+              if (!activeNode) return "#3a3a3a";
               const source = typeof link.source === "object" ? link.source.id : link.source;
               const target = typeof link.target === "object" ? link.target.id : link.target;
-              if (source === hoveredNode || target === hoveredNode) return "#888888";
+              if (source === activeNode || target === activeNode) return "#888888";
               return "#2a2a2a";
             }}
             linkWidth={1}

@@ -7,6 +7,7 @@ import orbOverlayUrl from "@/assets/orb-overlay.png?url";
 // lucide icons removed — detail panel moved to sidebar
 import { useAgentUI, AgentUIContent } from "./AgentUI";
 import { ContinuousTabs } from "./ContinuousTabs";
+import { CanvasSearchControl } from "./CanvasSearchControl";
 
 export interface DetailPanel {
   title: string;
@@ -111,6 +112,8 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
   const [dataLoaded, setDataLoaded] = useState(false);
   const [dimensions, setDimensions] = useState({ width: 400, height: 400 });
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchFocusedNode, setSearchFocusedNode] = useState<string | null>(null);
   const draggingNode = useRef<string | null>(null);
   const hoverIntensity = useRef(0);
   const labelOffsets = useRef<Record<string, number>>({});
@@ -124,6 +127,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
     { id: "canvas" as const, label: "Canvas" },
     { id: "ui" as const, label: "UI" },
   ], []);
+  const activeNode = hoveredNode ?? searchFocusedNode;
 
   // Load orb image
   useEffect(() => {
@@ -156,7 +160,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
     let running = true;
     const animate = () => {
       if (!running) return;
-      const target = hoveredNode ? 1 : 0;
+      const target = activeNode ? 1 : 0;
       const prev = hoverIntensity.current;
       hoverIntensity.current += (target - prev) * 0.1;
       if (Math.abs(hoverIntensity.current - target) > 0.005) {
@@ -169,7 +173,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
     };
     animFrameRef.current = requestAnimationFrame(animate);
     return () => { running = false; cancelAnimationFrame(animFrameRef.current); };
-  }, [hoveredNode]);
+  }, [activeNode]);
 
   // Agent UI state
   const agentUI = useAgentUI(agentId, wsPath);
@@ -390,19 +394,39 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
     return { nodes, links };
   }, [agentId, agentData, agentUI.repoPath]);
 
-  // Build neighbor set for hovered node
+  const searchMatches = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return [];
+    return graphData.nodes.filter((node) => `${node.label} ${node.id}`.toLowerCase().includes(query));
+  }, [graphData.nodes, searchQuery]);
+
+  useEffect(() => {
+    setSearchFocusedNode(searchMatches[0]?.id ?? null);
+  }, [searchMatches]);
+
+  const focusSearchMatch = useCallback(() => {
+    const match = searchMatches[0] as (GraphNode & { x?: number; y?: number }) | undefined;
+    if (!match) return;
+    setSearchFocusedNode(match.id);
+    if (typeof match.x === "number" && typeof match.y === "number") {
+      graphRef.current?.centerAt(match.x, match.y, 320);
+      graphRef.current?.zoom(2, 320);
+    }
+  }, [searchMatches]);
+
+  // Build neighbor set for hovered or searched node
   const connectedNodes = useMemo(() => {
-    if (!hoveredNode) return new Set<string>();
+    if (!activeNode) return new Set<string>();
     const set = new Set<string>();
-    set.add(hoveredNode);
+    set.add(activeNode);
     graphData.links.forEach((link) => {
       const s = typeof link.source === "object" ? (link.source as any).id : link.source;
       const t = typeof link.target === "object" ? (link.target as any).id : link.target;
-      if (s === hoveredNode) set.add(t);
-      if (t === hoveredNode) set.add(s);
+      if (s === activeNode) set.add(t);
+      if (t === activeNode) set.add(s);
     });
     return set;
-  }, [hoveredNode, graphData.links]);
+  }, [activeNode, graphData.links]);
 
   // Custom node rendering
   const paintNode = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
@@ -410,17 +434,17 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
     const isLeaf = n.size <= 3;
     const isBranch = n.size >= 5 && n.size <= 6;
     const r = n.isCenter ? 10 : isBranch ? 6 : isLeaf ? 3.5 : 6;
-    const isHovered = hoveredNode === n.id;
+    const isHovered = activeNode === n.id;
     const isConnected = connectedNodes.has(n.id);
 
     // Determine brightness based on hover state
     const t = hoverIntensity.current;
-    const isDimmed = hoveredNode && !isHovered && !isConnected;
+    const isDimmed = activeNode && !isHovered && !isConnected;
 
     let brightness: number;
     if (isHovered) {
       brightness = n.isCenter ? 255 : isBranch ? 245 : 236;
-    } else if (isConnected && hoveredNode) {
+    } else if (isConnected && activeNode) {
       brightness = n.isCenter ? 250 : isBranch ? 235 : 225;
     } else if (isDimmed) {
       const normal = n.isCenter ? 240 : isBranch ? 224 : 208;
@@ -574,12 +598,12 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
     // Label — hide when zoomed out or labels disabled
     if (showLabels && globalScale > 0.4) {
       // Animate label slide: target is 0 when visible (hovered/connected), -1.5 when hidden
-      const targetOffset = (isHovered || (isConnected && hoveredNode)) ? 0 : hoveredNode ? -1.5 : 0;
+      const targetOffset = (isHovered || (isConnected && activeNode)) ? 0 : activeNode ? -1.5 : 0;
       const prev = labelOffsets.current[n.id] ?? 0;
       const offset = prev + (targetOffset - prev) * 0.15;
       labelOffsets.current[n.id] = offset;
 
-      const labelAlpha = isHovered ? 1 : (isConnected && hoveredNode) ? 0.85 : isDimmed ? Math.max(0, 1 - t * 0.8) : 1;
+      const labelAlpha = isHovered ? 1 : (isConnected && activeNode) ? 0.85 : isDimmed ? Math.max(0, 1 - t * 0.8) : 1;
 
       const fontSize = n.isCenter ? 4 : isBranch ? 3.5 : 3;
       ctx.font = `${isLeaf ? "400" : "500"} ${fontSize}px Inter, system-ui, sans-serif`;
@@ -589,7 +613,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
       let labelBrightness: number;
       if (isHovered) {
         labelBrightness = 240;
-      } else if (isConnected && hoveredNode) {
+      } else if (isConnected && activeNode) {
         labelBrightness = 210;
       } else if (isDimmed) {
         const normalL = isLeaf ? 136 : 187;
@@ -603,7 +627,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
       ctx.fillText(n.label, n.x, n.y + r + 2 + offset);
       ctx.globalAlpha = 1;
     }
-  }, [hoveredNode, connectedNodes, showLabels, useOrbs]);
+  }, [activeNode, connectedNodes, showLabels, useOrbs]);
 
   // Configure forces when graph ref is ready
   useEffect(() => {
@@ -652,18 +676,26 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
       {/* Content */}
       {tab === "canvas" ? (
         <div className="relative flex flex-1 min-h-0" style={{ opacity: dataLoaded ? 1 : 0, transition: "opacity 300ms" }}>
-          {onCanvasSettings && (
-            <button
-              onClick={onCanvasSettings}
-              className="absolute top-3 right-3 z-10 flex h-7 w-7 items-center justify-center rounded-lg bg-[#1F1F1F] text-white transition-colors hover:bg-[#2a2a2a]"
-              title="Canvas settings"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21.3175 7.14139L20.8239 6.28479C20.4506 5.63696 20.264 5.31305 19.9464 5.18388C19.6288 5.05472 19.2696 5.15664 18.5513 5.36048L17.3311 5.70418C16.8725 5.80994 16.3913 5.74994 15.9726 5.53479L15.6357 5.34042C15.2766 5.11043 15.0004 4.77133 14.8475 4.37274L14.5136 3.37536C14.294 2.71534 14.1842 2.38533 13.9228 2.19657C13.6615 2.00781 13.3143 2.00781 12.6199 2.00781H11.5051C10.8108 2.00781 10.4636 2.00781 10.2022 2.19657C9.94085 2.38533 9.83106 2.71534 9.61149 3.37536L9.27753 4.37274C9.12465 4.77133 8.84845 5.11043 8.48937 5.34042L8.15249 5.53479C7.73374 5.74994 7.25259 5.80994 6.79398 5.70418L5.57375 5.36048C4.85541 5.15664 4.49625 5.05472 4.17867 5.18388C3.86109 5.31305 3.67445 5.63696 3.30115 6.28479L2.80757 7.14139C2.45766 7.74864 2.2827 8.05227 2.31666 8.37549C2.35061 8.69871 2.58483 8.95918 3.05326 9.48012L4.0843 10.6328C4.3363 10.9518 4.51521 11.5078 4.51521 12.0077C4.51521 12.5078 4.33636 13.0636 4.08433 13.3827L3.05326 14.5354C2.58483 15.0564 2.35062 15.3168 2.31666 15.6401C2.2827 15.9633 2.45766 16.2669 2.80757 16.8741L3.30114 17.7307C3.67443 18.3785 3.86109 18.7025 4.17867 18.8316C4.49625 18.9608 4.85542 18.8589 5.57377 18.655L6.79394 18.3113C7.25263 18.2055 7.73387 18.2656 8.15267 18.4808L8.4895 18.6752C8.84851 18.9052 9.12464 19.2442 9.2775 19.6428L9.61149 20.6403C9.83106 21.3003 9.94085 21.6303 10.2022 21.8191C10.4636 22.0078 10.8108 22.0078 11.5051 22.0078H12.6199C13.3143 22.0078 13.6615 22.0078 13.9228 21.8191C14.1842 21.6303 14.294 21.3003 14.5136 20.6403L14.8476 19.6428C15.0004 19.2442 15.2765 18.9052 15.6356 18.6752L15.9724 18.4808C16.3912 18.2656 16.8724 18.2055 17.3311 18.3113L18.5513 18.655C19.2696 18.8589 19.6288 18.9608 19.9464 18.8316C20.264 18.7025 20.4506 18.3785 20.8239 17.7307L21.3175 16.8741C21.6674 16.2669 21.8423 15.9633 21.8084 15.6401C21.7744 15.3168 21.5402 15.0564 21.0718 14.5354L20.0407 13.3827C19.7887 13.0636 19.6098 12.5078 19.6098 12.0077C19.6098 11.5078 19.7888 10.9518 20.0407 10.6328L21.0718 9.48012C21.5402 8.95918 21.7744 8.69871 21.8084 8.37549C21.8423 8.05227 21.6674 7.74864 21.3175 7.14139Z" strokeLinecap="round" />
-                <path d="M15.5195 12C15.5195 13.933 13.9525 15.5 12.0195 15.5C10.0865 15.5 8.51953 13.933 8.51953 12C8.51953 10.067 10.0865 8.5 12.0195 8.5C13.9525 8.5 15.5195 10.067 15.5195 12Z" />
-              </svg>
-            </button>
-          )}
+          <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
+            <CanvasSearchControl
+              value={searchQuery}
+              onChange={setSearchQuery}
+              onSubmit={focusSearchMatch}
+              resultLabel={searchQuery.trim() ? String(searchMatches.length) : undefined}
+            />
+            {onCanvasSettings && (
+              <button
+                onClick={onCanvasSettings}
+                className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#1F1F1F] text-white transition-colors hover:bg-[#2a2a2a]"
+                title="Canvas settings"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21.3175 7.14139L20.8239 6.28479C20.4506 5.63696 20.264 5.31305 19.9464 5.18388C19.6288 5.05472 19.2696 5.15664 18.5513 5.36048L17.3311 5.70418C16.8725 5.80994 16.3913 5.74994 15.9726 5.53479L15.6357 5.34042C15.2766 5.11043 15.0004 4.77133 14.8475 4.37274L14.5136 3.37536C14.294 2.71534 14.1842 2.38533 13.9228 2.19657C13.6615 2.00781 13.3143 2.00781 12.6199 2.00781H11.5051C10.8108 2.00781 10.4636 2.00781 10.2022 2.19657C9.94085 2.38533 9.83106 2.71534 9.61149 3.37536L9.27753 4.37274C9.12465 4.77133 8.84845 5.11043 8.48937 5.34042L8.15249 5.53479C7.73374 5.74994 7.25259 5.80994 6.79398 5.70418L5.57375 5.36048C4.85541 5.15664 4.49625 5.05472 4.17867 5.18388C3.86109 5.31305 3.67445 5.63696 3.30115 6.28479L2.80757 7.14139C2.45766 7.74864 2.2827 8.05227 2.31666 8.37549C2.35061 8.69871 2.58483 8.95918 3.05326 9.48012L4.0843 10.6328C4.3363 10.9518 4.51521 11.5078 4.51521 12.0077C4.51521 12.5078 4.33636 13.0636 4.08433 13.3827L3.05326 14.5354C2.58483 15.0564 2.35062 15.3168 2.31666 15.6401C2.2827 15.9633 2.45766 16.2669 2.80757 16.8741L3.30114 17.7307C3.67443 18.3785 3.86109 18.7025 4.17867 18.8316C4.49625 18.9608 4.85542 18.8589 5.57377 18.655L6.79394 18.3113C7.25263 18.2055 7.73387 18.2656 8.15267 18.4808L8.4895 18.6752C8.84851 18.9052 9.12464 19.2442 9.2775 19.6428L9.61149 20.6403C9.83106 21.3003 9.94085 21.6303 10.2022 21.8191C10.4636 22.0078 10.8108 22.0078 11.5051 22.0078H12.6199C13.3143 22.0078 13.6615 22.0078 13.9228 21.8191C14.1842 21.6303 14.294 21.3003 14.5136 20.6403L14.8476 19.6428C15.0004 19.2442 15.2765 18.9052 15.6356 18.6752L15.9724 18.4808C16.3912 18.2656 16.8724 18.2055 17.3311 18.3113L18.5513 18.655C19.2696 18.8589 19.6288 18.9608 19.9464 18.8316C20.264 18.7025 20.4506 18.3785 20.8239 17.7307L21.3175 16.8741C21.6674 16.2669 21.8423 15.9633 21.8084 15.6401C21.7744 15.3168 21.5402 15.0564 21.0718 14.5354L20.0407 13.3827C19.7887 13.0636 19.6098 12.5078 19.6098 12.0077C19.6098 11.5078 19.7888 10.9518 20.0407 10.6328L21.0718 9.48012C21.5402 8.95918 21.7744 8.69871 21.8084 8.37549C21.8423 8.05227 21.6674 7.74864 21.3175 7.14139Z" strokeLinecap="round" />
+                  <path d="M15.5195 12C15.5195 13.933 13.9525 15.5 12.0195 15.5C10.0865 15.5 8.51953 13.933 8.51953 12C8.51953 10.067 10.0865 8.5 12.0195 8.5C13.9525 8.5 15.5195 10.067 15.5195 12Z" />
+                </svg>
+              </button>
+            )}
+          </div>
           <div ref={containerRef} className="h-full min-h-0 w-full">
             <ForceGraph2D
               ref={graphRef}
@@ -680,10 +712,10 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
                 ctx.fill();
               }}
               linkColor={(link: any) => {
-                if (!hoveredNode) return "#3a3a3a";
+                if (!activeNode) return "#3a3a3a";
                 const s = typeof link.source === "object" ? link.source.id : link.source;
                 const t = typeof link.target === "object" ? link.target.id : link.target;
-                if (s === hoveredNode || t === hoveredNode) return "#888888";
+                if (s === activeNode || t === activeNode) return "#888888";
                 return "#2a2a2a";
               }}
               linkWidth={1}
