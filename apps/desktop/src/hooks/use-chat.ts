@@ -395,8 +395,49 @@ function mergeCodeChanges(existing: CodeChangeInfo[] | undefined, incoming: Code
   return Array.from(merged.values());
 }
 
+const CODE_CHANGE_CACHE_KEY = "xcloudCodeChangeDiffs";
+const CODE_CHANGE_CACHE_LIMIT = 200;
+
+type CodeChangeCache = Record<string, { updatedAt: number; changes: CodeChangeInfo[] }>;
+
+function codeChangeCacheKey(sessionKey: string, toolCallId: string) {
+  return `${sessionKey}::${toolCallId}`;
+}
+
+function readCodeChangeCache(): CodeChangeCache {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CODE_CHANGE_CACHE_KEY) ?? "{}") as CodeChangeCache;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeCodeChangeCache(cache: CodeChangeCache) {
+  const entries = Object.entries(cache)
+    .sort(([, a], [, b]) => b.updatedAt - a.updatedAt)
+    .slice(0, CODE_CHANGE_CACHE_LIMIT);
+  localStorage.setItem(CODE_CHANGE_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
+}
+
+function readCachedCodeChanges(sessionKey: string, toolCallId: string) {
+  return readCodeChangeCache()[codeChangeCacheKey(sessionKey, toolCallId)]?.changes;
+}
+
+function cacheCodeChanges(sessionKey: string, toolCallId: string, changes: CodeChangeInfo[] | undefined) {
+  if (!changes?.some((change) => change.diff)) return;
+  const cache = readCodeChangeCache();
+  const key = codeChangeCacheKey(sessionKey, toolCallId);
+  cache[key] = {
+    updatedAt: Date.now(),
+    changes: mergeCodeChanges(cache[key]?.changes, changes) ?? changes,
+  };
+  writeCodeChangeCache(cache);
+}
+
 function attachCodeChangesToTool(sessionKey: string, toolCallId: string, changes: CodeChangeInfo[] | undefined) {
   if (!changes?.length) return;
+  cacheCodeChanges(sessionKey, toolCallId, changes);
   updateChatMessages(sessionKey, (messages) =>
     messages.map((message) =>
       message.role === "tool" && message.tool?.id === toolCallId
@@ -1022,12 +1063,14 @@ function parseHistoryMessages(sessionKey: string, history: HistoryMessage[]): Ch
         .join("");
       if (m.toolCallId) {
         toolOutputs.set(m.toolCallId, text.slice(0, 500));
+        const cachedChanges = readCachedCodeChanges(sessionKey, m.toolCallId);
         const changes = buildCodeChangeFromTool({
           name: m.toolName ?? "tool",
           output: text,
           details: isRecord(m.details) ? m.details : undefined,
         });
-        if (changes) toolChanges.set(m.toolCallId, changes);
+        const mergedChanges = mergeCodeChanges(changes, cachedChanges);
+        if (mergedChanges) toolChanges.set(m.toolCallId, mergedChanges);
       }
       for (let j = i - 1; j >= 0; j--) {
         const prev = history[j]!;
@@ -1073,13 +1116,17 @@ function parseHistoryMessages(sessionKey: string, history: HistoryMessage[]): Ch
             const toolId = block.id ?? `${block.name}-hist-${i}`;
             const args = isRecord(block.arguments) ? block.arguments : undefined;
             const output = toolOutputs.get(toolId);
+            const changes = mergeCodeChanges(
+              toolChanges.get(toolId) ?? buildCodeChangeFromTool({ name: block.name, args, output }),
+              readCachedCodeChanges(sessionKey, toolId),
+            );
             msgTools.push({
               id: toolId,
               name: block.name,
               title: buildToolTitle(block.name, args),
               args,
               output,
-              changes: toolChanges.get(toolId) ?? buildCodeChangeFromTool({ name: block.name, args, output }),
+              changes,
               status: "done",
               timestamp: m.timestamp ?? Date.now(),
             });

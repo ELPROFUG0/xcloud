@@ -44,6 +44,24 @@ interface Page {
   responses: ChatMessage[];
 }
 
+function isMutationToolName(name: string) {
+  const lower = name.toLowerCase();
+  return lower.includes("write")
+    || lower.includes("edit")
+    || lower.includes("patch")
+    || lower.includes("apply");
+}
+
+function isRedundantMutationTool(message: ChatMessage, pageHasCodeChanges: boolean) {
+  if (!pageHasCodeChanges || message.role !== "tool" || !message.tool) return false;
+  if (message.tool.changes?.length) return false;
+  if (!isMutationToolName(message.tool.name)) return false;
+  if (message.tool.status !== "done") return false;
+
+  const output = message.tool.output?.toLowerCase().trim();
+  return !output || output.includes("success") || output.includes("updated") || output.includes("written");
+}
+
 function paginate(messages: ChatMessage[]): Page[] {
   const pages: Page[] = [];
   let current: Page | null = null;
@@ -463,7 +481,12 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
 
               {/* Agent responses */}
               <div className="py-4">
-                {page.responses.map((msg) =>
+                {page.responses
+                  .filter((msg) => !isRedundantMutationTool(
+                    msg,
+                    page.responses.some((response) => response.role === "tool" && Boolean(response.tool?.changes?.length)),
+                  ))
+                  .map((msg) =>
                   msg.role === "tool" && msg.tool ? (
                     <div key={msg.id} className="py-1">
                       <ToolCallBadge tool={msg.tool} />
