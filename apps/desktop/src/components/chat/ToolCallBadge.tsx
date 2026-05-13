@@ -204,14 +204,14 @@ function CodeChangeFileRow({ change, index }: { change: CodeChangeInfo; index: n
     <div ref={rowRef}>
       <button
         type="button"
-        className="flex w-full cursor-pointer items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-white/[0.04]"
+        className="flex w-full cursor-pointer items-center gap-3 bg-[#212121] px-3 py-2.5 text-left transition-colors hover:bg-white/[0.04]"
         onClick={toggleOpen}
         aria-expanded={open}
         aria-controls={`code-change-diff-${index}`}
       >
-        <span className="min-w-0 flex-1 truncate font-mono text-[12px]" title={displayPath(change.path)}>
-          {pathParts.dir && <span className="text-text-muted/55">{pathParts.dir}</span>}
-          <span className="text-text">{pathParts.file}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-text" title={displayPath(change.path)}>
+          {pathParts.dir && <span>{pathParts.dir}</span>}
+          <span>{pathParts.file}</span>
         </span>
         <span className="w-10 shrink-0 text-right font-mono text-[11px] text-[#01A241]">+{change.additions}</span>
         <span className="w-10 shrink-0 text-right font-mono text-[11px] text-[#DE2E2A]">-{change.deletions}</span>
@@ -242,7 +242,7 @@ function CodeChangeArtifact({ changes }: { changes: CodeChangeInfo[] }) {
   const totals = summarizeChanges(changes);
 
   return (
-    <div className="my-3 flex flex-col overflow-hidden rounded-lg bg-[#222] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+    <div className="my-3 flex flex-col overflow-hidden rounded-xl bg-[#222] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
       <div className="flex shrink-0 items-center justify-between border-b border-white/[0.055] px-3 py-2.5">
         <div className="flex min-w-0 items-center gap-2 text-[12px] font-medium text-text">
           <FileDiff className="h-3.5 w-3.5 shrink-0 text-text-muted" />
@@ -254,7 +254,7 @@ function CodeChangeArtifact({ changes }: { changes: CodeChangeInfo[] }) {
         </div>
       </div>
 
-      <div className="divide-y divide-white/[0.055] overflow-visible">
+      <div className="divide-y divide-white/[0.055] overflow-visible bg-[#212121]">
         {changes.map((change, index) => (
           <CodeChangeFileRow key={`${change.path}-${index}`} change={change} index={index} />
         ))}
