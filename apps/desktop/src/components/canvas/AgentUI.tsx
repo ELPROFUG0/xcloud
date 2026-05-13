@@ -1041,7 +1041,6 @@ export function AgentUIContent({
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const uiToolsRef = useRef<XCloudUiToolDefinition[]>([]);
-  const loadStartedAtRef = useRef(0);
   const loadFinishTimerRef = useRef<number | null>(null);
   const menuCloseTimerRef = useRef<number | null>(null);
   const [browserMenuOpen, setBrowserMenuOpen] = useState(false);
@@ -1210,7 +1209,6 @@ export function AgentUIContent({
       loadFinishTimerRef.current = null;
     }
     if (uiView === "preview" && devServerUrl) {
-      loadStartedAtRef.current = Date.now();
       setPreviewLoadPhase("loading");
     } else {
       setPreviewLoadPhase("idle");
@@ -1235,24 +1233,20 @@ export function AgentUIContent({
   const browserLoadingBarClass = previewLoadPhase === "finishing"
     ? "browser-loading-bar--finishing"
     : "browser-loading-bar--loading";
+  const shouldMaskPreview = devServerLoading || previewLoadPhase === "loading";
 
   const finishPreviewLoad = () => {
-    const elapsed = Date.now() - loadStartedAtRef.current;
-    const wait = Math.max(0, 1400 - elapsed);
     if (loadFinishTimerRef.current !== null) window.clearTimeout(loadFinishTimerRef.current);
+    setPreviewLoadPhase("finishing");
     loadFinishTimerRef.current = window.setTimeout(() => {
-      setPreviewLoadPhase("finishing");
-      loadFinishTimerRef.current = window.setTimeout(() => {
-        setPreviewLoadPhase("idle");
-        loadFinishTimerRef.current = null;
-      }, 240);
-    }, wait);
+      setPreviewLoadPhase("idle");
+      loadFinishTimerRef.current = null;
+    }, 120);
   };
 
   const refreshPreview = () => {
     const iframe = document.querySelector<HTMLIFrameElement>(".ui-preview-iframe");
     if (iframe && devServerUrl) {
-      loadStartedAtRef.current = Date.now();
       setPreviewLoadPhase("loading");
       iframe.src = devServerUrl;
     }
@@ -1399,9 +1393,9 @@ export function AgentUIContent({
   // Preview
   if (uiView === "preview") {
     return (
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col bg-[#111111]">
         {renderSubHeader()}
-        <div className="min-h-0 flex-1">
+        <div className="relative min-h-0 flex-1 bg-[#111111]">
           {devServerLoading ? (
             <div className="flex h-full items-center justify-center">
               <div className="text-center">
@@ -1418,7 +1412,8 @@ export function AgentUIContent({
                 finishPreviewLoad();
                 sendPreviewInit();
               }}
-              className="ui-preview-iframe w-full h-full border-0 bg-white"
+              className="ui-preview-iframe h-full w-full border-0 bg-[#111111]"
+              style={{ colorScheme: "dark" }}
               title="UI Preview"
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
             />
@@ -1437,6 +1432,9 @@ export function AgentUIContent({
                 </button>
               </div>
             </div>
+          )}
+          {shouldMaskPreview && (
+            <div className="pointer-events-none absolute inset-0 bg-[#111111]" />
           )}
         </div>
       </div>
