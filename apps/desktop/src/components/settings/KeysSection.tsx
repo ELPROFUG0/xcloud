@@ -1,34 +1,65 @@
 import { useState, useCallback, useEffect } from "react";
 import { CheckCircle } from "lucide-react";
 import type { BrowserEngine } from "@/lib/engine";
-import { PROVIDERS } from "@/types/provider";
+import { PROVIDERS, type ProviderConfig } from "@/types/provider";
+import { useModels } from "@/hooks/use-models";
+import { fmtProvider, ProviderIcon } from "@/components/chat/ModelSelector";
 import { invoke } from "@tauri-apps/api/core";
 import type { KeyState } from "./types";
 
-import anthropicLogo from "@/assets/providers/anthropic.svg";
 import openaiLogo from "@/assets/providers/openai.svg";
-import googleProvLogo from "@/assets/providers/google.svg";
-import awsLogo from "@/assets/providers/aws.svg";
-import azureLogo from "@/assets/providers/azure.svg";
-import mistralLogo from "@/assets/providers/mistral.svg";
-import groqLogo from "@/assets/providers/groq.svg";
-import deepseekLogo from "@/assets/providers/deepseek.svg";
-import fireworksLogo from "@/assets/providers/fireworks.svg";
-import openrouterLogo from "@/assets/providers/openrouter.svg";
-import xaiLogo from "@/assets/providers/xai.svg";
-import cerebrasLogo from "@/assets/providers/cerebras.svg";
-import huggingfaceLogo from "@/assets/providers/huggingface.svg";
 import githubLogo from "@/assets/providers/github.svg";
-import ollamaLogo from "@/assets/providers/ollama.svg";
 
-const PROVIDER_LOGOS: Record<string, string> = {
-  anthropic: anthropicLogo, openai: openaiLogo, google: googleProvLogo,
-  "google-vertex": googleProvLogo, mistral: mistralLogo, groq: groqLogo,
-  deepseek: deepseekLogo, fireworks: fireworksLogo, openrouter: openrouterLogo,
-  xai: xaiLogo, cerebras: cerebrasLogo, "amazon-bedrock": awsLogo,
-  "azure-openai-responses": azureLogo, huggingface: huggingfaceLogo,
-  "github-copilot": githubLogo, ollama: ollamaLogo,
+const PROVIDER_CONFIG_BY_ID = new Map(PROVIDERS.map((provider) => [provider.id, provider]));
+
+interface ProviderKeyConfig extends ProviderConfig {
+  envKeys: string[];
+}
+
+const ENV_KEY_ALIASES: Record<string, string[]> = {
+  byteplus: ["ARK_API_KEY"],
+  "byteplus-plan": ["ARK_API_KEY"],
+  cloudflare: ["CLOUDFLARE_API_TOKEN"],
+  gemini: ["GEMINI_API_KEY"],
+  github: ["GITHUB_TOKEN"],
+  "github-copilot": ["GITHUB_TOKEN"],
+  google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+  "google-vertex": ["GOOGLE_APPLICATION_CREDENTIALS"],
+  huggingface: ["HF_TOKEN"],
+  "lm-studio": ["LM_STUDIO_API_KEY"],
+  lmstudio: ["LM_STUDIO_API_KEY"],
+  "openai-codex": ["OPENAI_API_KEY"],
+  "vercel-ai-gateway": ["AI_GATEWAY_API_KEY"],
+  volcengine: ["ARK_API_KEY"],
+  "volcengine-plan": ["ARK_API_KEY"],
 };
+
+function providerEnvKey(providerId: string): string {
+  return `${providerId.replace(/[^a-zA-Z0-9]+/g, "_").toUpperCase()}_API_KEY`;
+}
+
+function uniqueKeys(keys: string[]): string[] {
+  return Array.from(new Set(keys.filter(Boolean)));
+}
+
+function buildProviderConfig(providerId: string): ProviderKeyConfig {
+  const configured = PROVIDER_CONFIG_BY_ID.get(providerId);
+  const genericEnvKey = providerEnvKey(providerId);
+  const envKeys = uniqueKeys([
+    ...(configured ? [configured.envKey] : []),
+    ...(ENV_KEY_ALIASES[providerId] ?? []),
+    genericEnvKey,
+  ]);
+  if (configured) return { ...configured, envKeys };
+  const envKey = envKeys[0] ?? genericEnvKey;
+  return {
+    id: providerId,
+    name: fmtProvider(providerId),
+    envKey,
+    envKeys,
+    placeholder: envKey.endsWith("_PATH") || envKey.includes("CREDENTIALS") ? "/path/to/credentials.json" : "...",
+  };
+}
 
 interface KeysSectionProps {
   engine: BrowserEngine;
@@ -46,9 +77,11 @@ const STATUS_BY_PROVIDER: Record<string, keyof AuthProfilesStatus> = {
 };
 
 export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
+  const { providers: modelProviders, loading: loadingProviders } = useModels(engine);
   const [keys, setKeys] = useState<Record<string, KeyState>>({});
   const [authLoading, setAuthLoading] = useState<Record<string, boolean>>({});
   const [authStatus, setAuthStatus] = useState<Record<string, string>>({});
+  const providerConfigs = modelProviders.map((group) => buildProviderConfig(group.provider));
 
   const openAuthTerminal = useCallback(async (args: string[]) => {
     const command = await invoke<string>("xcloud_shell_command", { args });
@@ -96,30 +129,63 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
     }).catch(() => {});
   }, [engine]);
 
-  const getKeyState = (envKey: string): KeyState =>
-    keys[envKey] ?? { value: "", saving: false, saved: false, error: null };
+  const getKeyState = (provider: ProviderKeyConfig): KeyState => {
+    for (const envKey of provider.envKeys) {
+      const state = keys[envKey];
+      if (state?.value) return state;
+    }
+    return keys[provider.envKey] ?? { value: "", saving: false, saved: false, error: null };
+  };
 
-  const updateKey = useCallback((envKey: string, value: string) => {
-    setKeys((prev) => ({ ...prev, [envKey]: { value, saving: false, saved: false, error: null } }));
+  const updateKey = useCallback((provider: ProviderKeyConfig, value: string) => {
+    setKeys((prev) => {
+      const next = { ...prev };
+      for (const envKey of provider.envKeys) {
+        next[envKey] = { value, saving: false, saved: false, error: null };
+      }
+      return next;
+    });
   }, []);
 
-  const saveKey = useCallback(async (envKey: string) => {
-    const state = keys[envKey];
+  const saveKey = useCallback(async (provider: ProviderKeyConfig) => {
+    const state = getKeyState(provider);
     if (!state?.value.trim()) return;
-    setKeys((prev) => ({ ...prev, [envKey]: { ...prev[envKey]!, saving: true, saved: false, error: null } }));
+    setKeys((prev) => {
+      const next = { ...prev };
+      for (const envKey of provider.envKeys) {
+        next[envKey] = { value: state.value, saving: true, saved: false, error: null };
+      }
+      return next;
+    });
     try {
       const cfgRes = await engine.rpc("config.get", {});
       const hash = (cfgRes as { hash?: string }).hash ?? "";
-      await engine.patchConfig(JSON.stringify({ env: { [envKey]: state.value.trim() } }), hash);
+      await engine.patchConfig(JSON.stringify({
+        env: Object.fromEntries(provider.envKeys.map((envKey) => [envKey, state.value.trim()])),
+      }), hash);
     } catch {
       // Gateway restarts after config patch — "Connection closed" is expected
     }
     // Always mark as saved (the key was written before the gateway restarted)
-    setKeys((prev) => ({ ...prev, [envKey]: { ...prev[envKey]!, saving: false, saved: true, error: null } }));
+    setKeys((prev) => {
+      const next = { ...prev };
+      for (const envKey of provider.envKeys) {
+        next[envKey] = { value: state.value, saving: false, saved: true, error: null };
+      }
+      return next;
+    });
     setTimeout(() => {
       setKeys((prev) => {
-        const c = prev[envKey];
-        return c?.saved ? { ...prev, [envKey]: { ...c, saved: false } } : prev;
+        const next = { ...prev };
+        let changed = false;
+        for (const envKey of provider.envKeys) {
+          const c = next[envKey];
+          if (c?.saved) {
+            next[envKey] = { ...c, saved: false };
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
       });
     }, 3000);
   }, [keys, engine]);
@@ -212,26 +278,33 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
           </div>
 
           <p className="text-xs text-text-muted mb-3 uppercase tracking-wider font-semibold">API Keys</p>
-          {PROVIDERS.map((provider) => {
-            const state = getKeyState(provider.envKey);
-            const logo = PROVIDER_LOGOS[provider.id];
+          {loadingProviders && providerConfigs.length === 0 && (
+            <div className="py-4 text-xs text-text-muted">Loading providers...</div>
+          )}
+          {providerConfigs.map((provider) => {
+            const state = getKeyState(provider);
             return (
               <div key={provider.id} className="flex items-center justify-between border-b border-border/50 py-3.5 last:border-0">
                 <div className="flex items-center gap-3 min-w-0 mr-4">
-                  {logo && <img src={logo} alt={provider.name} className="h-5 w-5 shrink-0" />}
-                  <span className="text-sm font-medium text-text">{provider.name}</span>
+                  <div className="flex h-5 w-5 shrink-0 items-center justify-center">
+                    <ProviderIcon provider={provider.id} size={18} color />
+                  </div>
+                  <div className="min-w-0">
+                    <span className="block truncate text-sm font-medium text-text">{provider.name}</span>
+                    <span className="block truncate text-[10px] font-mono text-text-muted">{provider.envKeys.join(" / ")}</span>
+                  </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <input
                     type="password"
                     value={state.value}
-                    onChange={(e) => updateKey(provider.envKey, e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && saveKey(provider.envKey)}
+                    onChange={(e) => updateKey(provider, e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && saveKey(provider)}
                     placeholder={provider.placeholder}
                     className="w-48 rounded-xl bg-[#262626] px-3 py-1.5 text-sm text-text font-mono placeholder:text-text-muted focus:outline-none"
                   />
                   <button
-                    onClick={() => saveKey(provider.envKey)}
+                    onClick={() => saveKey(provider)}
                     disabled={!state.value.trim() || state.saving}
                     className="rounded-xl bg-[#262626] px-3 py-1.5 text-sm text-text-muted hover:text-text transition-colors disabled:opacity-30"
                   >

@@ -19,7 +19,7 @@ import type { ModelInfo } from "@/lib/engine";
 
 // ── Provider icon mapping ───────────────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const PROVIDER_ICONS: Record<string, any> = {
+export const PROVIDER_ICONS: Record<string, any> = {
   anthropic: Anthropic, openai: OpenAI, google: Gemini, gemini: Gemini,
   "google-vertex": VertexAI, mistral: Mistral, groq: Groq, deepseek: DeepSeek,
   fireworks: Fireworks, openrouter: OpenRouter, xai: XAI, cerebras: Cerebras,
@@ -49,15 +49,45 @@ const PROVIDER_ICONS: Record<string, any> = {
   opencode: OpenCode, openclaw: OpenClaw, claude: Claude, codex: OpenAI,
 };
 
-const PROVIDER_NAMES: Record<string, string> = {
+export const PROVIDER_NAMES: Record<string, string> = {
   anthropic: "Anthropic", openai: "OpenAI", "openai-codex": "OpenAI Codex", codex: "OpenAI Codex", google: "Google", "amazon-bedrock": "AWS Bedrock",
   "azure-openai-responses": "Azure OpenAI", mistral: "Mistral", groq: "Groq", deepseek: "DeepSeek",
   fireworks: "Fireworks", openrouter: "OpenRouter", "github-copilot": "GitHub Copilot", xai: "xAI",
   cerebras: "Cerebras", huggingface: "Hugging Face", ollama: "Ollama",
 };
 
-function fmtProvider(id: string): string {
+const MONOCHROME_DARK_PROVIDER_COLORS: Record<string, string> = {
+  codex: "#FFFFFF",
+  github: "#FFFFFF",
+  "github-copilot": "#FFFFFF",
+  ollama: "#FFFFFF",
+  openai: "#FFFFFF",
+  "openai-codex": "#FFFFFF",
+  opencode: "#FFFFFF",
+  "opencode-go": "#FFFFFF",
+  replicate: "#FFFFFF",
+  together: "#FFFFFF",
+  vercel: "#FFFFFF",
+  "vercel-ai-gateway": "#FFFFFF",
+  xai: "#FFFFFF",
+};
+
+export function fmtProvider(id: string): string {
   return PROVIDER_NAMES[id] ?? id.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
+function colorIsTooDarkForTheme(color: string | undefined): boolean {
+  const match = color?.match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (!match) return false;
+  const hex = match[1]!.length === 3
+    ? match[1]!.split("").map((char) => char + char).join("")
+    : match[1]!;
+  const value = Number.parseInt(hex, 16);
+  const red = (value >> 16) & 255;
+  const green = (value >> 8) & 255;
+  const blue = value & 255;
+  const luminance = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
+  return luminance < 0.16;
 }
 
 function formatModelName(raw: string): string {
@@ -76,10 +106,14 @@ function formatModelName(raw: string): string {
   return id.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 
-function ProviderIcon({ provider, size = 18 }: { provider: string; size?: number }) {
+export function ProviderIcon({ provider, size = 18, color = false }: { provider: string; size?: number; color?: boolean }) {
   const Icon = PROVIDER_ICONS[provider];
   if (!Icon) return <div style={{ width: size, height: size }} />;
-  return <Icon size={size} />;
+  const primaryColor = typeof Icon.colorPrimary === "string" ? Icon.colorPrimary : undefined;
+  const iconColor = color
+    ? (MONOCHROME_DARK_PROVIDER_COLORS[provider] ?? (colorIsTooDarkForTheme(primaryColor) ? "#FFFFFF" : primaryColor))
+    : undefined;
+  return <Icon size={size} style={iconColor ? { color: iconColor } : undefined} />;
 }
 
 // ── Types ───────────────────────────────────────────────────────────────────
