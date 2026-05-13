@@ -192,7 +192,7 @@ function renderChannelFields(
           <select
             value={values[field.key] ?? field.placeholder}
             onChange={(e) => updateField(channelId, field.key, e.target.value)}
-            className="rounded-xl bg-[#262626] px-3 py-1.5 text-sm text-text focus:outline-none appearance-none pr-7 cursor-pointer"
+            className="h-9 min-w-48 appearance-none rounded-xl bg-[#262626] py-1.5 pl-3 pr-9 text-sm text-text transition-colors hover:bg-[#2d2d2d] focus:outline-none cursor-pointer"
           >
             {field.options?.map((opt) => (
               <option key={opt} value={opt}>{opt}</option>
@@ -586,10 +586,11 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                                 </span>
                               </div>
                               <div className="flex items-center gap-2 shrink-0">
+                                {selectedTelegramConnected && <CheckCircle className="h-4 w-4 text-emerald-400" />}
                                 <select
                                   value={selectedTelegramAgent?.id ?? ""}
                                   onChange={(e) => setSelectedTelegramAgentId(e.target.value)}
-                                  className="h-9 w-56 rounded-xl bg-[#262626] px-3 text-sm text-text focus:outline-none"
+                                  className="h-9 w-56 appearance-none rounded-xl bg-[#262626] py-1.5 pl-3 pr-9 text-sm text-text transition-colors hover:bg-[#2d2d2d] focus:outline-none cursor-pointer"
                                 >
                                   {agents.map((agent) => {
                                     const connected = Boolean((telegramAgentBots[agent.id] ?? "").trim());
@@ -600,7 +601,6 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                                     );
                                   })}
                                 </select>
-                                {selectedTelegramConnected && <CheckCircle className="h-4 w-4 text-emerald-400" />}
                               </div>
                             </div>
 
@@ -664,7 +664,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                                     <select
                                       value={values.dmPolicy || "pairing"}
                                       onChange={(e) => updateChannelField(ch.id, "dmPolicy", e.target.value)}
-                                      className="h-9 w-48 rounded-xl bg-[#262626] px-3 text-sm text-text focus:outline-none"
+                                      className="h-9 w-48 appearance-none rounded-xl bg-[#262626] py-1.5 pl-3 pr-9 text-sm text-text transition-colors hover:bg-[#2d2d2d] focus:outline-none cursor-pointer"
                                     >
                                       {TELEGRAM_DM_POLICIES.map((policy) => (
                                         <option key={policy.id} value={policy.id}>{policy.label}</option>

@@ -53,13 +53,13 @@ export const ShowQr = ({
         <motion.div
           initial={{ width: compact ? 180 : 180 }}
           animate={{ width: 180, height: compact ? 36 : 48 }}
-          className="overflow-hidden rounded-[32px] bg-[#F4F4F9] dark:bg-[#1C1C1E]"
+          className="overflow-hidden rounded-xl bg-[#262626] transition-colors hover:bg-[#2d2d2d]"
         >
           <AnimatePresence mode="popLayout" initial={false}>
             {!isExpanded && (
               <motion.div
                 key="collapsed"
-                className="flex h-full cursor-pointer items-center justify-center gap-1 px-4 text-sm font-medium text-neutral-900 dark:text-white"
+                className="flex h-full cursor-pointer items-center justify-center gap-1 px-4 text-sm font-medium text-text"
                 onClick={() => setIsExpanded(true)}
                 initial={{ opacity: 0, filter: "blur(4px)" }}
                 animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
@@ -76,10 +76,11 @@ export const ShowQr = ({
           {isExpanded && (
             <motion.div
               key="expanded-popout"
-              initial={{ opacity: 0, y: 8, scale: 0.96, filter: "blur(4px)" }}
+              initial={{ opacity: 0, x: "-50%", y: "calc(-50% - 8px)", scale: 0.96, filter: "blur(4px)" }}
               animate={{
                 opacity: 1,
-                y: 0,
+                x: "-50%",
+                y: "-50%",
                 scale: 1,
                 filter: "blur(0px)",
                 width: 250,
@@ -87,12 +88,13 @@ export const ShowQr = ({
               }}
               exit={{
                 opacity: 0,
-                y: 8,
+                x: "-50%",
+                y: "calc(-50% - 8px)",
                 scale: 0.96,
                 filter: "blur(4px)",
                 transition: { duration: 0.2, ease: "easeOut" },
               }}
-              className="absolute left-0 top-[calc(100%+8px)] z-50 overflow-hidden rounded-[32px] bg-[#F4F4F9] text-neutral-900 shadow-2xl shadow-black/40 dark:bg-[#1C1C1E] dark:text-white"
+              className="fixed left-1/2 top-1/2 z-50 overflow-hidden rounded-[32px] bg-[#F4F4F9] text-neutral-900 shadow-2xl shadow-black/40 dark:bg-[#1C1C1E] dark:text-white"
             >
               <div ref={ref}>
                 <motion.div
