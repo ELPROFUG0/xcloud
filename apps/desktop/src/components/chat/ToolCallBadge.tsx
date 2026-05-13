@@ -145,9 +145,11 @@ function CodeDiffView({ diff }: { diff: string }) {
   );
 }
 
-const renderUnifiedGutter: RenderGutter = ({ side, renderDefault }) => (
-  <span>{side === "new" ? renderDefault() : ""}</span>
-);
+const renderUnifiedGutter: RenderGutter = ({ change, side, renderDefault }) => {
+  if (side !== "new") return <span />;
+  if (change.type === "delete") return <span>{change.lineNumber}</span>;
+  return <span>{renderDefault()}</span>;
+};
 
 function CodeChangeFileRow({ change, index }: { change: CodeChangeInfo; index: number }) {
   const [open, setOpen] = useState(false);

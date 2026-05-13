@@ -423,8 +423,35 @@ html, body {
   border-right: 1px solid rgba(255, 255, 255, 0.055);
 }
 
+.code-change-diff .diff-gutter-insert {
+  color: #01A241;
+}
+
+.code-change-diff .diff-gutter-delete {
+  color: #DE2E2A;
+}
+
 .code-change-diff .diff-code {
   padding-left: 1ch;
   white-space: pre;
   word-break: normal;
+}
+
+.code-change-diff .diff-code-insert {
+  box-shadow: inset 4px 0 #01A241;
+  padding-left: calc(1ch + 4px);
+}
+
+.code-change-diff .diff-code-delete {
+  background-image:
+    repeating-linear-gradient(
+      to bottom,
+      #DE2E2A 0 1px,
+      transparent 1px 2px
+    ),
+    linear-gradient(var(--diff-code-delete-background-color), var(--diff-code-delete-background-color));
+  background-position: left top, left top;
+  background-repeat: repeat-y, repeat;
+  background-size: 4px 2px, auto;
+  padding-left: calc(1ch + 4px);
 }
