@@ -286,7 +286,7 @@ export function ToolCallBadge({ tool, textContent, isTextStreaming }: ToolCallBa
 
   return (
     <Collapsible>
-      <div className="my-1.5 rounded-xl bg-[#1D1D1D] overflow-hidden transition-all">
+      <div className="my-1.5 overflow-hidden rounded-xl bg-[#222] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition-all">
         <CollapsibleTrigger
           className={cn(
             "relative flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-white/4",
