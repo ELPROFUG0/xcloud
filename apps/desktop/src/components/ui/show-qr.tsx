@@ -16,12 +16,14 @@ interface ShowQrProps {
   value: string;
   buttonLabel?: string;
   onCopy?: () => void;
+  compact?: boolean;
 }
 
 export const ShowQr = ({
   value,
   buttonLabel = "Show QR Code",
   onCopy,
+  compact = false,
 }: ShowQrProps) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
@@ -49,21 +51,21 @@ export const ShowQr = ({
     <div className="relative inline-flex overflow-visible">
       <MotionConfig transition={isExpanded ? springConfig : collapsedTransition}>
         <motion.div
-          initial={{ width: 180 }}
-          animate={{ width: 180, height: 48 }}
+          initial={{ width: compact ? 180 : 180 }}
+          animate={{ width: 180, height: compact ? 36 : 48 }}
           className="overflow-hidden rounded-[32px] bg-[#F4F4F9] dark:bg-[#1C1C1E]"
         >
           <AnimatePresence mode="popLayout" initial={false}>
             {!isExpanded && (
               <motion.div
                 key="collapsed"
-                className="flex cursor-pointer items-center justify-center gap-1 px-4 py-3 font-medium text-neutral-900 dark:text-white"
+                className="flex h-full cursor-pointer items-center justify-center gap-1 px-4 text-sm font-medium text-neutral-900 dark:text-white"
                 onClick={() => setIsExpanded(true)}
                 initial={{ opacity: 0, filter: "blur(4px)" }}
                 animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
                 exit={{ opacity: 0, filter: "blur(4px)" }}
               >
-                <IoQrCodeOutline className="size-6" />
+                <IoQrCodeOutline className={compact ? "size-4" : "size-6"} />
                 <span>{buttonLabel}</span>
               </motion.div>
             )}

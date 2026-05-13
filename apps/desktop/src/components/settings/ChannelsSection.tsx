@@ -1,12 +1,11 @@
 import { useState, useCallback, useEffect } from "react";
-import { ChevronLeft, AlertCircle, CheckCircle, Copy, ExternalLink, Eye, EyeOff, PlayCircle } from "lucide-react";
+import { ChevronLeft, AlertCircle, CheckCircle, Eye, EyeOff, PlayCircle } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { BrowserEngine } from "@/lib/engine";
 import type { AgentInfo } from "@/hooks/use-agents";
 import { ShowQr } from "@/components/ui/show-qr";
 import type { ChannelField, ChannelConfig } from "./types";
 import { invoke } from "@tauri-apps/api/core";
-import { openUrl } from "@tauri-apps/plugin-opener";
 
 import telegramLogo from "@/assets/channels/telegram.svg";
 import whatsappLogo from "@/assets/channels/whatsapp.svg";
@@ -253,11 +252,11 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
   const [channelError, setChannelError] = useState<Record<string, string | null>>({});
   const [channelStatus, setChannelStatus] = useState<Record<string, string>>({});
   const [channelChecking, setChannelChecking] = useState<Record<string, boolean>>({});
-  const [copiedHint, setCopiedHint] = useState<string | null>(null);
   const [telegramPairingCode, setTelegramPairingCode] = useState("");
   const [telegramPairingOutput, setTelegramPairingOutput] = useState("");
   const [telegramPairingRunning, setTelegramPairingRunning] = useState(false);
   const [telegramTokenVisible, setTelegramTokenVisible] = useState(false);
+  const [showTelegramSecurity, setShowTelegramSecurity] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [selectedTelegramAgentId, setSelectedTelegramAgentId] = useState<string>("");
   const [channelEnabled, setChannelEnabled] = useState<Record<string, boolean>>({});
@@ -385,13 +384,6 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
     setChannelSaved((prev) => ({ ...prev, [channelId]: true }));
     setTimeout(() => setChannelSaved((prev) => ({ ...prev, [channelId]: false })), 3000);
   }, [buildTelegramAccountsPatch, buildTelegramBindingsPatch, channelValues, channelEnabled, engine]);
-
-  const copyText = useCallback((text: string, label: string) => {
-    void navigator.clipboard?.writeText(text).then(() => {
-      setCopiedHint(label);
-      setTimeout(() => setCopiedHint(null), 1600);
-    }).catch(() => {});
-  }, []);
 
   const probeChannels = useCallback(async (channelId: string) => {
     setChannelChecking((prev) => ({ ...prev, [channelId]: true }));
@@ -543,22 +535,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                           Open BotFather, send <span className="font-mono text-text">/newbot</span>, choose a name, then copy the token it gives you.
                         </p>
                         <div className="mt-3 flex flex-wrap gap-2">
-                          <ShowQr value={BOTFATHER_URL} buttonLabel="Open BotFather" />
-                          <button
-                            onClick={() => copyText("/newbot", "/newbot copied")}
-                            className="flex items-center gap-1.5 rounded-xl bg-[#262626] px-3 py-1.5 text-xs font-medium text-text-muted transition-colors hover:bg-white/10 hover:text-text"
-                          >
-                            <Copy className="h-3.5 w-3.5" />
-                            Copy /newbot
-                          </button>
-                          <button
-                            onClick={() => void openUrl(BOTFATHER_URL)}
-                            className="flex items-center gap-1.5 rounded-xl bg-[#262626] px-3 py-1.5 text-xs font-medium text-text-muted transition-colors hover:bg-white/10 hover:text-text"
-                          >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                            Open link
-                          </button>
-                          {copiedHint && <span className="self-center text-[11px] text-emerald-400">{copiedHint}</span>}
+                          <ShowQr value={BOTFATHER_URL} buttonLabel="Open BotFather" compact />
                         </div>
                       </div>
                     </div>
@@ -573,7 +550,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                           Select the agent this bot belongs to, then paste the BotFather token for that agent.
                         </p>
                         {agents.length === 0 ? (
-                          <div className="mt-3 rounded-xl bg-[#262626] px-3 py-2 text-xs text-text-muted">
+                          <div className="mt-3 flex h-9 items-center rounded-xl bg-[#262626] px-3 text-sm text-text-muted">
                             No agents loaded yet.
                           </div>
                         ) : (
@@ -589,7 +566,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                                 <select
                                   value={selectedTelegramAgent?.id ?? ""}
                                   onChange={(e) => setSelectedTelegramAgentId(e.target.value)}
-                                  className="w-48 rounded-xl bg-[#262626] px-3 py-1.5 text-sm text-text focus:outline-none"
+                                  className="h-9 w-56 rounded-xl bg-[#262626] px-3 text-sm text-text focus:outline-none"
                                 >
                                   {agents.map((agent) => {
                                     const connected = mainTelegramAgent && agent.id === mainTelegramAgent.id
@@ -620,7 +597,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                                     value={selectedTelegramBotToken}
                                     onChange={(e) => updateSelectedTelegramBotToken(e.target.value)}
                                     placeholder="123456:ABC-DEF..."
-                                    className="w-56 rounded-xl bg-[#262626] py-1.5 pl-3 pr-9 text-sm font-mono text-text placeholder:text-text-muted focus:outline-none"
+                                    className="h-9 w-56 rounded-xl bg-[#262626] py-1.5 pl-3 pr-9 text-sm font-mono text-text placeholder:text-text-muted focus:outline-none"
                                   />
                                   <button
                                     type="button"
@@ -642,10 +619,53 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                                   const target = nextUnconnectedTelegramAgent ?? agents[0];
                                   if (target) setSelectedTelegramAgentId(target.id);
                                 }}
-                                className="rounded-xl bg-[#262626] px-3 py-1.5 text-sm text-text-muted transition-colors hover:text-text"
+                                className="h-9 rounded-xl bg-[#262626] px-3 text-sm text-text-muted transition-colors hover:text-text"
                               >
                                 Connect another agent
                               </button>
+                            </div>
+
+                            <div className="border-t border-border/50 pt-3">
+                              <button
+                                onClick={() => setShowTelegramSecurity((value) => !value)}
+                                className="flex h-9 w-full items-center justify-between rounded-xl bg-[#262626] px-3 text-sm text-text-muted transition-colors hover:text-text"
+                              >
+                                <span>Advanced security</span>
+                                <span className="text-[10px] uppercase tracking-wide">{values.dmPolicy || "pairing"}</span>
+                              </button>
+                              {showTelegramSecurity && (
+                                <div className="mt-3 space-y-3">
+                                  <div className="flex items-center justify-between border-b border-border/50 py-3.5">
+                                    <div className="min-w-0 mr-4">
+                                      <span className="block text-sm font-medium text-text">Who can DM</span>
+                                      <span className="block truncate text-[10px] text-text-muted">Pairing is recommended for most setups</span>
+                                    </div>
+                                    <select
+                                      value={values.dmPolicy || "pairing"}
+                                      onChange={(e) => updateChannelField(ch.id, "dmPolicy", e.target.value)}
+                                      className="h-9 w-48 rounded-xl bg-[#262626] px-3 text-sm text-text focus:outline-none"
+                                    >
+                                      {TELEGRAM_DM_POLICIES.map((policy) => (
+                                        <option key={policy.id} value={policy.id}>{policy.label}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  {["allowlist", "open"].includes(values.dmPolicy || "pairing") && (
+                                    <div className="border-b border-border/50 py-3.5">
+                                      <div className="mb-2">
+                                        <span className="block text-sm font-medium text-text">Allowlist</span>
+                                        <span className="block text-[10px] text-text-muted">Use comma-separated entries or one per line</span>
+                                      </div>
+                                      <textarea
+                                        value={values.allowFrom ?? ((values.dmPolicy || "pairing") === "open" ? "*" : "")}
+                                        onChange={(e) => updateChannelField(ch.id, "allowFrom", e.target.value)}
+                                        placeholder={"tg:123456789\n@username"}
+                                        className="min-h-20 w-full resize-none rounded-xl bg-[#262626] px-3 py-2 text-sm font-mono text-text placeholder:text-text-muted focus:outline-none"
+                                      />
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
                         )}
@@ -656,50 +676,6 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                   <div className="border-b border-border/50 py-3.5">
                     <div className="flex items-start gap-3">
                       <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#262626] text-[11px] font-medium text-text-muted">3</div>
-                      <div className="min-w-0 flex-1">
-                        <h4 className="text-sm font-semibold text-text">Choose who can DM the agent</h4>
-                        <div className="mt-3 grid gap-2">
-                          {TELEGRAM_DM_POLICIES.map((policy) => {
-                            const active = (values.dmPolicy || "pairing") === policy.id;
-                            return (
-                              <button
-                                key={policy.id}
-                                onClick={() => updateChannelField(ch.id, "dmPolicy", policy.id)}
-                                className={cn(
-                                  "flex items-start gap-2 rounded-xl border px-3 py-2 text-left transition-colors",
-                                  active ? "border-[#26A5E4]/60 bg-[#26A5E4]/10" : "border-white/[0.08] bg-[#262626] hover:bg-white/10",
-                                )}
-                              >
-                                <span className={cn("mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full", active ? "bg-[#26A5E4]" : "bg-white/20")} />
-                                <span className="min-w-0">
-                                  <span className="block text-xs font-medium text-text">{policy.label}</span>
-                                  <span className="mt-0.5 block text-[11px] leading-snug text-text-muted">{policy.description}</span>
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                        {["allowlist", "open"].includes(values.dmPolicy || "pairing") && (
-                          <div className="mt-3">
-                            <label className="text-xs font-medium text-text">Allowlist</label>
-                            <textarea
-                              value={values.allowFrom ?? ((values.dmPolicy || "pairing") === "open" ? "*" : "")}
-                              onChange={(e) => updateChannelField(ch.id, "allowFrom", e.target.value)}
-                              placeholder={"tg:123456789\n@username"}
-                              className="mt-1 min-h-20 w-full resize-none rounded-xl bg-[#262626] px-3 py-2 text-sm font-mono text-text placeholder:text-text-muted focus:outline-none"
-                            />
-                            <p className="mt-1 text-[11px] leading-snug text-text-muted">
-                              Use comma-separated or one per line. Open policy requires <span className="font-mono text-text">*</span>; this UI adds it when saving.
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="border-b border-border/50 py-3.5">
-                    <div className="flex items-start gap-3">
-                      <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#262626] text-[11px] font-medium text-text-muted">4</div>
                       <div className="min-w-0 flex-1">
                         <h4 className="text-sm font-semibold text-text">Enable and verify</h4>
                         <p className="mt-1 text-xs leading-relaxed text-text-muted">
@@ -712,7 +688,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                               void saveChannel(ch.id, true);
                             }}
                             disabled={saving || !hasTelegramCredential}
-                            className="flex items-center gap-1.5 rounded-xl bg-text px-4 py-2 text-xs font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
+                            className="flex h-9 items-center gap-1.5 rounded-xl bg-text px-3 text-sm font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
                           >
                             {saved ? <CheckCircle className="h-3.5 w-3.5" /> : null}
                             {saving ? "Saving..." : saved ? "Saved" : "Save and enable Telegram"}
@@ -720,7 +696,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                           <button
                             onClick={() => void probeChannels(ch.id)}
                             disabled={channelChecking[ch.id]}
-                            className="flex items-center gap-1.5 rounded-xl bg-[#262626] px-4 py-2 text-xs font-medium text-text transition-colors hover:bg-white/10 disabled:opacity-50"
+                            className="flex h-9 items-center gap-1.5 rounded-xl bg-[#262626] px-3 text-sm font-medium text-text transition-colors hover:bg-white/10 disabled:opacity-50"
                           >
                             <PlayCircle className="h-3.5 w-3.5" />
                             {channelChecking[ch.id] ? "Checking..." : "Run channel probe"}
@@ -737,24 +713,24 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
 
                   <div className="border-b border-border/50 py-3.5">
                     <div className="flex items-start gap-3">
-                      <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#262626] text-[11px] font-medium text-text-muted">5</div>
+                      <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#262626] text-[11px] font-medium text-text-muted">4</div>
                       <div className="min-w-0 flex-1">
                         <h4 className="text-sm font-semibold text-text">Approve Telegram users</h4>
                         <p className="mt-1 text-xs leading-relaxed text-text-muted">
                           Paste the code Telegram sent you. The app will approve that user and notify them.
                         </p>
-                        <div className="mt-3 rounded-xl bg-[#262626] p-2">
+                        <div className="mt-3">
                           <input
                             value={telegramPairingCode}
                             onChange={(e) => setTelegramPairingCode(e.target.value.toUpperCase())}
                             placeholder="Pairing code, e.g. FXH8P3C7"
-                            className="w-full rounded-lg bg-black/20 px-3 py-2 text-xs font-mono uppercase text-text placeholder:text-text-muted focus:outline-none"
+                            className="h-9 w-full rounded-xl bg-[#262626] px-3 text-sm font-mono uppercase text-text placeholder:text-text-muted focus:outline-none"
                           />
                           <div className="mt-2 flex flex-wrap gap-2">
                             <button
                               onClick={() => void approveTelegramPairing()}
                               disabled={telegramPairingRunning || !telegramPairingCode.trim()}
-                              className="flex items-center gap-1.5 rounded-xl bg-text px-3 py-1.5 text-xs font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
+                              className="flex h-9 items-center gap-1.5 rounded-xl bg-text px-3 text-sm font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
                             >
                               <CheckCircle className="h-3.5 w-3.5" />
                               {telegramPairingRunning ? "Approving..." : "Approve user"}
@@ -762,7 +738,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                             <button
                               onClick={() => void listTelegramPairings()}
                               disabled={telegramPairingRunning}
-                              className="flex items-center gap-1.5 rounded-xl bg-black/20 px-3 py-1.5 text-xs font-medium text-text-muted transition-colors hover:bg-white/10 hover:text-text disabled:opacity-50"
+                              className="flex h-9 items-center gap-1.5 rounded-xl bg-[#262626] px-3 text-sm font-medium text-text-muted transition-colors hover:bg-white/10 hover:text-text disabled:opacity-50"
                             >
                               <PlayCircle className="h-3.5 w-3.5" />
                               List pending
