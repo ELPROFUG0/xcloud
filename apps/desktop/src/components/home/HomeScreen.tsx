@@ -1044,70 +1044,77 @@ export function HomeScreen({
                     )}
                   </div>
 
-                  {expanded && (
-                    <div className="relative ml-4 pb-1 pl-3">
-                      {previewAgents.length > 1 && (
-                        <div className="absolute left-0 top-2 bottom-2 w-px rounded-full bg-[#4C4C4C]" />
-                      )}
-                      {previewAgents.length === 0 ? (
-                        <div className="px-2 py-1 text-[10px] text-[#D4D4D4]">No linked agents</div>
-                      ) : (
-                        previewAgents.map((agent) => {
-                          const isActive = activeAgentId === agent.id;
-                          const hasUnread = unreadAgentIds.has(agent.id) && !isActive;
-                          const isWorking = isAgentWorking(agent.id);
-                          const lastInteraction = getLastInteractionLabel(agent.id);
-                          return (
-                            <button
-                              key={agent.id}
-                              onClick={() => {
-                                onSelectWorkspace?.(workspace.id);
-                                onSelectAgent(agent.id);
-                              }}
-                              className={cn(
-                                "group/mini relative flex w-full items-center gap-2 rounded-md px-2 py-1 text-left transition-colors",
-                                isActive ? "bg-white/8" : "hover:bg-white/6 active:bg-white/8",
-                              )}
-                            >
-                              <span
+                  <div
+                    className={cn(
+                      "grid transition-[grid-template-rows,opacity,transform] duration-200 ease-out",
+                      expanded ? "grid-rows-[1fr] opacity-100 translate-y-0" : "grid-rows-[0fr] opacity-0 -translate-y-1",
+                    )}
+                  >
+                    <div className="min-h-0 overflow-hidden">
+                      <div className="relative ml-4 pb-1 pl-3">
+                        {previewAgents.length > 1 && (
+                          <div className="absolute left-0 top-2 bottom-2 w-px rounded-full bg-[#4C4C4C]" />
+                        )}
+                        {previewAgents.length === 0 ? (
+                          <div className="px-2 py-1 text-[10px] text-[#D4D4D4]">No linked agents</div>
+                        ) : (
+                          previewAgents.map((agent) => {
+                            const isActive = activeAgentId === agent.id;
+                            const hasUnread = unreadAgentIds.has(agent.id) && !isActive;
+                            const isWorking = isAgentWorking(agent.id);
+                            const lastInteraction = getLastInteractionLabel(agent.id);
+                            return (
+                              <button
+                                key={agent.id}
+                                onClick={() => {
+                                  onSelectWorkspace?.(workspace.id);
+                                  onSelectAgent(agent.id);
+                                }}
                                 className={cn(
-                                  "pointer-events-none absolute -left-[13px] top-1/2 -translate-y-1/2 rounded-r-full transition-all duration-150",
-                                  isActive
-                                    ? "h-5 w-[3px] bg-[#D4D4D4] opacity-100"
-                                    : hasUnread
-                                      ? "h-1.5 w-1.5 rounded-full bg-accent opacity-100 shadow-[0_0_8px_rgba(99,102,241,0.75)] group-hover/mini:h-3.5 group-hover/mini:w-[3px] group-hover/mini:rounded-r-full group-hover/mini:bg-[#D4D4D4] group-hover/mini:shadow-none"
-                                      : "h-3.5 w-[3px] bg-[#D4D4D4] opacity-0 [--sidebar-indicator-height:14px] group-hover/mini:animate-[sidebarIndicatorMorph_180ms_cubic-bezier(0.2,0.8,0.2,1)_forwards] group-hover/mini:opacity-100",
+                                  "group/mini relative flex w-full items-center gap-2 rounded-md px-2 py-1 text-left transition-colors",
+                                  isActive ? "bg-white/8" : "hover:bg-white/6 active:bg-white/8",
                                 )}
-                              />
-                              <AgentAvatar
-                                emoji={agent.emoji}
-                                avatar={agent.avatar}
-                                isMain={agent.isDefault}
-                                size="xs"
-                                className="!rounded-[5px]"
-                              />
-                              <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[#D4D4D4]">
-                                {agent.name ?? agent.id}
-                              </span>
-                              <span className={ROW_META_SLOT_CLASS}>
-                                {isWorking ? (
-                                  <AgentActivityDots
-                                    size={14}
-                                    dotSize={0.34}
-                                    className="absolute right-0 top-1/2 -translate-y-1/2 group-hover/mini:hidden"
-                                  />
-                                ) : lastInteraction && (
-                                  <span className={LAST_INTERACTION_CLASS}>
-                                    {lastInteraction}
-                                  </span>
-                                )}
-                              </span>
-                            </button>
-                          );
-                        })
-                      )}
+                              >
+                                <span
+                                  className={cn(
+                                    "pointer-events-none absolute -left-[13px] top-1/2 -translate-y-1/2 rounded-r-full transition-all duration-150",
+                                    isActive
+                                      ? "h-5 w-[3px] bg-[#D4D4D4] opacity-100"
+                                      : hasUnread
+                                        ? "h-1.5 w-1.5 rounded-full bg-accent opacity-100 shadow-[0_0_8px_rgba(99,102,241,0.75)] group-hover/mini:h-3.5 group-hover/mini:w-[3px] group-hover/mini:rounded-r-full group-hover/mini:bg-[#D4D4D4] group-hover/mini:shadow-none"
+                                        : "h-3.5 w-[3px] bg-[#D4D4D4] opacity-0 [--sidebar-indicator-height:14px] group-hover/mini:animate-[sidebarIndicatorMorph_180ms_cubic-bezier(0.2,0.8,0.2,1)_forwards] group-hover/mini:opacity-100",
+                                  )}
+                                />
+                                <AgentAvatar
+                                  emoji={agent.emoji}
+                                  avatar={agent.avatar}
+                                  isMain={agent.isDefault}
+                                  size="xs"
+                                  className="!rounded-[5px]"
+                                />
+                                <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[#D4D4D4]">
+                                  {agent.name ?? agent.id}
+                                </span>
+                                <span className={ROW_META_SLOT_CLASS}>
+                                  {isWorking ? (
+                                    <AgentActivityDots
+                                      size={14}
+                                      dotSize={0.34}
+                                      className="absolute right-0 top-1/2 -translate-y-1/2 group-hover/mini:hidden"
+                                    />
+                                  ) : lastInteraction && (
+                                    <span className={LAST_INTERACTION_CLASS}>
+                                      {lastInteraction}
+                                    </span>
+                                  )}
+                                </span>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
                     </div>
-                  )}
+                  </div>
                 </div>
               );
             })
