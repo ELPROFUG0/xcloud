@@ -9,7 +9,7 @@ import {
 import { Shimmer } from "../ai-elements/shimmer";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Diff, Hunk, parseDiff, type RenderGutter } from "react-diff-view";
 import "react-diff-view/style/index.css";
 
@@ -60,6 +60,22 @@ function splitDisplayPath(path: string) {
     dir: display.slice(0, index + 1),
     file: display.slice(index + 1),
   };
+}
+
+function findVerticalScrollParent(element: HTMLElement) {
+  let parent = element.parentElement;
+  while (parent && parent !== document.body) {
+    const style = window.getComputedStyle(parent);
+    const canScroll = /(auto|scroll)/.test(style.overflowY) && parent.scrollHeight > parent.clientHeight;
+    if (canScroll) return parent;
+    parent = parent.parentElement;
+  }
+
+  return null;
+}
+
+function isPinnedToScrollBottom(element: HTMLElement) {
+  return element.scrollHeight - element.scrollTop - element.clientHeight < 96;
 }
 
 function useContainedWheelScroll<T extends HTMLElement>() {
@@ -135,14 +151,43 @@ const renderUnifiedGutter: RenderGutter = ({ side, renderDefault }) => (
 
 function CodeChangeFileRow({ change, index }: { change: CodeChangeInfo; index: number }) {
   const [open, setOpen] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const revealAtBottomRef = useRef(false);
   const pathParts = splitDisplayPath(change.path);
 
+  useLayoutEffect(() => {
+    if (!open || !revealAtBottomRef.current || !rowRef.current) return;
+
+    const scrollParent = findVerticalScrollParent(rowRef.current);
+    if (!scrollParent) return;
+
+    let frameId = 0;
+    let frameCount = 0;
+    const keepAtBottom = () => {
+      scrollParent.scrollTop = scrollParent.scrollHeight;
+      frameCount += 1;
+      if (frameCount < 3) {
+        frameId = requestAnimationFrame(keepAtBottom);
+      }
+    };
+
+    frameId = requestAnimationFrame(keepAtBottom);
+    return () => cancelAnimationFrame(frameId);
+  }, [open]);
+
+  const toggleOpen = () => {
+    const shouldOpen = !open;
+    const scrollParent = rowRef.current ? findVerticalScrollParent(rowRef.current) : null;
+    revealAtBottomRef.current = Boolean(shouldOpen && scrollParent && isPinnedToScrollBottom(scrollParent));
+    setOpen(shouldOpen);
+  };
+
   return (
-    <div>
+    <div ref={rowRef}>
       <button
         type="button"
         className="flex w-full cursor-pointer items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-white/[0.04]"
-        onClick={() => setOpen((value) => !value)}
+        onClick={toggleOpen}
         aria-expanded={open}
         aria-controls={`code-change-diff-${index}`}
       >
