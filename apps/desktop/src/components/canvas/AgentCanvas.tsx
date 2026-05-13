@@ -686,7 +686,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
             {onCanvasSettings && (
               <button
                 onClick={onCanvasSettings}
-                className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#1F1F1F] text-white transition-colors hover:bg-[#2a2a2a]"
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-white/[0.06] hover:text-white"
                 title="Canvas settings"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">

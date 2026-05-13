@@ -34,7 +34,11 @@ export function CanvasSearchControl({
   return (
     <motion.div
       layout
-      className="relative flex h-7 items-center justify-end overflow-hidden rounded-lg border border-white/[0.08] bg-[#111111] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+      className={`relative flex h-7 items-center justify-end overflow-hidden rounded-lg transition-colors ${
+        open
+          ? "border border-white/[0.08] bg-[#111111] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+          : "border border-transparent bg-transparent"
+      }`}
       animate={{ width: open ? 210 : 28 }}
       transition={{ type: "spring", stiffness: 260, damping: 24, mass: 0.9 }}
     >
