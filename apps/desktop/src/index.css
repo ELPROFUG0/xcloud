@@ -318,6 +318,31 @@ html, body {
   100% { background-position: 0% center; }
 }
 
+.browser-loading-bar {
+  transform-origin: left center;
+  transform: translate3d(0, 0, 0) scaleX(0);
+  backface-visibility: hidden;
+  will-change: transform;
+}
+
+.browser-loading-bar--loading {
+  animation: browserLoadProgress 1400ms linear forwards;
+}
+
+.browser-loading-bar--finishing {
+  animation: browserLoadFinish 180ms ease-out forwards;
+}
+
+@keyframes browserLoadProgress {
+  from { transform: translate3d(0, 0, 0) scaleX(0); }
+  to { transform: translate3d(0, 0, 0) scaleX(0.96); }
+}
+
+@keyframes browserLoadFinish {
+  from { transform: translate3d(0, 0, 0) scaleX(0.96); }
+  to { transform: translate3d(0, 0, 0) scaleX(1); }
+}
+
 @keyframes glow {
   0%, 100% { opacity: 0; }
   50% { opacity: 1; }

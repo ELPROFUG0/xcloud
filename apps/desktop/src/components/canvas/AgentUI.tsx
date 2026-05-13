@@ -1041,7 +1041,10 @@ export function AgentUIContent({
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const uiToolsRef = useRef<XCloudUiToolDefinition[]>([]);
+  const loadStartedAtRef = useRef(0);
+  const loadFinishTimerRef = useRef<number | null>(null);
   const [browserMenuOpen, setBrowserMenuOpen] = useState(false);
+  const [previewLoadPhase, setPreviewLoadPhase] = useState<"idle" | "loading" | "finishing">("idle");
   const pendingUiToolCallsRef = useRef(new Map<string, {
     resolve: (result: XCloudUiActionResult) => void;
     timeout: number;
@@ -1199,15 +1202,55 @@ export function AgentUIContent({
     return () => document.removeEventListener("mousedown", onPointerDown);
   }, [browserMenuOpen]);
 
+  useEffect(() => {
+    if (loadFinishTimerRef.current !== null) {
+      window.clearTimeout(loadFinishTimerRef.current);
+      loadFinishTimerRef.current = null;
+    }
+    if (uiView === "preview" && devServerUrl) {
+      loadStartedAtRef.current = Date.now();
+      setPreviewLoadPhase("loading");
+    } else {
+      setPreviewLoadPhase("idle");
+    }
+  }, [devServerUrl, uiView]);
+
+  useEffect(() => () => {
+    if (loadFinishTimerRef.current !== null) {
+      window.clearTimeout(loadFinishTimerRef.current);
+    }
+  }, []);
+
   const browserButtonClass = "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-white/8 hover:text-text disabled:pointer-events-none disabled:opacity-30";
   const menuItemClass = "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] text-text transition-colors hover:bg-white/6";
   const dangerMenuItemClass = "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] text-red-400/80 transition-colors hover:bg-red-400/10 hover:text-red-300";
   const browserUrl = devServerUrl ?? (repoPath ? `file://${repoPath}` : "");
   const canGoBackToMenu = uiView === "preview";
+  const browserIsLoading = uiView === "preview" && (devServerLoading || previewLoadPhase !== "idle");
+  const browserLoadingBarClass = previewLoadPhase === "finishing"
+    ? "browser-loading-bar--finishing"
+    : "browser-loading-bar--loading";
+
+  const finishPreviewLoad = () => {
+    const elapsed = Date.now() - loadStartedAtRef.current;
+    const wait = Math.max(0, 1400 - elapsed);
+    if (loadFinishTimerRef.current !== null) window.clearTimeout(loadFinishTimerRef.current);
+    loadFinishTimerRef.current = window.setTimeout(() => {
+      setPreviewLoadPhase("finishing");
+      loadFinishTimerRef.current = window.setTimeout(() => {
+        setPreviewLoadPhase("idle");
+        loadFinishTimerRef.current = null;
+      }, 240);
+    }, wait);
+  };
 
   const refreshPreview = () => {
     const iframe = document.querySelector<HTMLIFrameElement>(".ui-preview-iframe");
-    if (iframe && devServerUrl) iframe.src = devServerUrl;
+    if (iframe && devServerUrl) {
+      loadStartedAtRef.current = Date.now();
+      setPreviewLoadPhase("loading");
+      iframe.src = devServerUrl;
+    }
   };
 
   const openInBrowser = () => {
@@ -1239,13 +1282,15 @@ export function AgentUIContent({
         </button>
       </div>
 
-      <div className="absolute left-1/2 top-1/2 flex min-w-0 w-[240px] max-w-[calc(100%-10rem)] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-xl bg-black/20 px-3 py-1.5 transition-colors hover:bg-white/[0.08] sm:w-[260px]">
-        <span className="truncate text-center text-[13px] font-normal text-white">
-          {browserUrl || "Connect or create an interface for this agent"}
-        </span>
+      <div className="flex min-w-0 flex-1 justify-center px-1">
+        <div className="flex min-w-0 w-full max-w-[260px] items-center justify-center rounded-xl bg-[#111111] px-3 py-1.5 transition-colors hover:bg-white/[0.08]">
+          <span className="truncate text-center text-[13px] font-normal text-white">
+            {browserUrl || "Connect or create an interface for this agent"}
+          </span>
+        </div>
       </div>
 
-      <div ref={menuRef} className="relative ml-auto shrink-0">
+      <div ref={menuRef} className="relative shrink-0">
         <button
           onClick={() => setBrowserMenuOpen((open) => !open)}
           className={browserButtonClass}
@@ -1310,6 +1355,12 @@ export function AgentUIContent({
           </div>
         )}
       </div>
+
+      {browserIsLoading && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-[-3px] z-30 h-[4px] bg-[#17A7FD]/10">
+          <div className={`browser-loading-bar h-[2px] bg-[#17A7FD] shadow-[0_0_5px_rgba(23,167,253,0.55)] blur-[0.5px] ${browserLoadingBarClass}`} />
+        </div>
+      )}
     </div>
   );
 
@@ -1331,7 +1382,10 @@ export function AgentUIContent({
             <iframe
               ref={iframeRef}
               src={devServerUrl}
-              onLoad={sendPreviewInit}
+              onLoad={() => {
+                finishPreviewLoad();
+                sendPreviewInit();
+              }}
               className="ui-preview-iframe w-full h-full border-0 bg-white"
               title="UI Preview"
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
