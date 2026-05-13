@@ -1440,6 +1440,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                 <div className="w-full max-w-2xl px-6 py-6">
                   <SettingsPanel
                     engine={engine}
+                    agents={agents}
                     section={settingsSection}
                     onPreviewOnboarding={() => setShowOnboardingPreview(true)}
                     onOpenTerminal={(command) => {

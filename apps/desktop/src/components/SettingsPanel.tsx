@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Cpu, Key, Radio, Sparkles, Plug, Server, Settings2, Brain } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { BrowserEngine } from "@/lib/engine";
+import type { AgentInfo } from "@/hooks/use-agents";
 import {
   ModelsSection,
   KeysSection,
@@ -21,6 +22,7 @@ export type { Section, SkillInfo, KeyState, ComposioApp, ChannelField, ChannelCo
 interface SettingsPanelProps {
   engine: BrowserEngine;
   section?: Section;
+  agents?: AgentInfo[];
   onBack?: () => void;
   onPreviewOnboarding?: () => void;
   onOpenTerminal?: (command?: string) => void;
@@ -37,7 +39,7 @@ const SECTIONS: { id: Section; label: string; icon: typeof Cpu }[] = [
   { id: "general", label: "General", icon: Settings2 },
 ];
 
-export function SettingsPanel({ engine, section: externalSection, onPreviewOnboarding, onOpenTerminal }: SettingsPanelProps) {
+export function SettingsPanel({ engine, section: externalSection, agents, onPreviewOnboarding, onOpenTerminal }: SettingsPanelProps) {
   const [internalSection, setSection] = useState<Section>("models");
   const section = externalSection ?? internalSection;
 
@@ -48,7 +50,7 @@ export function SettingsPanel({ engine, section: externalSection, onPreviewOnboa
       case "keys":
         return <KeysSection engine={engine} onOpenTerminal={onOpenTerminal} />;
       case "channels":
-        return <ChannelsSection engine={engine} />;
+        return <ChannelsSection engine={engine} agents={agents} />;
       case "skills":
         return <SkillsSection engine={engine} />;
       case "integrations":
