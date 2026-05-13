@@ -1011,7 +1011,7 @@ export function HomeScreen({
                       onClick={() => onSelectWorkspace?.(workspace.id)}
                       className="flex min-w-0 flex-1 items-center gap-2 text-left"
                     >
-                      <Boxes className="h-4 w-4 shrink-0 text-text-muted" />
+                      <Boxes className="h-4 w-4 shrink-0 text-white opacity-100" />
                       <div className="min-w-0 flex-1">
                         <span className="block truncate text-[12px] font-medium text-text">{workspace.name}</span>
                       </div>
@@ -1045,7 +1045,7 @@ export function HomeScreen({
                   </div>
 
                   {expanded && (
-                    <div className="relative ml-6 pb-1 pl-3">
+                    <div className="relative ml-4 pb-1 pl-3">
                       {previewAgents.length > 1 && (
                         <div className="absolute left-0 top-2 bottom-2 w-px rounded-full bg-[#4C4C4C]" />
                       )}
