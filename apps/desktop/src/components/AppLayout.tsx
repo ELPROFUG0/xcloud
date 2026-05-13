@@ -1228,7 +1228,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
         <div className="flex flex-1 min-h-0 flex-col" style={{ minWidth: panelWidth }}>
           {showSettings ? (
             /* Settings navigation */
-            <div key={`settings:${settingsSection}:${sidebarAnimationKey}`} className="flex h-full flex-col sidebar-view-enter">
+            <div key={`settings:${sidebarAnimationKey}`} className="flex h-full flex-col sidebar-view-enter">
               <div className={`px-3 pb-3 ${isFullscreen ? "pt-12" : "pt-14"}`}>
                 <button
                   onClick={() => {
