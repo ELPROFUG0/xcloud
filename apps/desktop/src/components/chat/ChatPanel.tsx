@@ -506,9 +506,6 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
                         ) : msg.isStreaming ? (
                           <Shimmer className="text-[13px]" duration={1.5}>Thinking...</Shimmer>
                         ) : null}
-                        {msg.isStreaming && msg.content && (
-                          <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-accent" />
-                        )}
                       </div>
                       {msg.content && (
                         <div className={`flex items-center gap-1 mt-1 ${hoveredMsgId === msg.id ? "visible" : "invisible"}`}>

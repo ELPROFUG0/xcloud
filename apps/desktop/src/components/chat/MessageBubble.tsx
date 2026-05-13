@@ -34,9 +34,6 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         ) : (
           <span className="text-text-muted italic">Thinking...</span>
         )}
-        {message.isStreaming && message.content && (
-          <span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse bg-accent" />
-        )}
       </div>
     </div>
   );
