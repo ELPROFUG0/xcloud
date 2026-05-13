@@ -10,6 +10,86 @@ interface IntegrationsSectionProps {
   engine: BrowserEngine;
 }
 
+const LOGO_CACHE_KEY = "xcloudComposioLogoCache:v1";
+const CONNECTED_CACHE_KEY = "xcloudComposioConnectedCache:v1";
+const LOGO_CACHE_LIMIT = 180;
+
+type LogoCache = Record<string, { dataUrl: string; updatedAt: number }>;
+
+function readLogoCache(): LogoCache {
+  try {
+    return JSON.parse(localStorage.getItem(LOGO_CACHE_KEY) ?? "{}") as LogoCache;
+  } catch {
+    return {};
+  }
+}
+
+function writeLogoCache(cache: LogoCache) {
+  const entries = Object.entries(cache)
+    .sort(([, a], [, b]) => b.updatedAt - a.updatedAt)
+    .slice(0, LOGO_CACHE_LIMIT);
+  try {
+    localStorage.setItem(LOGO_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    // If storage is full, keep only the freshest half and try once more.
+    try {
+      localStorage.setItem(LOGO_CACHE_KEY, JSON.stringify(Object.fromEntries(entries.slice(0, Math.floor(LOGO_CACHE_LIMIT / 2)))));
+    } catch { /* ignore cache failures */ }
+  }
+}
+
+function getCachedLogo(slug: string) {
+  return readLogoCache()[slug]?.dataUrl;
+}
+
+async function cacheLogo(slug: string, logoUrl: string) {
+  if (getCachedLogo(slug)) return;
+  const response = await fetch(logoUrl);
+  if (!response.ok) return;
+  const blob = await response.blob();
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+  const cache = readLogoCache();
+  cache[slug] = { dataUrl, updatedAt: Date.now() };
+  writeLogoCache(cache);
+}
+
+function CachedComposioLogo({ app }: { app: ComposioApp }) {
+  const [src, setSrc] = useState(() => getCachedLogo(app.slug) ?? app.logo);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+    setSrc(getCachedLogo(app.slug) ?? app.logo);
+  }, [app.logo, app.slug]);
+
+  if (!src || failed) {
+    return (
+      <div className="h-7 w-7 shrink-0 rounded-lg bg-white/10 flex items-center justify-center text-xs text-text-muted">
+        {app.name[0]?.toUpperCase()}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      className="h-7 w-7 shrink-0 rounded-lg"
+      onLoad={() => {
+        if (!src.startsWith("data:")) void cacheLogo(app.slug, app.logo).catch(() => {});
+      }}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProps) {
   const [composioKey, setComposioKey] = useState(() => localStorage.getItem("composioApiKey") ?? "");
   const [composioApps, setComposioApps] = useState<ComposioApp[]>([]);
@@ -54,8 +134,18 @@ export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProp
       setComposioApps([]);
       return;
     }
-    // Start with catalog
-    setComposioApps(COMPOSIO_CATALOG);
+    const cachedConnected = (() => {
+      try {
+        const cached = JSON.parse(localStorage.getItem(CONNECTED_CACHE_KEY) ?? "{}") as { slugs?: string[] };
+        return new Set(cached.slugs ?? []);
+      } catch {
+        return new Set<string>();
+      }
+    })();
+
+    setComposioApps(COMPOSIO_CATALOG.map((app) => (
+      cachedConnected.has(app.slug) ? { ...app, connected: true } : app
+    )));
 
     // Check connected status for popular apps via MCP
     (async () => {
@@ -85,6 +175,10 @@ export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProp
         }
 
         if (connectedSlugs.size > 0) {
+          localStorage.setItem(CONNECTED_CACHE_KEY, JSON.stringify({
+            slugs: [...connectedSlugs],
+            updatedAt: Date.now(),
+          }));
           setComposioApps((prev) =>
             prev.map((a) => connectedSlugs.has(a.slug) ? { ...a, connected: true } : a)
           );
@@ -282,13 +376,7 @@ export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProp
                 key={app.slug}
                 className="flex items-center gap-3 rounded-xl bg-container px-3 py-3 transition-colors"
               >
-                {app.logo ? (
-                  <img src={app.logo} alt="" className="h-7 w-7 shrink-0 rounded-lg" />
-                ) : (
-                  <div className="h-7 w-7 shrink-0 rounded-lg bg-white/10 flex items-center justify-center text-xs text-text-muted">
-                    {app.name[0]?.toUpperCase()}
-                  </div>
-                )}
+                <CachedComposioLogo app={app} />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm text-text truncate">{app.name}</div>
                 </div>
