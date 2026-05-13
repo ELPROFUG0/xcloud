@@ -9,7 +9,7 @@ import {
 import { Shimmer } from "../ai-elements/shimmer";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Diff, Hunk, parseDiff, type RenderGutter } from "react-diff-view";
 import "react-diff-view/style/index.css";
 
@@ -62,7 +62,36 @@ function splitDisplayPath(path: string) {
   };
 }
 
+function useContainedWheelScroll<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+
+  useEffect(() => {
+    const diffScroll = ref.current;
+    if (!diffScroll) return;
+
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.deltaY || Math.abs(event.deltaY) < Math.abs(event.deltaX)) return;
+
+      const maxScrollTop = diffScroll.scrollHeight - diffScroll.clientHeight;
+      if (maxScrollTop <= 0) return;
+
+      const currentTop = diffScroll.scrollTop;
+      const nextTop = Math.max(0, Math.min(maxScrollTop, currentTop + event.deltaY));
+
+      diffScroll.scrollTop = nextTop;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    diffScroll.addEventListener("wheel", handleWheel, { passive: false });
+    return () => diffScroll.removeEventListener("wheel", handleWheel);
+  }, []);
+
+  return ref;
+}
+
 function CodeDiffView({ diff }: { diff: string }) {
+  const scrollRef = useContainedWheelScroll<HTMLDivElement>();
   let files: ReturnType<typeof parseDiff> = [];
   try {
     files = parseDiff(diff, { nearbySequences: "zip" });
@@ -72,14 +101,16 @@ function CodeDiffView({ diff }: { diff: string }) {
 
   if (!files.length) {
     return (
-      <pre className="max-h-[360px] overflow-auto px-3 py-2 font-mono text-[11px] leading-relaxed text-text-muted/75">
-        {diff}
-      </pre>
+      <div ref={scrollRef} className="code-change-diff max-h-[360px] overflow-auto">
+        <pre className="px-3 py-2 font-mono text-[11px] leading-relaxed text-text-muted/75">
+          {diff}
+        </pre>
+      </div>
     );
   }
 
   return (
-    <div className="code-change-diff max-h-[360px] overflow-auto">
+    <div ref={scrollRef} className="code-change-diff max-h-[360px] overflow-auto">
       {files.map((file, fileIndex) => (
         <Diff
           key={`${file.oldRevision}-${file.newRevision}-${fileIndex}`}
