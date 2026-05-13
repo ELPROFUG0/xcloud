@@ -321,8 +321,9 @@ html, body {
 .browser-loading-bar {
   transform-origin: left center;
   transform: translate3d(0, 0, 0) scaleX(0);
+  opacity: 1;
   backface-visibility: hidden;
-  will-change: transform;
+  will-change: transform, opacity;
 }
 
 .browser-loading-bar--loading {
@@ -330,17 +331,18 @@ html, body {
 }
 
 .browser-loading-bar--finishing {
-  animation: browserLoadFinish 180ms ease-out forwards;
+  animation: browserLoadFinish 360ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 @keyframes browserLoadProgress {
-  from { transform: translate3d(0, 0, 0) scaleX(0); }
-  to { transform: translate3d(0, 0, 0) scaleX(0.96); }
+  from { opacity: 1; transform: translate3d(0, 0, 0) scaleX(0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scaleX(0.96); }
 }
 
 @keyframes browserLoadFinish {
-  from { transform: translate3d(0, 0, 0) scaleX(0.96); }
-  to { transform: translate3d(0, 0, 0) scaleX(1); }
+  0% { opacity: 1; transform: translate3d(0, 0, 0) scaleX(0.96); }
+  45% { opacity: 1; transform: translate3d(0, 0, 0) scaleX(1); }
+  100% { opacity: 0; transform: translate3d(0, 0, 0) scaleX(1); }
 }
 
 @keyframes glow {

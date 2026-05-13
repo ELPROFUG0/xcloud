@@ -1241,7 +1241,7 @@ export function AgentUIContent({
     loadFinishTimerRef.current = window.setTimeout(() => {
       setPreviewLoadPhase("idle");
       loadFinishTimerRef.current = null;
-    }, 120);
+    }, 360);
   };
 
   const refreshPreview = () => {
