@@ -394,64 +394,77 @@ html, body {
   --diff-gutter-insert-text-color: rgba(167, 243, 208, 0.72);
   --diff-gutter-delete-background-color: rgba(239, 68, 68, 0.12);
   --diff-gutter-delete-text-color: rgba(252, 165, 165, 0.72);
-  --diff-code-insert-background-color: rgba(16, 185, 129, 0.11);
+  --diff-code-insert-background-color: #1A2B1C;
   --diff-code-insert-text-color: rgba(209, 250, 229, 0.95);
-  --diff-code-delete-background-color: rgba(239, 68, 68, 0.11);
+  --diff-code-delete-background-color: #381C17;
   --diff-code-delete-text-color: rgba(254, 226, 226, 0.95);
   --diff-code-insert-edit-background-color: rgba(16, 185, 129, 0.2);
   --diff-code-delete-edit-background-color: rgba(239, 68, 68, 0.2);
   --diff-omit-gutter-line-color: rgba(255, 255, 255, 0.18);
 }
 
-.code-change-diff .diff {
+.code-change-diff-file {
+  min-width: 100%;
+}
+
+.code-change-diff-line {
+  display: grid;
+  grid-template-columns: 4.5ch minmax(0, 1fr);
+  min-width: 100%;
   font-size: 11px;
+  line-height: 1.55;
+  color: var(--diff-text-color);
+  font-family: var(--diff-font-family);
 }
 
-.code-change-diff .diff-unified col.diff-gutter-col:first-child {
-  width: 0;
-}
-
-.code-change-diff .diff-unified tr > .diff-gutter:first-child {
-  display: none;
-}
-
-.code-change-diff .diff-gutter {
-  min-width: 4.5ch;
+.code-change-diff-line-number {
   padding: 0 0.75ch;
   color: rgba(161, 161, 170, 0.56);
+  text-align: right;
   background: rgba(255, 255, 255, 0.025);
   border-right: 1px solid rgba(255, 255, 255, 0.055);
+  user-select: none;
 }
 
-.code-change-diff .diff-gutter-insert {
-  color: #01A241;
-}
-
-.code-change-diff .diff-gutter-delete {
-  color: #DE2E2A;
-}
-
-.code-change-diff .diff-code {
+.code-change-diff-line-code {
+  min-width: 0;
   padding-left: 1ch;
   white-space: pre;
   word-break: normal;
+  overflow: visible;
 }
 
-.code-change-diff .diff-code-insert {
+.code-change-diff-line-hunk .code-change-diff-line-code {
+  color: rgba(244, 244, 245, 0.45);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.code-change-diff-line-insert .code-change-diff-line-number {
+  color: #01A241;
+  background: var(--diff-gutter-insert-background-color);
   box-shadow: inset 4px 0 #01A241;
-  padding-left: calc(1ch + 4px);
 }
 
-.code-change-diff .diff-code-delete {
+.code-change-diff-line-delete .code-change-diff-line-number {
+  color: #DE2E2A;
   background-image:
     repeating-linear-gradient(
       to bottom,
       #DE2E2A 0 1px,
       transparent 1px 2px
     ),
-    linear-gradient(var(--diff-code-delete-background-color), var(--diff-code-delete-background-color));
+    linear-gradient(var(--diff-gutter-delete-background-color), var(--diff-gutter-delete-background-color));
   background-position: left top, left top;
   background-repeat: repeat-y, repeat;
   background-size: 4px 2px, auto;
-  padding-left: calc(1ch + 4px);
+}
+
+.code-change-diff-line-insert .code-change-diff-line-code {
+  background-color: var(--diff-code-insert-background-color);
+  color: var(--diff-code-insert-text-color);
+}
+
+.code-change-diff-line-delete .code-change-diff-line-code {
+  background: var(--diff-code-delete-background-color);
+  color: var(--diff-code-delete-text-color);
 }

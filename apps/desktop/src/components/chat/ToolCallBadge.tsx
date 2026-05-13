@@ -10,8 +10,7 @@ import { Shimmer } from "../ai-elements/shimmer";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Diff, Hunk, parseDiff, type RenderGutter } from "react-diff-view";
-import "react-diff-view/style/index.css";
+import { parseDiff, type ChangeData } from "react-diff-view";
 
 interface ToolCallBadgeProps {
   tool: ToolCallInfo;
@@ -128,28 +127,45 @@ function CodeDiffView({ diff }: { diff: string }) {
   return (
     <div ref={scrollRef} className="code-change-diff max-h-[360px] overflow-auto">
       {files.map((file, fileIndex) => (
-        <Diff
+        <div
           key={`${file.oldRevision}-${file.newRevision}-${fileIndex}`}
-          viewType="unified"
-          diffType={file.type}
-          hunks={file.hunks}
-          gutterType="default"
-          renderGutter={renderUnifiedGutter}
+          className="code-change-diff-file"
         >
-          {(hunks) => hunks.map((hunk) => (
-            <Hunk key={hunk.content} hunk={hunk} />
+          {file.hunks.map((hunk, hunkIndex) => (
+            <div key={`${hunk.content}-${hunkIndex}`}>
+              <div className="code-change-diff-line code-change-diff-line-hunk">
+                <span className="code-change-diff-line-number" />
+                <code className="code-change-diff-line-code">{hunk.content}</code>
+              </div>
+              {hunk.changes.map((change, changeIndex) => (
+                <div
+                  key={`${change.type}-${getChangeLineNumber(change)}-${changeIndex}`}
+                  className={cn(
+                    "code-change-diff-line",
+                    change.type === "insert" && "code-change-diff-line-insert",
+                    change.type === "delete" && "code-change-diff-line-delete",
+                  )}
+                >
+                  <span className="code-change-diff-line-number">
+                    {getChangeLineNumber(change)}
+                  </span>
+                  <code className="code-change-diff-line-code">
+                    {change.content}
+                  </code>
+                </div>
+              ))}
+            </div>
           ))}
-        </Diff>
+        </div>
       ))}
     </div>
   );
 }
 
-const renderUnifiedGutter: RenderGutter = ({ change, side, renderDefault }) => {
-  if (side !== "new") return <span />;
-  if (change.type === "delete") return <span>{change.lineNumber}</span>;
-  return <span>{renderDefault()}</span>;
-};
+function getChangeLineNumber(change: ChangeData) {
+  if (change.type === "delete" || change.type === "insert") return change.lineNumber;
+  return change.newLineNumber;
+}
 
 function CodeChangeFileRow({ change, index }: { change: CodeChangeInfo; index: number }) {
   const [open, setOpen] = useState(false);
@@ -197,8 +213,8 @@ function CodeChangeFileRow({ change, index }: { change: CodeChangeInfo; index: n
           {pathParts.dir && <span className="text-text-muted/55">{pathParts.dir}</span>}
           <span className="text-text">{pathParts.file}</span>
         </span>
-        <span className="w-10 shrink-0 text-right font-mono text-[11px] text-emerald-300">+{change.additions}</span>
-        <span className="w-10 shrink-0 text-right font-mono text-[11px] text-red-300">-{change.deletions}</span>
+        <span className="w-10 shrink-0 text-right font-mono text-[11px] text-[#01A241]">+{change.additions}</span>
+        <span className="w-10 shrink-0 text-right font-mono text-[11px] text-[#DE2E2A]">-{change.deletions}</span>
         <ChevronDown
           className={cn(
             "h-3.5 w-3.5 shrink-0 text-text-muted/45 transition-transform",
@@ -232,8 +248,8 @@ function CodeChangeArtifact({ changes }: { changes: CodeChangeInfo[] }) {
           <FileDiff className="h-3.5 w-3.5 shrink-0 text-text-muted" />
           <span className="truncate">{changes.length} {changes.length === 1 ? "file" : "files"} changed</span>
           <span className="flex shrink-0 items-center gap-1 font-mono">
-            <span className="text-emerald-300">+{totals.additions}</span>
-            <span className="text-red-300">-{totals.deletions}</span>
+            <span className="text-[#01A241]">+{totals.additions}</span>
+            <span className="text-[#DE2E2A]">-{totals.deletions}</span>
           </span>
         </div>
       </div>
@@ -301,8 +317,8 @@ export function ToolCallBadge({ tool, textContent, isTextStreaming }: ToolCallBa
 
           {hasChanges && changeTotals && (
             <span className="flex shrink-0 items-center gap-1 font-mono text-[10px]">
-              <span className="text-emerald-300">+{changeTotals.additions}</span>
-              <span className="text-red-300">-{changeTotals.deletions}</span>
+              <span className="text-[#01A241]">+{changeTotals.additions}</span>
+              <span className="text-[#DE2E2A]">-{changeTotals.deletions}</span>
             </span>
           )}
 
