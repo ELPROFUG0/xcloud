@@ -407,6 +407,14 @@ html, body {
   font-size: 11px;
 }
 
+.code-change-diff .diff-unified col.diff-gutter-col:first-child {
+  width: 0;
+}
+
+.code-change-diff .diff-unified tr > .diff-gutter:first-child {
+  display: none;
+}
+
 .code-change-diff .diff-gutter {
   min-width: 4.5ch;
   padding: 0 0.75ch;

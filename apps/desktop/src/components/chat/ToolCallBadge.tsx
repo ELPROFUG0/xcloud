@@ -10,7 +10,7 @@ import { Shimmer } from "../ai-elements/shimmer";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useState } from "react";
-import { Diff, Hunk, parseDiff } from "react-diff-view";
+import { Diff, Hunk, parseDiff, type RenderGutter } from "react-diff-view";
 import "react-diff-view/style/index.css";
 
 interface ToolCallBadgeProps {
@@ -87,6 +87,7 @@ function CodeDiffView({ diff }: { diff: string }) {
           diffType={file.type}
           hunks={file.hunks}
           gutterType="default"
+          renderGutter={renderUnifiedGutter}
         >
           {(hunks) => hunks.map((hunk) => (
             <Hunk key={hunk.content} hunk={hunk} />
@@ -96,6 +97,10 @@ function CodeDiffView({ diff }: { diff: string }) {
     </div>
   );
 }
+
+const renderUnifiedGutter: RenderGutter = ({ side, renderDefault }) => (
+  <span>{side === "new" ? renderDefault() : ""}</span>
+);
 
 function CodeChangeFileRow({ change, index }: { change: CodeChangeInfo; index: number }) {
   const [open, setOpen] = useState(false);
@@ -143,7 +148,7 @@ function CodeChangeArtifact({ changes }: { changes: CodeChangeInfo[] }) {
   const totals = summarizeChanges(changes);
 
   return (
-    <div className="my-3 flex max-h-[460px] flex-col overflow-hidden rounded-lg bg-[#222] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+    <div className="my-3 flex flex-col overflow-hidden rounded-lg bg-[#222] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
       <div className="flex shrink-0 items-center justify-between border-b border-white/[0.055] px-3 py-2.5">
         <div className="flex min-w-0 items-center gap-2 text-[12px] font-medium text-text">
           <FileDiff className="h-3.5 w-3.5 shrink-0 text-text-muted" />
@@ -155,7 +160,7 @@ function CodeChangeArtifact({ changes }: { changes: CodeChangeInfo[] }) {
         </div>
       </div>
 
-      <div className="min-h-0 divide-y divide-white/[0.055] overflow-y-auto">
+      <div className="divide-y divide-white/[0.055] overflow-visible">
         {changes.map((change, index) => (
           <CodeChangeFileRow key={`${change.path}-${index}`} change={change} index={index} />
         ))}
