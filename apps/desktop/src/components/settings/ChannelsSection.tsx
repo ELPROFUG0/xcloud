@@ -167,6 +167,10 @@ function buildChannelPatch(values: Record<string, string>, enabled: boolean) {
   return channelConfig;
 }
 
+function getMainAgentId(agents: AgentInfo[]) {
+  return agents.find((agent) => agent.isDefault)?.id ?? agents[0]?.id ?? "main";
+}
+
 function renderChannelFields(
   fields: ChannelField[],
   channelId: string,
@@ -269,6 +273,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
       const config = (res as { config?: Record<string, unknown> }).config;
       const channels = (config?.channels ?? {}) as Record<string, Record<string, unknown>>;
       const telegramAccounts = (channels.telegram?.accounts ?? {}) as Record<string, Record<string, unknown>>;
+      const mainAgentId = getMainAgentId(agents);
       const nextValues: Record<string, Record<string, string>> = {};
       const nextEnabled: Record<string, boolean> = {};
       const nextTelegramAgentBots: Record<string, string> = {};
@@ -284,14 +289,19 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
       }
       for (const [agentId, accountConfig] of Object.entries(telegramAccounts)) {
         const token = accountConfig?.botToken;
-        if (typeof token === "string" && token.trim()) nextTelegramAgentBots[agentId] = token;
+        const normalizedAgentId = agentId === "default" ? mainAgentId : agentId;
+        if (typeof token === "string" && token.trim()) nextTelegramAgentBots[normalizedAgentId] = token;
       }
-      setChannelValues((prev) => ({ ...nextValues, ...prev }));
-      setChannelEnabled((prev) => ({ ...nextEnabled, ...prev }));
-      setTelegramAgentBots((prev) => ({ ...nextTelegramAgentBots, ...prev }));
+      const legacyMainToken = channels.telegram?.botToken;
+      if (typeof legacyMainToken === "string" && legacyMainToken.trim() && !nextTelegramAgentBots[mainAgentId]) {
+        nextTelegramAgentBots[mainAgentId] = legacyMainToken;
+      }
+      setChannelValues((prev) => ({ ...prev, ...nextValues }));
+      setChannelEnabled((prev) => ({ ...prev, ...nextEnabled }));
+      setTelegramAgentBots((prev) => ({ ...prev, ...nextTelegramAgentBots }));
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [engine]);
+  }, [engine, agents]);
 
   useEffect(() => {
     if (selectedTelegramAgentId && agents.some((agent) => agent.id === selectedTelegramAgentId)) return;
@@ -310,22 +320,36 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
     setTelegramAgentBots((prev) => ({ ...prev, [agentId]: value }));
   }, []);
 
-  const buildTelegramAccountsPatch = useCallback((values: Record<string, string>) => {
+  const buildTelegramAccountsPatch = useCallback((values: Record<string, string>, existingAccounts: unknown) => {
     const dmPolicy = values.dmPolicy || "pairing";
     const allowFrom = parseAllowFrom(values.allowFrom, dmPolicy);
-    const accounts: Record<string, unknown> = {};
+    const mainAgentId = getMainAgentId(agents);
+    const accounts: Record<string, unknown> = existingAccounts && typeof existingAccounts === "object" && !Array.isArray(existingAccounts)
+      ? { ...(existingAccounts as Record<string, unknown>) }
+      : {};
+
     for (const agent of agents) {
       const botToken = (telegramAgentBots[agent.id] ?? "").trim();
       if (botToken) {
-        accounts[agent.id] = {
+        const accountConfig = {
           enabled: true,
           name: agent.name ?? agent.id,
           botToken,
           dmPolicy,
           ...(allowFrom.length > 0 ? { allowFrom } : {}),
         };
+        accounts[agent.id] = accountConfig;
+        if (agent.id === mainAgentId) {
+          accounts.default = {
+            ...accountConfig,
+            name: "Default Telegram bot",
+          };
+        }
       } else if (agent.id in telegramAgentBots) {
         accounts[agent.id] = null;
+        if (agent.id === mainAgentId && "default" in accounts) {
+          accounts.default = null;
+        }
       }
     }
     return accounts;
@@ -365,9 +389,14 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
       const hash = (cfgRes as { hash?: string }).hash ?? "";
       const existingConfig = (cfgRes as { config?: Record<string, unknown> }).config ?? {};
       const channelConfig = buildChannelPatch(values, enabled);
+      if (channelId === "telegram") {
+        channelConfig.botToken = null;
+      }
       const patch: Record<string, unknown> = { channels: { [channelId]: channelConfig } };
       if (channelId === "telegram") {
-        const accounts = buildTelegramAccountsPatch(values);
+        const existingChannels = (existingConfig.channels ?? {}) as Record<string, Record<string, unknown>>;
+        const existingTelegram = existingChannels.telegram ?? {};
+        const accounts = buildTelegramAccountsPatch(values, existingTelegram.accounts);
         if (Object.keys(accounts).length > 0) {
           channelConfig.accounts = accounts;
         }
@@ -488,29 +517,23 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
           const error = channelError[ch.id] ?? null;
           const enabled = channelEnabled[ch.id] ?? false;
           const isTelegram = ch.id === "telegram";
-          const hasTelegramCredential = Boolean((values.botToken ?? "").trim())
-            || Object.values(telegramAgentBots).some((botToken) => botToken.trim());
+          const hasTelegramCredential = Object.values(telegramAgentBots).some((botToken) => botToken.trim());
           const selectedTelegramAgent = agents.find((agent) => agent.id === selectedTelegramAgentId) ?? agents[0];
           const mainTelegramAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
           const selectedTelegramAgentIsMain = Boolean(selectedTelegramAgent && mainTelegramAgent && selectedTelegramAgent.id === mainTelegramAgent.id);
           const selectedTelegramBotToken = selectedTelegramAgent
-            ? selectedTelegramAgentIsMain ? values.botToken ?? "" : telegramAgentBots[selectedTelegramAgent.id] ?? ""
+            ? telegramAgentBots[selectedTelegramAgent.id] ?? ""
             : "";
           const selectedTelegramConnected = Boolean(selectedTelegramBotToken.trim());
           const configuredTelegramAgentCount = Object.entries(telegramAgentBots)
             .filter(([agentId, botToken]) => agents.some((agent) => agent.id === agentId) && botToken.trim())
-            .length + (values.botToken?.trim() ? 1 : 0);
+            .length;
           const nextUnconnectedTelegramAgent = agents.find((agent) => {
-            if (mainTelegramAgent && agent.id === mainTelegramAgent.id) return !(values.botToken ?? "").trim();
             return !(telegramAgentBots[agent.id] ?? "").trim();
           });
 
           const updateSelectedTelegramBotToken = (value: string) => {
             if (!selectedTelegramAgent) return;
-            if (selectedTelegramAgentIsMain) {
-              updateChannelField(ch.id, "botToken", value);
-              return;
-            }
             updateTelegramAgentBot(selectedTelegramAgent.id, value);
           };
 
@@ -569,9 +592,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                                   className="h-9 w-56 rounded-xl bg-[#262626] px-3 text-sm text-text focus:outline-none"
                                 >
                                   {agents.map((agent) => {
-                                    const connected = mainTelegramAgent && agent.id === mainTelegramAgent.id
-                                      ? Boolean((values.botToken ?? "").trim())
-                                      : Boolean((telegramAgentBots[agent.id] ?? "").trim());
+                                    const connected = Boolean((telegramAgentBots[agent.id] ?? "").trim());
                                     return (
                                       <option key={agent.id} value={agent.id}>
                                         {agent.name ?? agent.id}{connected ? " - connected" : ""}
@@ -587,7 +608,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                               <div className="min-w-0 mr-4">
                                 <span className="block text-sm font-medium text-text">Bot token</span>
                                 <span className="block truncate text-[10px] text-text-muted">
-                                  {selectedTelegramAgentIsMain ? "Primary Telegram bot" : `Telegram bot for ${selectedTelegramAgent?.name ?? selectedTelegramAgent?.id}`}
+                                  {selectedTelegramAgentIsMain ? "Telegram bot for the main agent" : `Telegram bot for ${selectedTelegramAgent?.name ?? selectedTelegramAgent?.id}`}
                                 </span>
                               </div>
                               <div className="flex items-center gap-2 shrink-0">
