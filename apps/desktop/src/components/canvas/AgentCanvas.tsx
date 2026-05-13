@@ -6,6 +6,7 @@ import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
 import orbOverlayUrl from "@/assets/orb-overlay.png?url";
 // lucide icons removed — detail panel moved to sidebar
 import { useAgentUI, AgentUIContent } from "./AgentUI";
+import { ContinuousTabs } from "./ContinuousTabs";
 
 export interface DetailPanel {
   title: string;
@@ -119,6 +120,10 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
   const [avatarLoaded, setAvatarLoaded] = useState(false);
   const orbImg = useRef<HTMLImageElement | null>(null);
   const integrationLogos = useRef<Record<string, HTMLImageElement>>({});
+  const canvasTabs = useMemo(() => [
+    { id: "canvas" as const, label: "Canvas" },
+    { id: "ui" as const, label: "UI" },
+  ], []);
 
   // Load orb image
   useEffect(() => {
@@ -629,17 +634,18 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
     <div className="flex h-full flex-col">
       {/* Header */}
       <div className="flex h-9 shrink-0 items-center border-b border-border bg-bg px-3 gap-2">
-        <div className="flex rounded-lg border border-border text-[10px]">
-          <button onClick={() => setTab("canvas")} className={`px-3 py-1 transition-colors ${tab === "canvas" ? "bg-surface-hover text-text" : "text-text-muted"}`}>
-            Canvas
-          </button>
-          <button
-            onClick={() => { setTab("ui"); if (agentUI.repoPath && agentUI.uiView === "menu" && !agentUI.devServerUrl) agentUI.launchPreview(); else if (agentUI.devServerUrl) agentUI.setUiView("preview"); }}
-            className={`px-3 py-1 transition-colors ${tab === "ui" ? "bg-surface-hover text-text" : "text-text-muted"}`}
-          >
-            UI
-          </button>
-        </div>
+        <ContinuousTabs
+          groupId={`agent-canvas-tabs-${agentId}`}
+          tabs={canvasTabs}
+          activeId={tab}
+          onChange={(nextTab) => {
+            setTab(nextTab);
+            if (nextTab === "ui") {
+              if (agentUI.repoPath && agentUI.uiView === "menu" && !agentUI.devServerUrl) agentUI.launchPreview();
+              else if (agentUI.devServerUrl) agentUI.setUiView("preview");
+            }
+          }}
+        />
         <div className="flex-1" />
       </div>
 

@@ -5,6 +5,7 @@ import { getWorkspaceDir, type WorkspaceInfo } from "@/hooks/use-workspaces";
 import { BaseDirectory, readTextFile } from "@tauri-apps/plugin-fs";
 import { AgentUIContent, useAgentUI } from "./AgentUI";
 import type { DetailPanel } from "./AgentCanvas";
+import { ContinuousTabs } from "./ContinuousTabs";
 
 interface WorkspaceCanvasProps {
   workspace: WorkspaceInfo;
@@ -36,6 +37,10 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
   const animFrameRef = useRef<number>(0);
   const [, forceRender] = useState(0);
   const workspaceUI = useAgentUI("main", ".openclaw/workspace");
+  const canvasTabs = useMemo(() => [
+    { id: "canvas" as const, label: "Canvas" },
+    { id: "ui" as const, label: "UI" },
+  ], []);
   const agentsSignature = agents
     .map((agent) => `${agent.id}\u001f${agent.name ?? ""}\u001f${agent.isDefault ? "1" : "0"}`)
     .join("\u001e");
@@ -292,17 +297,17 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-9 shrink-0 items-center border-b border-border bg-bg px-3 gap-2">
-        <div className="flex rounded-lg border border-border text-[10px]">
-          <button onClick={() => setTab("canvas")} className={`px-3 py-1 transition-colors ${tab === "canvas" ? "bg-surface-hover text-text" : "text-text-muted"}`}>
-            Canvas
-          </button>
-          <button
-            onClick={() => { setTab("ui"); if (workspaceUI.repoPath && workspaceUI.uiView === "menu" && !workspaceUI.devServerUrl) workspaceUI.launchPreview(); }}
-            className={`px-3 py-1 transition-colors ${tab === "ui" ? "bg-surface-hover text-text" : "text-text-muted"}`}
-          >
-            UI
-          </button>
-        </div>
+        <ContinuousTabs
+          groupId={`workspace-canvas-tabs-${workspace.id}`}
+          tabs={canvasTabs}
+          activeId={tab}
+          onChange={(nextTab) => {
+            setTab(nextTab);
+            if (nextTab === "ui" && workspaceUI.repoPath && workspaceUI.uiView === "menu" && !workspaceUI.devServerUrl) {
+              workspaceUI.launchPreview();
+            }
+          }}
+        />
         <div className="min-w-0 flex-1 truncate text-[11px] text-text-muted">{workspace.name}</div>
       </div>
 
