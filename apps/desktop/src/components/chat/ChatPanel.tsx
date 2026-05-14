@@ -67,6 +67,55 @@ function isRedundantMutationTool(message: ChatMessage, pageHasCodeChanges: boole
   return !output || output.includes("success") || output.includes("updated") || output.includes("written");
 }
 
+function mergeChatAttachments(a: ChatMessage["attachments"], b: ChatMessage["attachments"]) {
+  if (!a?.length) return b;
+  if (!b?.length) return a;
+
+  const seen = new Set<string>();
+  return [...a, ...b].filter((attachment) => {
+    const key = `${attachment.mediaType ?? ""}:${attachment.filename ?? attachment.alt ?? attachment.url}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function normalizeResponseMessages(messages: ChatMessage[]) {
+  const normalized: ChatMessage[] = [];
+  const assistantByText = new Map<string, number>();
+
+  for (const message of messages) {
+    if (message.role !== "assistant") {
+      normalized.push(message);
+      continue;
+    }
+
+    const key = message.content.trim();
+    if (!key) {
+      normalized.push(message);
+      continue;
+    }
+
+    const existingIndex = assistantByText.get(key);
+    if (existingIndex !== undefined) {
+      const existing = normalized[existingIndex]!;
+      normalized[existingIndex] = {
+        ...message,
+        thinking: existing.thinking || message.thinking,
+        attachments: mergeChatAttachments(existing.attachments, message.attachments),
+        timestamp: Math.max(existing.timestamp, message.timestamp),
+        isStreaming: existing.isStreaming || message.isStreaming,
+      };
+      continue;
+    }
+
+    assistantByText.set(key, normalized.length);
+    normalized.push(message);
+  }
+
+  return normalized;
+}
+
 function paginate(messages: ChatMessage[]): Page[] {
   const pages: Page[] = [];
   let current: Page | null = null;
@@ -77,6 +126,9 @@ function paginate(messages: ChatMessage[]): Page[] {
     } else if (current) {
       current.responses.push(msg);
     }
+  }
+  for (const page of pages) {
+    page.responses = normalizeResponseMessages(page.responses);
   }
   return pages;
 }
