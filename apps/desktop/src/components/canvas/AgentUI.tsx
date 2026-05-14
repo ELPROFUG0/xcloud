@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { readTextFile } from "@tauri-apps/plugin-fs";
+import { BaseDirectory, mkdir, readDir, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { homeDir } from "@tauri-apps/api/path";
 import { FolderOpen, Plus, RefreshCw, ExternalLink, ArrowLeft, ArrowRight, X, ChevronDown, MoreHorizontal } from "lucide-react";
@@ -895,6 +895,14 @@ function eventBelongsToAgent(agentId: string, sessionKey: string) {
   return sessionKey === agentId || sessionKey.startsWith(`agent:${agentId}:`);
 }
 
+function agentWorkspacePath(agentId: string) {
+  return agentId === "main" ? ".openclaw/workspace" : `.openclaw/workspace/${agentId}`;
+}
+
+function uiActionBridgeDir(agentId: string) {
+  return `${agentWorkspacePath(agentId)}/.xcloud/ui-action-requests`;
+}
+
 function getTargetOrigin(url: string) {
   if (url.startsWith("file://")) return "*";
   try {
@@ -1050,10 +1058,77 @@ export function AgentUIContent({
     resolve: (result: XCloudUiActionResult) => void;
     timeout: number;
   }>());
+  const handledBridgeRequestsRef = useRef(new Set<string>());
   const postToPreview = useCallback((message: Record<string, unknown>) => {
     if (!devServerUrl) return;
     iframeRef.current?.contentWindow?.postMessage(message, getTargetOrigin(devServerUrl));
   }, [devServerUrl]);
+
+  const runUiAction = useCallback((request: {
+    instruction?: string;
+    preferredTool?: string;
+  }): Promise<XCloudUiActionResult> => {
+    if (uiView !== "preview" || !devServerUrl) {
+      return Promise.resolve({
+        ok: false,
+        message: "The Agent UI preview is not open.",
+      });
+    }
+
+    const instruction = request.instruction?.trim() ?? "";
+    if (!instruction) {
+      return Promise.resolve({
+        ok: false,
+        message: "UI action instruction is empty.",
+      });
+    }
+
+    const tools = uiToolsRef.current;
+    const selectedTool = request.preferredTool
+      ? tools.find((tool) => tool.name === request.preferredTool)
+      : tools.length === 1
+        ? tools[0]
+        : [...tools].sort((a, b) => scoreUiTool(b, instruction) - scoreUiTool(a, instruction))[0];
+
+    if (!selectedTool || (tools.length > 1 && scoreUiTool(selectedTool, instruction) <= 0 && !request.preferredTool)) {
+      return Promise.resolve({
+        ok: false,
+        message: tools.length === 0
+          ? "This UI has not registered runtime tools yet."
+          : "No registered UI tool matched that instruction.",
+        output: tools.map((tool) => tool.name).join(", "),
+      });
+    }
+
+    return new Promise((resolve) => {
+      const callId = `ui-tool-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const timeout = window.setTimeout(() => {
+        const pending = pendingUiToolCallsRef.current.get(callId);
+        if (!pending) return;
+        pendingUiToolCallsRef.current.delete(callId);
+        pending.resolve({
+          ok: false,
+          toolName: selectedTool.name,
+          message: `UI tool "${selectedTool.name}" timed out.`,
+        });
+      }, 8_000);
+
+      pendingUiToolCallsRef.current.set(callId, {
+        timeout,
+        resolve: (result) => resolve({ ...result, toolName: selectedTool.name }),
+      });
+
+      postToPreview({
+        type: "xcloud:ui-tool-call",
+        protocol: "ag-ui",
+        agentId,
+        callId,
+        toolName: selectedTool.name,
+        instruction,
+        args: inferUiToolArgs(selectedTool, instruction),
+      });
+    });
+  }, [agentId, devServerUrl, postToPreview, uiView]);
 
   useEffect(() => {
     if (uiView !== "preview" || !devServerUrl) return;
@@ -1124,56 +1199,90 @@ export function AgentUIContent({
         resolve?: (result: XCloudUiActionResult) => void;
       }>).detail;
       if (!detail || detail.agentId !== agentId) return;
-
-      const instruction = detail.instruction?.trim() ?? "";
-      const tools = uiToolsRef.current;
-      const selectedTool = detail.preferredTool
-        ? tools.find((tool) => tool.name === detail.preferredTool)
-        : tools.length === 1
-          ? tools[0]
-          : [...tools].sort((a, b) => scoreUiTool(b, instruction) - scoreUiTool(a, instruction))[0];
-
-      if (!selectedTool || (tools.length > 1 && scoreUiTool(selectedTool, instruction) <= 0 && !detail.preferredTool)) {
-        detail.resolve?.({
-          ok: false,
-          message: tools.length === 0
-            ? "This UI has not registered runtime tools yet."
-            : "No registered UI tool matched that instruction.",
-          output: tools.map((tool) => tool.name).join(", "),
-        });
-        return;
-      }
-
-      const callId = `ui-tool-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      const timeout = window.setTimeout(() => {
-        const pending = pendingUiToolCallsRef.current.get(callId);
-        if (!pending) return;
-        pendingUiToolCallsRef.current.delete(callId);
-        pending.resolve({
-          ok: false,
-          toolName: selectedTool.name,
-          message: `UI tool "${selectedTool.name}" timed out.`,
-        });
-      }, 8_000);
-
-      pendingUiToolCallsRef.current.set(callId, {
-        timeout,
-        resolve: (result) => detail.resolve?.({ ...result, toolName: selectedTool.name }),
-      });
-
-      postToPreview({
-        type: "xcloud:ui-tool-call",
-        protocol: "ag-ui",
-        agentId,
-        callId,
-        toolName: selectedTool.name,
-        instruction,
-        args: inferUiToolArgs(selectedTool, instruction),
-      });
+      void runUiAction(detail).then((result) => detail.resolve?.(result));
     };
     window.addEventListener("xcloud-ui-action-request", handler);
     return () => window.removeEventListener("xcloud-ui-action-request", handler);
-  }, [agentId, devServerUrl, postToPreview, uiView]);
+  }, [agentId, devServerUrl, runUiAction, uiView]);
+
+  useEffect(() => {
+    if (uiView !== "preview" || !devServerUrl) return;
+
+    let cancelled = false;
+    const bridgeDir = uiActionBridgeDir(agentId);
+
+    const writeBridgeResult = async (requestId: string, result: XCloudUiActionResult) => {
+      await writeTextFile(
+        `${bridgeDir}/${requestId}.result.json`,
+        `${JSON.stringify({
+          id: requestId,
+          agentId,
+          completedAt: new Date().toISOString(),
+          ...result,
+        }, null, 2)}\n`,
+        { baseDir: BaseDirectory.Home },
+      );
+    };
+
+    const pollBridge = async () => {
+      await mkdir(bridgeDir, { baseDir: BaseDirectory.Home, recursive: true }).catch(() => {});
+      const entries = await readDir(bridgeDir, { baseDir: BaseDirectory.Home }).catch(() => []);
+      if (cancelled) return;
+
+      const activeRequestIds = new Set<string>();
+      for (const entry of entries) {
+        const name = entry.name ?? "";
+        if (!entry.isFile || !name.endsWith(".request.json")) continue;
+
+        const requestId = name.slice(0, -".request.json".length);
+        activeRequestIds.add(requestId);
+        if (handledBridgeRequestsRef.current.has(requestId)) continue;
+
+        handledBridgeRequestsRef.current.add(requestId);
+        const requestPath = `${bridgeDir}/${name}`;
+        let request: {
+          id?: string;
+          agentId?: string;
+          instruction?: string;
+          preferredTool?: string;
+        } | null = null;
+
+        try {
+          request = JSON.parse(await readTextFile(requestPath, { baseDir: BaseDirectory.Home }));
+        } catch (error) {
+          await writeBridgeResult(requestId, {
+            ok: false,
+            message: error instanceof Error ? error.message : String(error),
+          }).catch(() => {});
+          continue;
+        }
+
+        if (!request) continue;
+        if (request.agentId && request.agentId !== agentId) continue;
+        void runUiAction({
+          instruction: request.instruction,
+          preferredTool: request.preferredTool,
+        })
+          .then((result) => writeBridgeResult(request.id || requestId, result))
+          .catch((error) => writeBridgeResult(request.id || requestId, {
+            ok: false,
+            message: error instanceof Error ? error.message : String(error),
+          }))
+          .catch(() => {});
+      }
+
+      for (const requestId of handledBridgeRequestsRef.current) {
+        if (!activeRequestIds.has(requestId)) handledBridgeRequestsRef.current.delete(requestId);
+      }
+    };
+
+    void pollBridge();
+    const interval = window.setInterval(pollBridge, 350);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [agentId, devServerUrl, runUiAction, uiView]);
 
   const sendPreviewInit = useCallback(() => {
     const capabilities = xcloudCapabilities(agentId, uiToolsRef.current);

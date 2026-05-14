@@ -8,6 +8,8 @@
   },
   "contracts": {
     "tools": [
+      "xcloud_context",
+      "xcloud_ui_action",
       "workspace_agent_create"
     ]
   },

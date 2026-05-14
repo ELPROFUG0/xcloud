@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { createTwoFilesPatch } from "diff";
-import type { BrowserEngine } from "@/lib/engine";
+import type { BrowserEngine, EngineAttachment } from "@/lib/engine";
 import type { ChatAttachment, ChatMessage, CodeChangeInfo, ToolCallInfo } from "@/types/chat";
 import { emitAgUiEvents, openClawFrameToAgUiEvents, userMessageToAgUiEvents } from "@/lib/ag-ui-bridge";
-import { executeRegisteredUiAction, getRegisteredUiTools } from "@/lib/ui-action-registry";
+import { executeRegisteredUiAction } from "@/lib/ui-action-registry";
 import { BaseDirectory, readTextFile } from "@tauri-apps/plugin-fs";
 
 interface UseChatOptions {
@@ -17,7 +17,7 @@ interface UseChatReturn {
   messages: ChatMessage[];
   isStreaming: boolean;
   loading: boolean;
-  send: (message: string, options?: { hidden?: boolean }) => Promise<void>;
+  send: (message: string, options?: { hidden?: boolean; silent?: boolean; attachments?: ChatAttachment[] }) => Promise<void>;
   stop: () => Promise<void>;
 }
 
@@ -550,6 +550,9 @@ function stripAppContext(content: string) {
 }
 
 const MEDIA_LINE_RE = /(?:^|\n)[ \t]*MEDIA:[ \t]*`?([^\n`]+)`?[ \t]*(?=\n|$)/gi;
+const MEDIA_ATTACHED_RE = /\[media attached(?:\s+\d+\s*\/\s*\d+)?:\s+([^\]\n]+?)(?:\s+\(([^)\n]+)\))?\]/gi;
+const RUNTIME_TIMESTAMP_RE = /(?:^|\n)[ \t]*\[[A-Z][a-z]{2}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s+[A-Z]{2,5}\][ \t]*/g;
+const SENDER_METADATA_RE = /(?:^|\n)Sender \(untrusted metadata\):\s*```json[\s\S]*?```\s*/g;
 const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|avif|svg)(?:[?#].*)?$/i;
 
 function filenameFromUrl(url: string) {
@@ -558,14 +561,44 @@ function filenameFromUrl(url: string) {
   return name ? decodeURIComponent(name) : undefined;
 }
 
+function dataUrlFromBase64(content: string, mediaType?: string) {
+  if (content.startsWith("data:")) return content;
+  return `data:${mediaType || "application/octet-stream"};base64,${content}`;
+}
+
+function base64FromDataUrl(url: string) {
+  return url.startsWith("data:") ? url.split(",", 2)[1] : undefined;
+}
+
 function isImageLikeUrl(url: string, mediaType?: string) {
   return mediaType?.startsWith("image/") || IMAGE_EXT_RE.test(url) || url.includes("/api/chat/media/outgoing/");
+}
+
+function stripRuntimeAnnotations(content: string) {
+  return content
+    .replace(SENDER_METADATA_RE, "\n")
+    .replace(RUNTIME_TIMESTAMP_RE, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function extractMediaAttachmentsFromText(text: string, idPrefix: string) {
   const attachments: ChatAttachment[] = [];
   let index = 0;
-  const visible = text.replace(MEDIA_LINE_RE, (_match, rawSource: string) => {
+  const withoutOpenClawMedia = text.replace(MEDIA_ATTACHED_RE, (_match, rawSource: string, rawMime?: string) => {
+    const source = rawSource.trim();
+    if (/^\d+\s+files?$/i.test(source)) return "\n";
+    const mediaType = rawMime?.trim() || (isImageLikeUrl(source) ? "image/*" : "application/octet-stream");
+    attachments.push({
+      id: `${idPrefix}-attached-${index++}`,
+      type: "file",
+      url: source,
+      mediaType,
+      filename: filenameFromUrl(source),
+    });
+    return "\n";
+  });
+  const visible = withoutOpenClawMedia.replace(MEDIA_LINE_RE, (_match, rawSource: string) => {
     const source = rawSource.trim();
     if (isImageLikeUrl(source)) {
       attachments.push({
@@ -601,6 +634,77 @@ function imageAttachmentFromBlock(block: Record<string, unknown>, id: string): C
     width: typeof block.width === "number" ? block.width : undefined,
     height: typeof block.height === "number" ? block.height : undefined,
   };
+}
+
+function attachmentFromRecord(record: Record<string, unknown>, id: string): ChatAttachment | undefined {
+  const mediaType = typeof record.mimeType === "string"
+    ? record.mimeType
+    : typeof record.mediaType === "string"
+      ? record.mediaType
+      : typeof record.mime_type === "string"
+        ? record.mime_type
+        : undefined;
+  const filename = typeof record.fileName === "string"
+    ? record.fileName
+    : typeof record.filename === "string"
+      ? record.filename
+      : typeof record.transferName === "string"
+        ? record.transferName
+        : undefined;
+  const content = typeof record.content === "string"
+    ? record.content
+    : isRecord(record.source) && record.source.type === "base64" && typeof record.source.data === "string"
+      ? record.source.data
+      : undefined;
+  const rawUrl = typeof record.url === "string"
+    ? record.url
+    : typeof record.path === "string"
+      ? record.path
+      : undefined;
+  const url = rawUrl ?? (content ? dataUrlFromBase64(content, mediaType) : undefined);
+  if (!url) return undefined;
+
+  return {
+    id,
+    type: "file",
+    url,
+    mediaType,
+    filename: filename ?? filenameFromUrl(url),
+    content: content?.startsWith("data:") ? base64FromDataUrl(content) : content,
+    width: typeof record.width === "number" ? record.width : undefined,
+    height: typeof record.height === "number" ? record.height : undefined,
+  };
+}
+
+function extractHistoryAttachments(raw: unknown, idPrefix: string) {
+  if (!Array.isArray(raw)) return [];
+  const attachments: ChatAttachment[] = [];
+  raw.forEach((entry, index) => {
+    if (!isRecord(entry)) return;
+    const attachment = attachmentFromRecord(entry, `${idPrefix}-attachment-${index}`);
+    if (attachment) attachments.push(attachment);
+  });
+  return dedupeAttachments(attachments);
+}
+
+function toEngineAttachments(attachments?: ChatAttachment[]): EngineAttachment[] | undefined {
+  const mapped: EngineAttachment[] = [];
+  attachments?.forEach((attachment) => {
+    const content = attachment.content ?? base64FromDataUrl(attachment.url);
+    if (!content) return;
+    mapped.push({
+      type: "file" as const,
+      mimeType: attachment.mediaType,
+      fileName: attachment.filename,
+      content,
+      source: {
+        type: "base64" as const,
+        media_type: attachment.mediaType,
+        data: content,
+      },
+    });
+  });
+  return mapped.length ? mapped : undefined;
 }
 
 function attachmentKey(attachment: ChatAttachment) {
@@ -725,43 +829,6 @@ async function readUiRepoPath(agentId: string) {
   } catch {
     return null;
   }
-}
-
-async function buildXCloudAppContext(sessionKey: string) {
-  const agentId = extractAgentIdFromSessionKey(sessionKey);
-  const uiRepoPath = await readUiRepoPath(agentId);
-  const uiTools = getRegisteredUiTools(agentId);
-  const workspacePath = agentWorkspacePath(agentId);
-  const uiLines = uiRepoPath
-    ? [
-        `- Connected UI repo: ${uiRepoPath}`,
-        `- UI bridge guide in that repo: ${uiRepoPath}/XCLOUD-UI.md`,
-        "- If asked to change the UI/interface/preview, edit the connected UI repo.",
-      ]
-    : [
-        "- No connected UI repo is currently configured for this agent.",
-        "- If asked to change the UI/interface/preview, ask the user to connect or create an Agent UI first.",
-      ];
-
-  return [
-    "xCloud app context for this turn:",
-    "- You are running inside the xCloud desktop app.",
-    "- The app has a Chat panel, an Agent Canvas tab, and an Agent UI tab.",
-    "- The Canvas tab is the visual map/settings surface for this agent inside xCloud; do not confuse it with a source-code canvas library.",
-    "- The UI tab previews a web app connected to this agent.",
-    `- Current agent id: ${agentId}`,
-    `- Current agent workspace: ~/${workspacePath}`,
-    ...uiLines,
-    "- Connected UI repos receive realtime agent state through window.xcloud.agent and AG-UI events.",
-    uiTools.length
-      ? `- The connected UI registered these frontend tools: ${uiTools.map((tool) => `${tool.name}${tool.description ? ` (${tool.description})` : ""}`).join(", ")}.`
-      : "- The connected UI has not registered frontend tools yet.",
-    "- To ask xCloud to execute a registered UI tool, include a hidden HTML directive exactly like: <!-- xcloud:ui-action {\"instruction\":\"what to do\",\"preferredTool\":\"optionalToolName\"} -->",
-    "- Do not show that directive to the user as prose; it is consumed by xCloud.",
-    "- Prefer the running xCloud preview/dev server while iterating on UI.",
-    "- Do not run npm run build repeatedly after small UI edits; run it at most once near the end unless the user asks or a build failed.",
-    "- Do not ask the user to paste hidden bridge instructions; the app manages the bridge automatically.",
-  ].join("\n");
 }
 
 function extractUiActionDirectives(content: string) {
@@ -898,25 +965,10 @@ async function executeUiActionDirectives(sessionKey: string, actions: Array<{ in
       ),
     );
 
-    window.dispatchEvent(new CustomEvent("xcloud-ui-action-result-for-agent", {
-      detail: {
-        sessionKey,
-        message: [
-          HIDDEN_UI_ACTION_RESULT_MARKER,
-          "xCloud UI action result:",
-          `- Tool: ${result.toolName ?? action.preferredTool ?? "xcloud_ui_action"}`,
-          `- OK: ${result.ok ? "true" : "false"}`,
-          `- Message: ${result.message}`,
-          output ? `- Output: ${output}` : "",
-        ].filter(Boolean).join("\n"),
-      },
-    }));
+    // Native xcloud_ui_action calls now return results through OpenClaw's tool
+    // channel. The legacy directive fallback only updates the local tool card so
+    // it never leaks synthetic UI results into the agent conversation again.
   }
-}
-
-async function withXCloudAppContext(sessionKey: string, message: string) {
-  const context = await buildXCloudAppContext(sessionKey);
-  return `${APP_CONTEXT_START}\n${context}\n${APP_CONTEXT_END}\n\n${message}`;
 }
 
 function findAppToolRequest(message: string, sessionKey: string, hidden?: boolean): Omit<AppToolRequest, "sourceSessionKey"> | null {
@@ -969,6 +1021,7 @@ const engineSubscribedSessions = new WeakMap<BrowserEngine, Set<string>>();
 const stoppedSessionUntil = new Map<string, number>();
 const STOP_EVENT_SUPPRESSION_MS = 60 * 60_000;
 const STOPPED_HISTORY_KEY = "xcloudStoppedChatHistory";
+const sessionHistoryRefreshTimers = new Map<string, number[]>();
 
 function isStopSuppressed(sessionKey: string) {
   const until = stoppedSessionUntil.get(sessionKey);
@@ -1221,6 +1274,7 @@ function mergeHistoryWithLive(loaded: ChatMessage[], live: ChatMessage[]) {
 type HistoryMessage = {
   role: string;
   content: unknown;
+  attachments?: unknown;
   timestamp?: number;
   toolCallId?: string;
   toolName?: string;
@@ -1282,7 +1336,7 @@ function parseHistoryMessages(sessionKey: string, history: HistoryMessage[]): Ch
     const parsedContent = parseMessageContent(m.content, `history-${i}`);
     content = parsedContent.text;
     thinking = parsedContent.thinking;
-    attachments = parsedContent.attachments;
+    attachments = mergeAttachments(parsedContent.attachments, extractHistoryAttachments(m.attachments, `history-${i}`)) ?? [];
 
     if (Array.isArray(m.content)) {
       const blocks = m.content as Array<{ type: string; text?: string; thinking?: string; name?: string; id?: string; arguments?: Record<string, unknown> }>;
@@ -1336,15 +1390,17 @@ function parseHistoryMessages(sessionKey: string, history: HistoryMessage[]): Ch
 
     if (p.role === "user" && p.content.includes(HIDDEN_PROMPT_MARKER)) continue;
 
-    if (p.role === "user" && p.content.length > 0) {
-      const visibleContent = stripAppContext(p.content);
-      if (!visibleContent) continue;
-      loaded.push({
-        id: `history-${i}`,
-        role: "user",
-        content: visibleContent,
-        timestamp: p.timestamp,
-      });
+    if (p.role === "user" && (p.content.length > 0 || p.attachments?.length)) {
+      const visibleContent = stripRuntimeAnnotations(stripAppContext(p.content));
+      if (visibleContent.length > 0 || p.attachments?.length) {
+        loaded.push({
+          id: `history-${i}`,
+          role: "user",
+          content: visibleContent,
+          attachments: p.attachments,
+          timestamp: p.timestamp,
+        });
+      }
       continue;
     }
 
@@ -1400,6 +1456,32 @@ function processChatEvent(engine: BrowserEngine, sessionKey: string, event: stri
   rememberActiveRun(sessionKey, runId);
   emitAgUiEvents(sessionKey, openClawFrameToAgUiEvents(sessionKey, event, payload));
 
+  if (event === "session.message") {
+    const message = payload.message as Record<string, unknown> | undefined;
+    const role = typeof message?.role === "string" ? message.role : undefined;
+    const isAssistantUpdate = role === "assistant";
+    if (isAssistantUpdate) {
+      const parsedContent = parseMessageContent(message?.content, `session-message-${Date.now()}`);
+      const finalAttachments = mergeAttachments(
+        parsedContent.attachments,
+        extractHistoryAttachments(message?.attachments, `session-message-${Date.now()}`),
+      );
+      const { visible, actions } = extractUiActionDirectives(parsedContent.text);
+      if (visible || finalAttachments?.length) {
+        updateChatSession(sessionKey, (current) => ({
+          ...current,
+          messages: applyFinalAssistantText(current.messages, visible, finalAttachments),
+          isStreaming: false,
+          loading: false,
+        }));
+        void executeUiActionDirectives(sessionKey, actions);
+        emitChatSessionActivity(sessionKey, { working: false });
+      }
+    }
+    scheduleSessionHistoryRefreshes(engine, sessionKey, isAssistantUpdate ? [350, 1_100, 2_400] : [300, 1_000]);
+    return;
+  }
+
   if (event === "agent") {
     const stream = payload.stream as string;
     const data = payload.data as Record<string, unknown> | undefined;
@@ -1440,6 +1522,7 @@ function processChatEvent(engine: BrowserEngine, sessionKey: string, event: stri
           loading: false,
           messages: finishStreamingAssistant(state.messages),
         }));
+        scheduleSessionHistoryRefreshes(engine, sessionKey, [250, 900, 2_000]);
         emitChatSessionActivity(sessionKey, { working: false });
       }
     }
@@ -1587,6 +1670,10 @@ function processChatEvent(engine: BrowserEngine, sessionKey: string, event: stri
     if (state === "final" && message?.role === "assistant") {
       forgetActiveRun(sessionKey, runId);
       const parsedContent = parseMessageContent(message.content, `final-${Date.now()}`);
+      const finalAttachments = mergeAttachments(
+        parsedContent.attachments,
+        extractHistoryAttachments(message.attachments, `final-${Date.now()}`),
+      );
       const text = parsedContent.text;
 
       const { visible, actions } = extractUiActionDirectives(text);
@@ -1594,12 +1681,12 @@ function processChatEvent(engine: BrowserEngine, sessionKey: string, event: stri
       updateChatSession(sessionKey, (current) => {
         return {
           ...current,
-          messages: applyFinalAssistantText(current.messages, visible, parsedContent.attachments),
+          messages: applyFinalAssistantText(current.messages, visible, finalAttachments),
           isStreaming: false,
           loading: false,
         };
       });
-      window.setTimeout(() => void refreshSessionHistory(engine, sessionKey), 350);
+      scheduleSessionHistoryRefreshes(engine, sessionKey, [350, 1_100]);
       void executeUiActionDirectives(sessionKey, actions);
       emitChatSessionActivity(sessionKey, { working: false });
     } else if (state === "final" || state === "aborted" || state === "error") {
@@ -1610,6 +1697,7 @@ function processChatEvent(engine: BrowserEngine, sessionKey: string, event: stri
         isStreaming: false,
         loading: false,
       }));
+      if (state === "final") scheduleSessionHistoryRefreshes(engine, sessionKey, [350, 1_100, 2_400]);
       emitChatSessionActivity(sessionKey, { working: false });
     }
   }
@@ -1644,7 +1732,7 @@ function ensureEngineSessionSubscription(engine: BrowserEngine, sessionKey: stri
   });
 }
 
-async function refreshSessionHistory(engine: BrowserEngine, sessionKey: string) {
+async function refreshSessionHistory(engine: BrowserEngine, sessionKey: string, options?: { dropStreaming?: boolean }) {
   const result = await engine.rpc("chat.history", { sessionKey }).catch(() => null);
   const history = (result as { messages?: HistoryMessage[] } | null)?.messages;
   if (!history) return;
@@ -1652,11 +1740,32 @@ async function refreshSessionHistory(engine: BrowserEngine, sessionKey: string) 
   const loaded = parseHistoryMessages(sessionKey, history);
   updateChatSession(sessionKey, (current) => ({
     ...current,
-    messages: mergeHistoryWithLive(loaded, current.messages),
+    messages: mergeHistoryWithLive(loaded, options?.dropStreaming ? dropStreamingAssistant(current.messages) : current.messages),
+    isStreaming: options?.dropStreaming ? false : current.isStreaming,
     loading: false,
     historyLoaded: true,
     historyPromise: undefined,
   }));
+}
+
+function scheduleSessionHistoryRefreshes(engine: BrowserEngine, sessionKey: string, delays: number[], options?: { dropStreaming?: boolean }) {
+  const existing = sessionHistoryRefreshTimers.get(sessionKey);
+  if (existing) {
+    for (const id of existing) window.clearTimeout(id);
+  }
+  const timers = delays.map((delay) => {
+    const timer = window.setTimeout(() => {
+      const remaining = sessionHistoryRefreshTimers.get(sessionKey)?.filter((id) => id !== timer) ?? [];
+      if (remaining.length) {
+        sessionHistoryRefreshTimers.set(sessionKey, remaining);
+      } else {
+        sessionHistoryRefreshTimers.delete(sessionKey);
+      }
+      void refreshSessionHistory(engine, sessionKey, options);
+    }, delay);
+    return timer;
+  });
+  sessionHistoryRefreshTimers.set(sessionKey, timers);
 }
 
 function ensureSessionHistory(engine: BrowserEngine, sessionKey: string) {
@@ -1708,49 +1817,48 @@ export function useChat({ engine, sessionKey = "main", appTools }: UseChatOption
     ensureEngineSessionSubscription(engine, sessionKey);
     ensureSessionHistory(engine, sessionKey);
     emitChatSessionRead(sessionKey);
-    const handleUiActionResult = (event: Event) => {
-      const detail = (event as CustomEvent<{ sessionKey?: string; message?: string }>).detail;
-      if (detail?.sessionKey !== sessionKey || !detail.message) return;
-      void engine.sendMessage(sessionKey, detail.message).catch(() => {});
-    };
-    window.addEventListener("xcloud-ui-action-result-for-agent", handleUiActionResult);
     return () => {
       unsubscribe();
-      window.removeEventListener("xcloud-ui-action-result-for-agent", handleUiActionResult);
     };
   }, [engine, sessionKey]);
 
   const send = useCallback(
-    async (content: string, options?: { hidden?: boolean }) => {
+    async (content: string, options?: { hidden?: boolean; silent?: boolean; attachments?: ChatAttachment[] }) => {
       const trimmed = content.trim();
-      if (!trimmed) return;
+      const outgoingAttachments = options?.attachments?.length ? dedupeAttachments(options.attachments) : undefined;
+      if (!trimmed && !outgoingAttachments?.length) return;
       stoppedSessionUntil.delete(sessionKey);
       clearSessionStoppedHistory(sessionKey);
 
       const appToolRequest = findAppToolRequest(trimmed, sessionKey, options?.hidden);
       const currentState = getChatSessionState(sessionKey);
       const isSteeringActiveRun = currentState.isStreaming && !appToolRequest;
-      const streamId = isSteeringActiveRun ? null : `assistant-${Date.now()}`;
+      const streamId = isSteeringActiveRun || options?.silent ? null : `assistant-${Date.now()}`;
+      const visibleContent = trimmed || (outgoingAttachments?.length ? "" : trimmed);
+      const engineContent = trimmed || (outgoingAttachments?.length ? "Attached file(s)." : trimmed);
 
       const userMsg: ChatMessage = {
         id: `user-${Date.now()}`,
         role: "user",
-        content: trimmed,
+        content: visibleContent,
+        attachments: outgoingAttachments,
         timestamp: Date.now(),
       };
 
-      updateChatSession(sessionKey, (state) => ({
-        ...state,
-        loading: false,
-        isStreaming: true,
-        messages: [
-          ...state.messages,
-          ...(options?.hidden ? [] : [userMsg]),
-          ...(streamId ? [{ id: streamId, role: "assistant" as const, content: "", timestamp: Date.now(), isStreaming: true }] : []),
-        ],
-      }));
-      if (!options?.hidden) emitAgUiEvents(sessionKey, userMessageToAgUiEvents(trimmed));
-      emitChatSessionActivity(sessionKey, { working: true });
+      if (!options?.silent) {
+        updateChatSession(sessionKey, (state) => ({
+          ...state,
+          loading: false,
+          isStreaming: true,
+          messages: [
+            ...state.messages,
+            ...(options?.hidden ? [] : [userMsg]),
+            ...(streamId ? [{ id: streamId, role: "assistant" as const, content: "", timestamp: Date.now(), isStreaming: true }] : []),
+          ],
+        }));
+        if (!options?.hidden) emitAgUiEvents(sessionKey, userMessageToAgUiEvents(engineContent));
+        emitChatSessionActivity(sessionKey, { working: true });
+      }
 
       try {
         if (appToolRequest && appTools && streamId) {
@@ -1816,13 +1924,13 @@ export function useChat({ engine, sessionKey = "main", appTools }: UseChatOption
         if (!options?.hidden && !isSteeringActiveRun) {
           await startSessionChangeSnapshots(sessionKey);
         }
-        const messageForEngine = options?.hidden ? trimmed : await withXCloudAppContext(sessionKey, trimmed);
-        const result = await engine.sendMessage(sessionKey, messageForEngine);
+        const result = await engine.sendMessage(sessionKey, engineContent, toEngineAttachments(outgoingAttachments));
         if (result.runId) {
           runSessionKeys.set(result.runId, sessionKey);
           rememberActiveRun(sessionKey, result.runId);
         }
       } catch (error) {
+        if (options?.silent) return;
         const detail = error instanceof Error ? error.message : String(error);
         const errorMessage: ChatMessage = {
           id: `assistant-error-${Date.now()}`,

@@ -29,6 +29,10 @@
       "allow": [{ "path": "$HOME/.openclaw/**" }, { "path": "$HOME/**" }]
     },
     {
+      "identifier": "fs:allow-read-dir",
+      "allow": [{ "path": "$HOME/.openclaw/**" }]
+    },
+    {
       "identifier": "fs:allow-write-file",
       "allow": [{ "path": "$HOME/.openclaw/**" }]
     },

@@ -41,6 +41,24 @@ const WorkspaceAgentCreateSchema = Type.Object({
 	}))
 });
 
+const XCloudContextSchema = Type.Object({
+	includeGuide: Type.Optional(Type.Boolean({
+		description: "Include the connected UI guide file when available. Default false."
+	}))
+});
+
+const XCloudUiActionSchema = Type.Object({
+	instruction: Type.String({
+		description: "Plain-language UI action to execute in the connected xCloud preview."
+	}),
+	preferredTool: Type.Optional(Type.String({
+		description: "Optional registered frontend UI tool name to prefer."
+	})),
+	timeoutMs: Type.Optional(Type.Number({
+		description: "Optional timeout in milliseconds. Default 15000."
+	}))
+});
+
 function normalizeAgentId(value) {
 	const normalized = String(value ?? "")
 		.trim()
@@ -82,6 +100,23 @@ function resolveWorkspaceBaseDir(ctx) {
 		if (path.basename(resolved).startsWith(WORKSPACE_PREFIX)) return path.dirname(resolved);
 	}
 	return path.join(os.homedir(), ".openclaw", "workspace");
+}
+
+function resolveAgentId(ctx) {
+	const agentId = normalizeOptionalText(ctx.agentId);
+	if (agentId) return agentId;
+	const workspaceDir = normalizeOptionalText(ctx.workspaceDir);
+	const base = workspaceDir ? path.basename(path.resolve(workspaceDir)) : "";
+	return base || "main";
+}
+
+function resolveAgentWorkspaceDir(ctx) {
+	const workspaceDir = normalizeOptionalText(ctx.workspaceDir);
+	if (workspaceDir) return path.resolve(workspaceDir);
+	const agentId = resolveAgentId(ctx);
+	return agentId === "main"
+		? path.join(os.homedir(), ".openclaw", "workspace")
+		: path.join(os.homedir(), ".openclaw", "workspace", agentId);
 }
 
 function resolveConfig(ctx) {
@@ -171,11 +206,168 @@ function jsonResult(payload) {
 	};
 }
 
+async function readJsonFile(file) {
+	try {
+		const raw = await fs.readFile(file, "utf8");
+		return JSON.parse(raw);
+	} catch {
+		return null;
+	}
+}
+
+async function readTextFileOptional(file, limit = 12_000) {
+	try {
+		const content = await fs.readFile(file, "utf8");
+		return content.length > limit ? `${content.slice(0, limit)}\n\n[truncated]` : content;
+	} catch {
+		return null;
+	}
+}
+
+function normalizeUiTools(raw) {
+	if (!Array.isArray(raw)) return [];
+	return raw
+		.filter((tool) => tool && typeof tool === "object" && typeof tool.name === "string" && tool.name.trim())
+		.map((tool) => ({
+			name: tool.name.trim(),
+			description: typeof tool.description === "string" ? tool.description.trim() : undefined,
+			aliases: Array.isArray(tool.aliases) ? tool.aliases.map(String).filter(Boolean) : [],
+			parameters: tool.parameters && typeof tool.parameters === "object" ? tool.parameters : undefined
+		}));
+}
+
+async function buildXCloudContext(ctx, args) {
+	const agentId = resolveAgentId(ctx);
+	const workspaceDir = resolveAgentWorkspaceDir(ctx);
+	const uiConfig = await readJsonFile(path.join(workspaceDir, "ui-config.json"));
+	const repoPath = typeof uiConfig?.repoPath === "string" && uiConfig.repoPath.trim()
+		? path.resolve(workspaceDir, uiConfig.repoPath.trim())
+		: null;
+	const toolsRecord = await readJsonFile(path.join(workspaceDir, ".xcloud", "ui-tools.json"));
+	const uiTools = normalizeUiTools(toolsRecord?.tools);
+	const guidePath = repoPath ? path.join(repoPath, "XCLOUD-UI.md") : null;
+	const guide = args?.includeGuide && guidePath ? await readTextFileOptional(guidePath) : null;
+
+	return {
+		ok: true,
+		agentId,
+		workspaceDir,
+		ui: {
+			connected: Boolean(repoPath),
+			repoPath,
+			guidePath,
+			guide,
+			runtimeTools: uiTools,
+			instructions: [
+				"If the user asks to change the connected preview/UI, edit the connected UI repo.",
+				"Connected UI repos receive realtime agent state through window.xcloud.agent and AG-UI events.",
+				"To control the live preview with a registered frontend UI tool, call the native xcloud_ui_action tool with an instruction and optional preferredTool.",
+				"Do not emit hidden HTML directives unless the native tool is unavailable."
+			]
+		}
+	};
+}
+
+function clampTimeout(value) {
+	const numeric = Number(value);
+	if (!Number.isFinite(numeric)) return 15_000;
+	return Math.max(1_000, Math.min(60_000, Math.round(numeric)));
+}
+
+function sleep(ms) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readResultFile(file) {
+	try {
+		const raw = await fs.readFile(file, "utf8");
+		return JSON.parse(raw);
+	} catch {
+		return null;
+	}
+}
+
+async function removeFileQuietly(file) {
+	try {
+		await fs.unlink(file);
+	} catch {
+		// Best effort cleanup only.
+	}
+}
+
+async function executeXCloudUiAction(ctx, args) {
+	const input = args ?? {};
+	const instruction = requireText(input.instruction, "instruction");
+	const preferredTool = normalizeOptionalText(input.preferredTool) || undefined;
+	const timeoutMs = clampTimeout(input.timeoutMs);
+	const agentId = resolveAgentId(ctx);
+	const workspaceDir = resolveAgentWorkspaceDir(ctx);
+	const bridgeDir = path.join(workspaceDir, ".xcloud", "ui-action-requests");
+	const requestId = `ui-action-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+	const requestPath = path.join(bridgeDir, `${requestId}.request.json`);
+	const resultPath = path.join(bridgeDir, `${requestId}.result.json`);
+
+	await fs.mkdir(bridgeDir, { recursive: true });
+	await fs.writeFile(requestPath, `${JSON.stringify({
+		id: requestId,
+		agentId,
+		instruction,
+		preferredTool,
+		timeoutMs,
+		createdAt: new Date().toISOString()
+	}, null, 2)}\n`, "utf8");
+
+	const startedAt = Date.now();
+	while (Date.now() - startedAt < timeoutMs) {
+		const result = await readResultFile(resultPath);
+		if (result && typeof result === "object") {
+			await removeFileQuietly(requestPath);
+			await removeFileQuietly(resultPath);
+			return {
+				ok: result.ok === true,
+				toolName: typeof result.toolName === "string" ? result.toolName : preferredTool,
+				message: typeof result.message === "string" ? result.message : result.ok === true ? "UI tool executed." : "UI tool failed.",
+				output: result.output,
+				requestId
+			};
+		}
+		await sleep(150);
+	}
+
+	await removeFileQuietly(requestPath);
+	return {
+		ok: false,
+		toolName: preferredTool,
+		message: "Timed out waiting for xCloud UI bridge. Make sure the Agent UI preview is open and the frontend has registered UI tools.",
+		requestId
+	};
+}
+
 var unicore_workspace_default = definePluginEntry({
 	id: "unicore-workspace",
 	name: "Unicore Workspace",
 	description: "Workspace-scoped tools for Unicore.",
 	register(api) {
+		api.registerTool((ctx) => ({
+			name: "xcloud_context",
+			label: "xCloud Context",
+			description: "Get xCloud desktop context for the current agent: connected UI repo, AG-UI guide path, registered frontend UI tools, and workspace metadata. Use this before changing or controlling the connected UI/app preview instead of relying on hidden prompt text.",
+			parameters: XCloudContextSchema,
+			async execute(_toolCallId, args) {
+				return jsonResult(await buildXCloudContext(ctx, args ?? {}));
+			}
+		}), { names: ["xcloud_context"] });
+
+		api.registerTool((ctx) => ({
+			name: "xcloud_ui_action",
+			label: "xCloud UI Action",
+			description: "Execute a registered frontend UI tool in the connected xCloud preview and return the real result as a native tool result. Use this instead of hidden HTML directives when the user asks to control the live UI.",
+			parameters: XCloudUiActionSchema,
+			async execute(_toolCallId, args) {
+				return jsonResult(await executeXCloudUiAction(ctx, args ?? {}));
+			}
+		}), { names: ["xcloud_ui_action"] });
+
 		api.registerTool((ctx) => ({
 			name: "workspace_agent_create",
 			label: "Workspace Agent Create",

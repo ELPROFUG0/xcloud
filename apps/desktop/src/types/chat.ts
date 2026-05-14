@@ -18,6 +18,7 @@ export interface ChatAttachment {
   url: string;
   mediaType?: string;
   filename?: string;
+  content?: string;
   alt?: string;
   width?: number;
   height?: number;

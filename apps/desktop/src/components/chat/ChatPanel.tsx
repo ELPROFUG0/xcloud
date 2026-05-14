@@ -558,9 +558,11 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
                 onMouseEnter={() => setHoveredMsgId(page.userMessage.id)}
                 onMouseLeave={() => setHoveredMsgId(null)}
               >
-                <div className="max-w-[85%] rounded-2xl bg-user-bubble px-4 py-2 text-[13px] leading-relaxed text-text break-words overflow-hidden">
-                  {page.userMessage.content}
-                </div>
+                {page.userMessage.content ? (
+                  <div className="max-w-[85%] rounded-2xl bg-user-bubble px-4 py-2 text-[13px] leading-relaxed text-text break-words overflow-hidden">
+                    {page.userMessage.content}
+                  </div>
+                ) : null}
                 {page.userMessage.attachments?.length ? (
                   <MessageAttachments attachments={page.userMessage.attachments} engine={engine} align="end" onPreviewImage={openImagePreview} />
                 ) : null}
@@ -820,13 +822,20 @@ function MessageAttachments({
   align?: "start" | "end";
   onPreviewImage: (preview: ImagePreviewState) => void;
 }) {
+  const imageCount = attachments.filter(isImageAttachment).length;
   return (
     <Attachments
       variant="grid"
-      className={`mt-3 max-w-full ${align === "end" ? "ml-auto justify-end" : "ml-0 justify-start"}`}
+      className={`mt-3 !grid !w-auto max-w-full grid-cols-[repeat(3,minmax(0,max-content))] gap-2 ${align === "end" ? "!ml-auto justify-end" : "!ml-0 justify-start"}`}
     >
       {attachments.map((attachment) => (
-        <MessageAttachment key={attachment.id} attachment={attachment} engine={engine} onPreviewImage={onPreviewImage} />
+        <MessageAttachment
+          key={attachment.id}
+          attachment={attachment}
+          engine={engine}
+          imageCount={imageCount}
+          onPreviewImage={onPreviewImage}
+        />
       ))}
     </Attachments>
   );
@@ -835,10 +844,12 @@ function MessageAttachments({
 function MessageAttachment({
   attachment,
   engine,
+  imageCount,
   onPreviewImage,
 }: {
   attachment: ChatAttachment;
   engine: BrowserEngine;
+  imageCount: number;
   onPreviewImage: (preview: ImagePreviewState) => void;
 }) {
   const resolvedUrl = useMemo(() => resolveAttachmentUrl(attachment, engine), [attachment, engine]);
@@ -876,6 +887,11 @@ function MessageAttachment({
   };
 
   if (isImage) {
+    const imageSizeClass = imageCount <= 1
+      ? "h-80 w-80 sm:h-96 sm:w-96"
+      : imageCount === 2
+        ? "h-40 w-40 sm:h-52 sm:w-52"
+        : "h-28 w-28 sm:h-36 sm:w-36";
     return (
       <button
         type="button"
@@ -893,7 +909,7 @@ function MessageAttachment({
       >
         <Attachment
           data={data}
-          className="h-80 w-80 max-w-full overflow-hidden rounded-xl bg-transparent sm:h-96 sm:w-96"
+          className={`${imageSizeClass} max-w-full overflow-hidden rounded-xl bg-transparent`}
         >
           {displayUrl ? (
             <AttachmentPreview className="size-full rounded-xl bg-transparent" />

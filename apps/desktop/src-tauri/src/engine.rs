@@ -10,6 +10,8 @@ use tauri::{Emitter, Manager};
 const DEFAULT_PORT: u16 = 18789;
 const UNICORE_WORKSPACE_PLUGIN_ID: &str = "unicore-workspace";
 const WORKSPACE_AGENT_CREATE_TOOL: &str = "workspace_agent_create";
+const XCLOUD_CONTEXT_TOOL: &str = "xcloud_context";
+const XCLOUD_UI_ACTION_TOOL: &str = "xcloud_ui_action";
 const UNICORE_WORKSPACE_PLUGIN_JSON: &str =
     include_str!("../unicore-openclaw-extensions/unicore-workspace/openclaw.plugin.json");
 const UNICORE_WORKSPACE_PLUGIN_INDEX: &str =
@@ -284,14 +286,18 @@ fn ensure_unicore_workspace_config() -> Result<bool, String> {
             .and_then(|value| value.as_array_mut())
             .expect("alsoAllow array was just inserted");
 
-        if !also_allow
-            .iter()
-            .any(|value| value.as_str() == Some(WORKSPACE_AGENT_CREATE_TOOL))
-        {
-            also_allow.push(serde_json::Value::String(
-                WORKSPACE_AGENT_CREATE_TOOL.to_string(),
-            ));
-            changed = true;
+        for tool_name in [
+            WORKSPACE_AGENT_CREATE_TOOL,
+            XCLOUD_CONTEXT_TOOL,
+            XCLOUD_UI_ACTION_TOOL,
+        ] {
+            if !also_allow
+                .iter()
+                .any(|value| value.as_str() == Some(tool_name))
+            {
+                also_allow.push(serde_json::Value::String(tool_name.to_string()));
+                changed = true;
+            }
         }
     }
 

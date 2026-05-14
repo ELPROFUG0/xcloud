@@ -1,3 +1,5 @@
+import { BaseDirectory, mkdir, writeTextFile } from "@tauri-apps/plugin-fs";
+
 export interface XCloudUiToolDefinition {
   name: string;
   description?: string;
@@ -21,6 +23,10 @@ export interface XCloudUiActionResult {
 const toolsByAgent = new Map<string, XCloudUiToolDefinition[]>();
 const listeners = new Set<() => void>();
 
+function agentWorkspacePath(agentId: string) {
+  return agentId === "main" ? ".openclaw/workspace" : `.openclaw/workspace/${agentId}`;
+}
+
 function normalizeTool(tool: XCloudUiToolDefinition): XCloudUiToolDefinition | null {
   const name = tool.name?.trim();
   if (!name) return null;
@@ -35,6 +41,7 @@ function normalizeTool(tool: XCloudUiToolDefinition): XCloudUiToolDefinition | n
 export function setRegisteredUiTools(agentId: string, tools: XCloudUiToolDefinition[]) {
   const normalized = tools.map(normalizeTool).filter((tool): tool is XCloudUiToolDefinition => Boolean(tool));
   toolsByAgent.set(agentId, normalized);
+  void persistRegisteredUiTools(agentId, normalized);
   for (const listener of listeners) listener();
 }
 
@@ -56,4 +63,18 @@ export function executeRegisteredUiAction(request: XCloudUiActionRequest): Promi
       },
     }));
   });
+}
+
+async function persistRegisteredUiTools(agentId: string, tools: XCloudUiToolDefinition[]) {
+  const dir = `${agentWorkspacePath(agentId)}/.xcloud`;
+  try {
+    await mkdir(dir, { baseDir: BaseDirectory.Home, recursive: true });
+    await writeTextFile(
+      `${dir}/ui-tools.json`,
+      `${JSON.stringify({ agentId, updatedAt: new Date().toISOString(), tools }, null, 2)}\n`,
+      { baseDir: BaseDirectory.Home },
+    );
+  } catch {
+    // Runtime UI tools are best-effort metadata for the native xcloud_context tool.
+  }
 }

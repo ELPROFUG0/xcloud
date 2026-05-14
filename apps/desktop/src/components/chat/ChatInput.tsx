@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/cn";
 import type { BrowserEngine, SlashCommand } from "@/lib/engine";
 import type { AgentInfo } from "@/hooks/use-agents";
+import type { ChatAttachment } from "@/types/chat";
 import { useModels } from "@/hooks/use-models";
 import {
   ArrowUp, Mic, ChevronUp, Check, Plus,
@@ -12,6 +13,7 @@ import {
 import { LiveMicrophoneWaveform } from "../ui/waveform";
 import { ModelSelector, ModelSelectorTrigger } from "./ModelSelector";
 import { AgentAvatar } from "../ui/AgentAvatar";
+import { Attachment, AttachmentInfo, AttachmentPreview, AttachmentRemove, Attachments } from "../ai-elements/attachments";
 import { Shimmer } from "../ai-elements/shimmer";
 import orbVideo from "@/assets/setup-icons/orb-video.mp4";
 
@@ -50,6 +52,41 @@ function extensionFromMime(mime: string) {
   return "m4a";
 }
 
+function fallbackMimeFromName(name: string) {
+  const lower = name.toLowerCase();
+  if (/\.(png)$/.test(lower)) return "image/png";
+  if (/\.(jpe?g)$/.test(lower)) return "image/jpeg";
+  if (/\.(gif)$/.test(lower)) return "image/gif";
+  if (/\.(webp)$/.test(lower)) return "image/webp";
+  if (/\.(svg)$/.test(lower)) return "image/svg+xml";
+  if (/\.(pdf)$/.test(lower)) return "application/pdf";
+  if (/\.(txt|md|csv|json|log)$/.test(lower)) return "text/plain";
+  return "application/octet-stream";
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function fileToChatAttachment(file: File): Promise<ChatAttachment> {
+  const mediaType = file.type || fallbackMimeFromName(file.name);
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const content = bytesToBase64(bytes);
+  return {
+    id: crypto.randomUUID(),
+    type: "file",
+    url: `data:${mediaType};base64,${content}`,
+    mediaType,
+    filename: file.name,
+    content,
+  };
+}
+
 const COMMAND_ICONS: Record<string, LucideIcon> = {
   status: Info,
   tools: Wrench,
@@ -61,7 +98,7 @@ const COMMAND_ICONS: Record<string, LucideIcon> = {
 };
 
 interface ChatInputProps {
-  onSend: (message: string) => void;
+  onSend: (message: string, options?: { attachments?: ChatAttachment[] }) => void | Promise<void>;
   onStop?: () => void;
   disabled?: boolean;
   isStreaming?: boolean;
@@ -136,8 +173,12 @@ export function ChatInput({
   const recordingStreamRef = useRef<MediaStream | null>(null);
   const micMenuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { providers, currentModel, setModel } = useModels(engine, { agentId: selectedAgentId, agents: agentOptions });
   const hasText = value.trim().length > 0;
+  const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
+  const [isAddingAttachments, setIsAddingAttachments] = useState(false);
+  const canSend = hasText || pendingAttachments.length > 0;
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [showSlash, setShowSlash] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
@@ -333,13 +374,37 @@ export function ChatInput({
 
   const handleSend = useCallback(() => {
     const trimmed = value.trim();
-    if (!trimmed || disabled) return;
-    onSend(trimmed);
+    if ((!trimmed && pendingAttachments.length === 0) || disabled || isAddingAttachments) return;
+    const attachments = pendingAttachments.length ? pendingAttachments : undefined;
+    void onSend(trimmed, attachments ? { attachments } : undefined);
     setValue("");
+    setPendingAttachments([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
-  }, [value, disabled, onSend]);
+  }, [disabled, isAddingAttachments, onSend, pendingAttachments, value]);
+
+  const handleAttachmentClick = useCallback(() => {
+    if (disabled || isAddingAttachments) return;
+    fileInputRef.current?.click();
+  }, [disabled, isAddingAttachments]);
+
+  const handleFilesSelected = useCallback(async (files: FileList | null) => {
+    if (!files?.length) return;
+    setIsAddingAttachments(true);
+    try {
+      const attachments = await Promise.all(Array.from(files).map(fileToChatAttachment));
+      setPendingAttachments((current) => [...current, ...attachments]);
+    } catch (error) {
+      console.error("Failed to prepare attachments", error);
+    } finally {
+      setIsAddingAttachments(false);
+    }
+  }, []);
+
+  const removeAttachment = useCallback((id: string) => {
+    setPendingAttachments((current) => current.filter((attachment) => attachment.id !== id));
+  }, []);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -464,6 +529,34 @@ export function ChatInput({
           ? "rounded-[22px] border-white/[0.06] bg-[#252525]"
           : "rounded-2xl border-[#444] bg-container",
       )}>
+        <input
+          ref={fileInputRef}
+          className="hidden"
+          type="file"
+          multiple
+          onChange={(event) => {
+            void handleFilesSelected(event.currentTarget.files);
+            event.currentTarget.value = "";
+          }}
+        />
+
+        {pendingAttachments.length > 0 && (
+          <Attachments variant="inline" className="mb-2 ml-0 w-full justify-start gap-1.5">
+            {pendingAttachments.map((attachment) => (
+              <Attachment
+                key={attachment.id}
+                data={{ ...attachment, mediaType: attachment.mediaType ?? "application/octet-stream" }}
+                onRemove={() => removeAttachment(attachment.id)}
+                className="max-w-[220px] border-white/[0.08] bg-white/[0.04] text-text hover:bg-white/[0.08]"
+              >
+                <AttachmentPreview className="bg-white/[0.06]" />
+                <AttachmentInfo />
+                <AttachmentRemove className="text-text-muted hover:text-text" />
+              </Attachment>
+            ))}
+          </Attachments>
+        )}
+
         {/* Textarea — always same size */}
         <textarea
           ref={textareaRef}
@@ -537,15 +630,15 @@ export function ChatInput({
               <div />
             ) : (
                   <div className="flex items-center gap-1.5">
-                    {isHero && (
-                      <button
-                        disabled={disabled}
-                        className="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-white/6 hover:text-text disabled:opacity-30"
-                        title="Add context"
-                      >
-                        <Plus className="h-4 w-4" />
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={handleAttachmentClick}
+                      disabled={disabled || isAddingAttachments}
+                      className="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-white/6 hover:text-text disabled:opacity-30"
+                      title={isAddingAttachments ? "Preparing attachments" : "Attach files"}
+                    >
+                      <Plus className="h-4 w-4" />
+                    </button>
                     <div onMouseDown={(e) => e.stopPropagation()}>
                       <ModelSelectorTrigger
                         currentModel={currentModel}
@@ -619,7 +712,7 @@ export function ChatInput({
 
                 <button
                   onClick={isStreaming ? onStop : handleSend}
-                  disabled={isStreaming ? disabled : disabled || !hasText}
+                  disabled={isStreaming ? disabled : disabled || !canSend || isAddingAttachments}
                   className={cn(
                     "flex h-8 w-8 items-center justify-center rounded-full transition-all disabled:cursor-not-allowed",
                     isStreaming

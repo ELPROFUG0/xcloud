@@ -12,6 +12,18 @@ export interface SlashCommand {
   acceptsArgs?: boolean;
 }
 
+export interface EngineAttachment {
+  type: "file";
+  mimeType?: string;
+  fileName?: string;
+  content?: string;
+  source?: {
+    type: "base64";
+    media_type?: string;
+    data: string;
+  };
+}
+
 export interface ModelInfo {
   id: string;
   name: string;
@@ -304,10 +316,11 @@ export class BrowserEngine {
     return (result as { key: string }).key;
   }
 
-  async sendMessage(sessionKey: string, message: string): Promise<{ runId: string; status: string }> {
+  async sendMessage(sessionKey: string, message: string, attachments?: EngineAttachment[]): Promise<{ runId: string; status: string }> {
     const result = await this.rpc("chat.send", {
       sessionKey,
       message,
+      ...(attachments?.length ? { attachments } : {}),
       idempotencyKey: crypto.randomUUID(),
     });
     return result as { runId: string; status: string };
