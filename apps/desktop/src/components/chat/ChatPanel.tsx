@@ -54,6 +54,21 @@ type ImagePreviewState = {
   alt: string;
 };
 
+const UI_ACTION_DIRECTIVE_RENDER_RE = /<!--\s*xcloud:ui-action\b[\s\S]*?(?:-->|$)/g;
+const UI_ACTION_DIRECTIVE_RENDER_START = "<!-- xcloud:ui-action";
+
+function stripHiddenUiActionDirectives(content: string) {
+  let visible = content.replace(UI_ACTION_DIRECTIVE_RENDER_RE, "").trim();
+  const commentStart = visible.lastIndexOf("<!--");
+  if (commentStart >= 0) {
+    const tail = visible.slice(commentStart).replace(/\s+/g, " ");
+    if (UI_ACTION_DIRECTIVE_RENDER_START.startsWith(tail) || tail.startsWith(UI_ACTION_DIRECTIVE_RENDER_START)) {
+      visible = visible.slice(0, commentStart).trim();
+    }
+  }
+  return visible;
+}
+
 function isMutationToolName(name: string) {
   const lower = name.toLowerCase();
   return lower.includes("write")
@@ -81,6 +96,62 @@ function mergeChatAttachments(a: ChatMessage["attachments"], b: ChatMessage["att
     const key = `${attachment.mediaType ?? ""}:${attachment.filename ?? attachment.alt ?? attachment.url}`;
     if (seen.has(key)) return false;
     seen.add(key);
+    return true;
+  });
+}
+
+function normalizeToolSignaturePart(value: unknown) {
+  return typeof value === "string" ? value.trim().replace(/\s+/g, " ").toLowerCase() : "";
+}
+
+function renderedUiActionToolSignature(message: ChatMessage) {
+  if (message.role !== "tool" || !message.tool) return null;
+  const tool = message.tool;
+  const name = tool.name.toLowerCase();
+  const isUiAction =
+    name === "xcloud_ui_action" ||
+    tool.id.startsWith("ui-action-") ||
+    tool.id.startsWith("ui-action-history-");
+  if (!isUiAction) return null;
+
+  const preferredTool = normalizeToolSignaturePart(tool.args?.preferredTool) || (name === "xcloud_ui_action" ? "" : name);
+  const instruction = normalizeToolSignaturePart(tool.args?.instruction) ||
+    normalizeToolSignaturePart(tool.title && tool.title !== tool.name ? tool.title : "");
+  const fallback = normalizeToolSignaturePart(tool.output) || normalizeToolSignaturePart(tool.title) || name;
+  return instruction ? `instruction:${instruction}` : `tool:${preferredTool}:${fallback}`;
+}
+
+function renderedUiActionToolScore(message: ChatMessage) {
+  const tool = message.tool;
+  if (!tool) return 0;
+  let score = 0;
+  if (tool.status === "done") score += 40;
+  if (tool.status === "error") score += 30;
+  if (tool.status === "running") score += 10;
+  if (tool.output) score += 8;
+  if (tool.args?.instruction) score += 6;
+  return score;
+}
+
+function dedupeRenderedToolMessages(messages: ChatMessage[]) {
+  const chosenBySignature = new Map<string, ChatMessage>();
+  for (const message of messages) {
+    const signature = renderedUiActionToolSignature(message);
+    if (!signature) continue;
+    const existing = chosenBySignature.get(signature);
+    if (!existing || renderedUiActionToolScore(message) >= renderedUiActionToolScore(existing)) {
+      chosenBySignature.set(signature, message);
+    }
+  }
+  if (chosenBySignature.size === 0) return messages;
+
+  const emitted = new Set<string>();
+  return messages.filter((message) => {
+    const signature = renderedUiActionToolSignature(message);
+    if (!signature) return true;
+    const chosen = chosenBySignature.get(signature);
+    if (!chosen || emitted.has(signature) || chosen.id !== message.id) return false;
+    emitted.add(signature);
     return true;
   });
 }
@@ -118,7 +189,7 @@ function normalizeResponseMessages(messages: ChatMessage[]) {
     normalized.push(message);
   }
 
-  return normalized;
+  return dedupeRenderedToolMessages(normalized);
 }
 
 function paginate(messages: ChatMessage[]): Page[] {
@@ -983,9 +1054,11 @@ const markdownComponents: any = {
 };
 
 const MessageBubbleContent = memo(function MessageBubbleContent({ content }: { content: string }) {
+  const visibleContent = stripHiddenUiActionDirectives(content);
+  if (!visibleContent) return null;
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-      {content}
+      {visibleContent}
     </ReactMarkdown>
   );
 });

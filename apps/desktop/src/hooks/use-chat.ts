@@ -396,9 +396,14 @@ function mergeCodeChanges(existing: CodeChangeInfo[] | undefined, incoming: Code
 }
 
 const CODE_CHANGE_CACHE_KEY = "xcloudCodeChangeDiffs";
+const LEGACY_UI_ACTION_TOOL_CACHE_KEY = "xcloudUiActionToolCards";
+const UI_ACTION_TOOL_CACHE_KEY = "xcloudUiActionToolCards.v2";
 const CODE_CHANGE_CACHE_LIMIT = 200;
+const UI_ACTION_TOOL_CACHE_LIMIT = 200;
+const UI_ACTION_DIRECTIVE_FRAGMENT_RE = /<!--\s*xcloud:ui-action\b[\s\S]*?(?:-->|$)/g;
 
 type CodeChangeCache = Record<string, { updatedAt: number; changes: CodeChangeInfo[] }>;
+type UiActionToolCache = Record<string, { updatedAt: number; tools: ToolCallInfo[] }>;
 
 function codeChangeCacheKey(sessionKey: string, toolCallId: string) {
   return `${sessionKey}::${toolCallId}`;
@@ -445,6 +450,132 @@ function attachCodeChangesToTool(sessionKey: string, toolCallId: string, changes
         : message,
     ),
   );
+}
+
+function readUiActionToolCache(): UiActionToolCache {
+  try {
+    localStorage.removeItem(LEGACY_UI_ACTION_TOOL_CACHE_KEY);
+    const parsed = JSON.parse(localStorage.getItem(UI_ACTION_TOOL_CACHE_KEY) ?? "{}") as UiActionToolCache;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeUiActionToolCache(cache: UiActionToolCache) {
+  const entries = Object.entries(cache)
+    .map(([sessionKey, entry]) => [
+      sessionKey,
+      {
+        updatedAt: entry.updatedAt,
+        tools: entry.tools
+          .sort((a, b) => b.timestamp - a.timestamp)
+          .slice(0, 40),
+      },
+    ] as const)
+    .sort(([, a], [, b]) => b.updatedAt - a.updatedAt)
+    .slice(0, UI_ACTION_TOOL_CACHE_LIMIT);
+  localStorage.setItem(UI_ACTION_TOOL_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
+}
+
+function readCachedUiActionTools(sessionKey: string) {
+  return readUiActionToolCache()[sessionKey]?.tools ?? [];
+}
+
+function cacheUiActionTool(sessionKey: string, tool: ToolCallInfo) {
+  const cache = readUiActionToolCache();
+  const current = cache[sessionKey]?.tools ?? [];
+  const nextSignature = uiActionToolSignature(tool);
+  const nextTools = [
+    tool,
+    ...current.filter((item) => item.id !== tool.id && (!nextSignature || uiActionToolSignature(item) !== nextSignature)),
+  ];
+  cache[sessionKey] = {
+    updatedAt: Date.now(),
+    tools: nextTools,
+  };
+  writeUiActionToolCache(cache);
+}
+
+function normalizeUiActionSignaturePart(value: unknown) {
+  return typeof value === "string" ? value.trim().replace(/\s+/g, " ").toLowerCase() : "";
+}
+
+function uiActionToolSignature(tool?: ToolCallInfo) {
+  if (!tool) return null;
+  const name = tool.name.toLowerCase();
+  const isUiAction =
+    name === "xcloud_ui_action" ||
+    tool.id.startsWith("ui-action-") ||
+    tool.id.startsWith("ui-action-history-");
+  if (!isUiAction) return null;
+
+  const preferredTool = normalizeUiActionSignaturePart(tool.args?.preferredTool) || (name === "xcloud_ui_action" ? "" : name);
+  const instruction = normalizeUiActionSignaturePart(tool.args?.instruction) ||
+    normalizeUiActionSignaturePart(tool.title && tool.title !== tool.name ? tool.title : "");
+  const fallback = normalizeUiActionSignaturePart(tool.output) || normalizeUiActionSignaturePart(tool.title) || name;
+  return instruction ? `instruction:${instruction}` : `tool:${preferredTool}:${fallback}`;
+}
+
+function scoreUiActionToolMessage(message: ChatMessage) {
+  const tool = message.tool;
+  if (!tool) return 0;
+  let score = 0;
+  if (tool.status === "done") score += 40;
+  if (tool.status === "error") score += 30;
+  if (tool.status === "running") score += 10;
+  if (tool.output) score += 8;
+  if (tool.args?.instruction) score += 6;
+  if (!tool.id.startsWith("ui-action-history-")) score += 3;
+  return score;
+}
+
+function pickUiActionToolMessage(a: ChatMessage, b: ChatMessage) {
+  const scoreA = scoreUiActionToolMessage(a);
+  const scoreB = scoreUiActionToolMessage(b);
+  if (scoreA !== scoreB) return scoreA > scoreB ? a : b;
+  return a.timestamp >= b.timestamp ? a : b;
+}
+
+function dedupeUiActionToolMessages(messages: ChatMessage[]) {
+  const chosenBySignature = new Map<string, ChatMessage>();
+
+  for (const message of messages) {
+    const signature = message.role === "tool" ? uiActionToolSignature(message.tool) : null;
+    if (!signature) continue;
+    const existing = chosenBySignature.get(signature);
+    chosenBySignature.set(signature, existing ? pickUiActionToolMessage(existing, message) : message);
+  }
+
+  if (chosenBySignature.size === 0) return messages;
+  const emitted = new Set<string>();
+  return messages.filter((message) => {
+    const signature = message.role === "tool" ? uiActionToolSignature(message.tool) : null;
+    if (!signature) return true;
+    const chosen = chosenBySignature.get(signature);
+    if (!chosen || emitted.has(signature) || chosen.id !== message.id) return false;
+    emitted.add(signature);
+    return true;
+  });
+}
+
+function mergeCachedUiActionTools(sessionKey: string, messages: ChatMessage[]) {
+  const cachedTools = readCachedUiActionTools(sessionKey);
+  if (cachedTools.length === 0) return messages;
+
+  const existingIds = new Set(messages.map((message) => message.role === "tool" ? message.tool?.id : undefined).filter(Boolean));
+  const cachedMessages = cachedTools
+    .filter((tool) => !existingIds.has(tool.id))
+    .map((tool): ChatMessage => ({
+      id: `tool-${tool.id}`,
+      role: "tool",
+      content: "",
+      timestamp: tool.timestamp,
+      tool,
+    }));
+
+  if (cachedMessages.length === 0) return messages;
+  return dedupeUiActionToolMessages([...messages, ...cachedMessages].sort((a, b) => a.timestamp - b.timestamp));
 }
 
 async function startCodeChangeSnapshot(sessionKey: string, toolCallId: string, args?: Record<string, unknown>) {
@@ -833,7 +964,7 @@ async function readUiRepoPath(agentId: string) {
 
 function extractUiActionDirectives(content: string) {
   const actions: Array<{ instruction: string; preferredTool?: string }> = [];
-  const visible = content.replace(UI_ACTION_DIRECTIVE_RE, (_match, rawJson: string) => {
+  const withoutCompleteDirectives = content.replace(UI_ACTION_DIRECTIVE_RE, (_match, rawJson: string) => {
     try {
       const parsed = JSON.parse(rawJson) as { instruction?: unknown; preferredTool?: unknown };
       if (typeof parsed.instruction === "string" && parsed.instruction.trim()) {
@@ -848,12 +979,24 @@ function extractUiActionDirectives(content: string) {
       // Leave malformed directives out of the visible transcript.
     }
     return "";
-  }).trim();
+  });
+  const visible = withoutCompleteDirectives.replace(UI_ACTION_DIRECTIVE_FRAGMENT_RE, "").trim();
   return { visible, actions };
 }
 
 function streamingDirectiveKey(sessionKey: string, runId?: string) {
   return `${sessionKey}:${runId ?? "active"}`;
+}
+
+function splitTrailingUiDirectivePrefix(content: string) {
+  const maxLength = Math.min(content.length, UI_ACTION_DIRECTIVE_START.length - 1);
+  for (let length = maxLength; length > 0; length -= 1) {
+    const suffix = content.slice(-length);
+    if (UI_ACTION_DIRECTIVE_START.startsWith(suffix)) {
+      return { visible: content.slice(0, -length), buffered: suffix };
+    }
+  }
+  return { visible: content, buffered: "" };
 }
 
 function stripUiActionDirectivesForStreaming(sessionKey: string, runId: string | undefined, content: string) {
@@ -865,12 +1008,26 @@ function stripUiActionDirectivesForStreaming(sessionKey: string, runId: string |
   while (rest.length > 0) {
     if (buffered) {
       buffered += rest;
-      const end = buffered.indexOf("-->");
-      if (end === -1) {
+      rest = "";
+
+      if (buffered.startsWith(UI_ACTION_DIRECTIVE_START)) {
+        const end = buffered.indexOf("-->");
+        if (end === -1) {
+          streamingUiDirectiveBuffers.set(key, buffered);
+          return visible;
+        }
+        rest = buffered.slice(end + 3);
+        buffered = "";
+        streamingUiDirectiveBuffers.delete(key);
+        continue;
+      }
+
+      if (UI_ACTION_DIRECTIVE_START.startsWith(buffered)) {
         streamingUiDirectiveBuffers.set(key, buffered);
         return visible;
       }
-      rest = buffered.slice(end + 3);
+
+      rest = buffered;
       buffered = "";
       streamingUiDirectiveBuffers.delete(key);
       continue;
@@ -878,7 +1035,9 @@ function stripUiActionDirectivesForStreaming(sessionKey: string, runId: string |
 
     const start = rest.indexOf(UI_ACTION_DIRECTIVE_START);
     if (start === -1) {
-      visible += rest;
+      const split = splitTrailingUiDirectivePrefix(rest);
+      visible += split.visible;
+      if (split.buffered) streamingUiDirectiveBuffers.set(key, split.buffered);
       rest = "";
       continue;
     }
@@ -898,44 +1057,30 @@ function stripUiActionDirectivesForStreaming(sessionKey: string, runId: string |
   return visible;
 }
 
-function parseHiddenUiActionTool(content: string, timestamp: number, index: number): ToolCallInfo | null {
-  if (!content.includes(HIDDEN_UI_ACTION_RESULT_MARKER) && !content.startsWith("xCloud UI action result:")) return null;
-  const toolName = content.match(/^- Tool:\s*(.+)$/m)?.[1]?.trim() || "xcloud_ui_action";
-  const ok = content.match(/^- OK:\s*(.+)$/m)?.[1]?.trim() !== "false";
-  const message = content.match(/^- Message:\s*(.+)$/m)?.[1]?.trim();
-  const output = content.match(/^- Output:\s*([\s\S]+)$/m)?.[1]?.trim() ?? message;
-
-  return {
-    id: `ui-action-history-${index}-${timestamp}`,
-    name: toolName,
-    title: toolName,
-    status: ok ? "done" : "error",
-    output,
-    timestamp,
-  };
-}
-
 async function executeUiActionDirectives(sessionKey: string, actions: Array<{ instruction: string; preferredTool?: string }>) {
   if (actions.length === 0) return;
   const agentId = extractAgentIdFromSessionKey(sessionKey);
   for (const action of actions) {
     const toolCallId = `ui-action-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    updateChatMessages(sessionKey, (messages) => [
-      ...messages,
-      {
-        id: `tool-${toolCallId}`,
-        role: "tool" as const,
-        content: "",
-        timestamp: Date.now(),
-        tool: {
-          id: toolCallId,
-          name: action.preferredTool ?? "xcloud_ui_action",
-          title: action.instruction,
-          status: "running",
-          timestamp: Date.now(),
+    const startedAt = Date.now();
+    updateChatMessages(sessionKey, (messages) =>
+      dedupeUiActionToolMessages([
+        ...messages,
+        {
+          id: `tool-${toolCallId}`,
+          role: "tool" as const,
+          content: "",
+          timestamp: startedAt,
+          tool: {
+            id: toolCallId,
+            name: action.preferredTool ?? "xcloud_ui_action",
+            title: action.instruction,
+            status: "running",
+            timestamp: startedAt,
+          },
         },
-      },
-    ]);
+      ]),
+    );
 
     const result = await executeRegisteredUiAction({ agentId, ...action }).catch((error) => ({
       ok: false,
@@ -948,20 +1093,26 @@ async function executeUiActionDirectives(sessionKey: string, actions: Array<{ in
       : typeof result.output === "string"
         ? result.output
         : JSON.stringify(result.output);
+    const finalTool: ToolCallInfo = {
+      id: toolCallId,
+      name: result.toolName ?? action.preferredTool ?? "xcloud_ui_action",
+      title: action.instruction,
+      status: result.ok ? "done" : "error",
+      output,
+      timestamp: startedAt,
+    };
+    cacheUiActionTool(sessionKey, finalTool);
 
     updateChatMessages(sessionKey, (messages) =>
-      messages.map((message) =>
-        message.role === "tool" && message.tool?.id === toolCallId
-          ? {
-              ...message,
-              tool: {
-                ...message.tool,
-                name: result.toolName ?? message.tool.name,
-                status: result.ok ? "done" : "error",
-                output,
-              },
-            }
-          : message,
+      dedupeUiActionToolMessages(
+        messages.map((message) =>
+          message.role === "tool" && message.tool?.id === toolCallId
+            ? {
+                ...message,
+                tool: finalTool,
+              }
+            : message,
+        ),
       ),
     );
 
@@ -1268,7 +1419,7 @@ function mergeHistoryWithLive(loaded: ChatMessage[], live: ChatMessage[]) {
       merged.push(message);
     }
   }
-  return merged;
+  return dedupeUiActionToolMessages(merged);
 }
 
 type HistoryMessage = {
@@ -1374,19 +1525,7 @@ function parseHistoryMessages(sessionKey: string, history: HistoryMessage[]): Ch
   for (let i = 0; i < parsed.length; i++) {
     const p = parsed[i]!;
 
-    if (p.role === "user" && (p.content.includes(HIDDEN_UI_ACTION_RESULT_MARKER) || p.content.startsWith("xCloud UI action result:"))) {
-      const tool = parseHiddenUiActionTool(p.content, p.timestamp, i);
-      if (tool) {
-        loaded.push({
-          id: `tool-${tool.id}`,
-          role: "tool",
-          content: "",
-          timestamp: tool.timestamp,
-          tool,
-        });
-      }
-      continue;
-    }
+    if (p.role === "user" && (p.content.includes(HIDDEN_UI_ACTION_RESULT_MARKER) || p.content.startsWith("xCloud UI action result:"))) continue;
 
     if (p.role === "user" && p.content.includes(HIDDEN_PROMPT_MARKER)) continue;
 
@@ -1430,7 +1569,7 @@ function parseHistoryMessages(sessionKey: string, history: HistoryMessage[]): Ch
     }
   }
 
-  return coalesceAssistantMediaMessages(loaded);
+  return dedupeUiActionToolMessages(mergeCachedUiActionTools(sessionKey, coalesceAssistantMediaMessages(loaded)));
 }
 
 function processChatEvent(engine: BrowserEngine, sessionKey: string, event: string, payload: Record<string, unknown>) {
@@ -1543,16 +1682,16 @@ function processChatEvent(engine: BrowserEngine, sessionKey: string, event: stri
           if (messages.some((message) => message.role === "tool" && message.tool?.id === toolCallId)) return messages;
           const last = messages[messages.length - 1];
           if (last?.isStreaming && last.content === "") {
-            return [
+            return dedupeUiActionToolMessages([
               ...messages.slice(0, -1),
               { id: `tool-${toolCallId}`, role: "tool" as const, content: "", timestamp: Date.now(), tool: toolInfo },
               last,
-            ];
+            ]);
           }
-          return [
+          return dedupeUiActionToolMessages([
             ...messages,
             { id: `tool-${toolCallId}`, role: "tool" as const, content: "", timestamp: Date.now(), tool: toolInfo },
-          ];
+          ]);
         });
         emitChatSessionActivity(sessionKey, { working: true });
       } else if (phase === "end") {
@@ -1602,13 +1741,16 @@ function processChatEvent(engine: BrowserEngine, sessionKey: string, event: stri
           if (messages.some((message) => message.role === "tool" && message.tool?.id === toolCallId)) return messages;
           const last = messages[messages.length - 1];
           if (last?.isStreaming && last.content === "") {
-            return [
+            return dedupeUiActionToolMessages([
               ...messages.slice(0, -1),
               { id: `tool-${toolCallId}`, role: "tool" as const, content: "", timestamp: Date.now(), tool: toolInfo },
               last,
-            ];
+            ]);
           }
-          return [...messages, { id: `tool-${toolCallId}`, role: "tool" as const, content: "", timestamp: Date.now(), tool: toolInfo }];
+          return dedupeUiActionToolMessages([
+            ...messages,
+            { id: `tool-${toolCallId}`, role: "tool" as const, content: "", timestamp: Date.now(), tool: toolInfo },
+          ]);
         });
       }
 
