@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { createTwoFilesPatch } from "diff";
 import type { BrowserEngine } from "@/lib/engine";
-import type { ChatMessage, CodeChangeInfo, ToolCallInfo } from "@/types/chat";
+import type { ChatAttachment, ChatMessage, CodeChangeInfo, ToolCallInfo } from "@/types/chat";
 import { emitAgUiEvents, openClawFrameToAgUiEvents, userMessageToAgUiEvents } from "@/lib/ag-ui-bridge";
 import { executeRegisteredUiAction, getRegisteredUiTools } from "@/lib/ui-action-registry";
 import { BaseDirectory, readTextFile } from "@tauri-apps/plugin-fs";
@@ -549,6 +549,172 @@ function stripAppContext(content: string) {
   return next.trim();
 }
 
+const MEDIA_LINE_RE = /(?:^|\n)[ \t]*MEDIA:[ \t]*`?([^\n`]+)`?[ \t]*(?=\n|$)/gi;
+const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|avif|svg)(?:[?#].*)?$/i;
+
+function filenameFromUrl(url: string) {
+  const clean = url.split("?")[0]?.split("#")[0] ?? url;
+  const name = clean.split("/").pop()?.trim();
+  return name ? decodeURIComponent(name) : undefined;
+}
+
+function isImageLikeUrl(url: string, mediaType?: string) {
+  return mediaType?.startsWith("image/") || IMAGE_EXT_RE.test(url) || url.includes("/api/chat/media/outgoing/");
+}
+
+function extractMediaAttachmentsFromText(text: string, idPrefix: string) {
+  const attachments: ChatAttachment[] = [];
+  let index = 0;
+  const visible = text.replace(MEDIA_LINE_RE, (_match, rawSource: string) => {
+    const source = rawSource.trim();
+    if (isImageLikeUrl(source)) {
+      attachments.push({
+        id: `${idPrefix}-media-${index++}`,
+        type: "file",
+        url: source,
+        mediaType: "image/*",
+        filename: filenameFromUrl(source),
+      });
+    }
+    return "\n";
+  }).trim();
+  return { visible, attachments };
+}
+
+function imageAttachmentFromBlock(block: Record<string, unknown>, id: string): ChatAttachment | undefined {
+  const url = typeof block.url === "string" ? block.url : undefined;
+  if (!url) return undefined;
+  const mediaType = typeof block.mimeType === "string"
+    ? block.mimeType
+    : typeof block.mediaType === "string"
+      ? block.mediaType
+      : "image/*";
+  if (!isImageLikeUrl(url, mediaType)) return undefined;
+
+  return {
+    id,
+    type: "file",
+    url,
+    mediaType,
+    filename: typeof block.filename === "string" ? block.filename : filenameFromUrl(url),
+    alt: typeof block.alt === "string" ? block.alt : undefined,
+    width: typeof block.width === "number" ? block.width : undefined,
+    height: typeof block.height === "number" ? block.height : undefined,
+  };
+}
+
+function attachmentKey(attachment: ChatAttachment) {
+  const fileKey = attachment.filename || attachment.alt || attachment.url.split("/").pop() || attachment.url;
+  return `${attachment.mediaType ?? ""}:${fileKey}`;
+}
+
+function isImageAttachment(attachment: ChatAttachment) {
+  return (attachment.mediaType ?? "").startsWith("image/") || isImageLikeUrl(attachment.url, attachment.mediaType);
+}
+
+function isGatewayMediaAttachment(attachment: ChatAttachment) {
+  return attachment.url.includes("/api/chat/media/outgoing/");
+}
+
+function isLocalMediaAttachment(attachment: ChatAttachment) {
+  const url = attachment.url.trim();
+  if (isGatewayMediaAttachment(attachment)) return false;
+  if (/^https?:\/\//i.test(url) || url.startsWith("data:") || url.startsWith("blob:")) return false;
+  return url.startsWith("/") || url.startsWith("~/") || /^[A-Za-z]:[\\/]/.test(url);
+}
+
+function dedupeAttachments(attachments: ChatAttachment[]) {
+  const gatewayImages = attachments.filter((attachment) => isImageAttachment(attachment) && isGatewayMediaAttachment(attachment));
+  const localImages = attachments.filter((attachment) => isImageAttachment(attachment) && isLocalMediaAttachment(attachment));
+  const normalizedAttachments = gatewayImages.length > 0
+    ? attachments.filter((attachment) => !isImageAttachment(attachment) || isGatewayMediaAttachment(attachment))
+    : localImages.length > 0
+      ? attachments.filter((attachment) => !isImageAttachment(attachment) || isLocalMediaAttachment(attachment))
+      : attachments;
+  const seen = new Set<string>();
+  return normalizedAttachments.filter((attachment) => {
+    const key = attachmentKey(attachment);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function parseMessageContent(content: unknown, idPrefix: string) {
+  let text = "";
+  let thinking = "";
+  const attachments: ChatAttachment[] = [];
+
+  if (typeof content === "string") {
+    const parsed = extractMediaAttachmentsFromText(content, idPrefix);
+    text = parsed.visible;
+    attachments.push(...parsed.attachments);
+  } else if (Array.isArray(content)) {
+    for (let index = 0; index < content.length; index++) {
+      const block = content[index];
+      if (!isRecord(block)) continue;
+      if (block.type === "text" && typeof block.text === "string") {
+        const parsed = extractMediaAttachmentsFromText(block.text, `${idPrefix}-text-${index}`);
+        text += parsed.visible;
+        attachments.push(...parsed.attachments);
+      } else if (block.type === "thinking" && typeof block.thinking === "string") {
+        thinking += `${thinking ? "\n" : ""}${block.thinking}`;
+      } else if (block.type === "image") {
+        const attachment = imageAttachmentFromBlock(block, `${idPrefix}-image-${index}`);
+        if (attachment) attachments.push(attachment);
+      }
+    }
+  }
+
+  return { text, thinking, attachments: dedupeAttachments(attachments) };
+}
+
+function mergeAttachments(existing: ChatAttachment[] | undefined, incoming: ChatAttachment[] | undefined) {
+  if (!existing?.length) return incoming;
+  if (!incoming?.length) return existing;
+
+  const all = [...existing, ...incoming];
+  const gatewayImages = all.filter((attachment) => isImageAttachment(attachment) && isGatewayMediaAttachment(attachment));
+  if (gatewayImages.length > 0) {
+    const nonGatewayImages = all.filter((attachment) =>
+      !isImageAttachment(attachment) || !isGatewayMediaAttachment(attachment),
+    );
+    return dedupeAttachments([...nonGatewayImages, ...gatewayImages]);
+  }
+
+  const localImages = all.filter((attachment) => isImageAttachment(attachment) && isLocalMediaAttachment(attachment));
+  if (localImages.length > 0) {
+    const nonImages = all.filter((attachment) => !isImageAttachment(attachment));
+    return dedupeAttachments([...nonImages, ...localImages]);
+  }
+
+  return dedupeAttachments(all);
+}
+
+function coalesceAssistantMediaMessages(messages: ChatMessage[]) {
+  const coalesced: ChatMessage[] = [];
+  for (const message of messages) {
+    const previous = coalesced[coalesced.length - 1];
+    const shouldMerge = message.role === "assistant"
+      && previous?.role === "assistant"
+      && Boolean(message.attachments?.length)
+      && Math.abs(message.timestamp - previous.timestamp) < 10_000
+      && (!message.content.trim() || message.content.trim() === previous.content.trim());
+
+    if (shouldMerge) {
+      coalesced[coalesced.length - 1] = {
+        ...previous,
+        content: previous.content || message.content,
+        attachments: mergeAttachments(previous.attachments, message.attachments),
+        timestamp: Math.max(previous.timestamp, message.timestamp),
+      };
+    } else {
+      coalesced.push(message);
+    }
+  }
+  return coalesced;
+}
+
 async function readUiRepoPath(agentId: string) {
   const configPath = `${agentWorkspacePath(agentId)}/ui-config.json`;
   const content = await readTextFile(configPath, { baseDir: BaseDirectory.Home }).catch(() => "");
@@ -984,7 +1150,7 @@ function setStreamingAssistantText(messages: ChatMessage[], text: string): ChatM
 function finishStreamingAssistant(messages: ChatMessage[]): ChatMessage[] {
   const last = messages[messages.length - 1];
   if (last?.role !== "assistant" || !last.isStreaming) return messages;
-  if (!last.content.trim() && !last.thinking) return messages.slice(0, -1);
+  if (!last.content.trim() && !last.thinking && !last.attachments?.length) return messages.slice(0, -1);
   return [...messages.slice(0, -1), { ...last, isStreaming: false }];
 }
 
@@ -994,8 +1160,8 @@ function dropStreamingAssistant(messages: ChatMessage[]): ChatMessage[] {
   return messages;
 }
 
-function applyFinalAssistantText(messages: ChatMessage[], text: string): ChatMessage[] {
-  if (!text.trim()) return finishStreamingAssistant(messages);
+function applyFinalAssistantText(messages: ChatMessage[], text: string, attachments?: ChatAttachment[]): ChatMessage[] {
+  if (!text.trim() && !attachments?.length) return finishStreamingAssistant(messages);
 
   const last = messages[messages.length - 1];
   if (last?.role === "assistant") {
@@ -1004,20 +1170,28 @@ function applyFinalAssistantText(messages: ChatMessage[], text: string): ChatMes
     if (last.isStreaming || currentText === finalText || finalText.startsWith(currentText) || currentText.startsWith(finalText)) {
       return [
         ...messages.slice(0, -1),
-        { ...last, content: text, isStreaming: false },
+        { ...last, content: text, attachments: mergeAttachments(last.attachments, attachments), isStreaming: false },
       ];
     }
   }
 
   return [
     ...finishStreamingAssistant(messages),
-    { id: `assistant-${Date.now()}`, role: "assistant", content: text, timestamp: Date.now() },
+    { id: `assistant-${Date.now()}`, role: "assistant", content: text, attachments, timestamp: Date.now() },
   ];
 }
 
 function isSameHistoryMessage(a: ChatMessage, b: ChatMessage) {
   if (a.role !== b.role) return false;
   if (a.role === "tool" || b.role === "tool") return a.tool?.id !== undefined && a.tool?.id === b.tool?.id;
+  const aAttachments = a.attachments?.map(attachmentKey).join("|") ?? "";
+  const bAttachments = b.attachments?.map(attachmentKey).join("|") ?? "";
+  return a.content === b.content && aAttachments === bAttachments && Math.abs((a.timestamp ?? 0) - (b.timestamp ?? 0)) < 60_000;
+}
+
+function isCompatibleHistoryMessage(a: ChatMessage, b: ChatMessage) {
+  if (a.role !== b.role) return false;
+  if (a.role === "tool" || b.role === "tool") return isSameHistoryMessage(a, b);
   return a.content === b.content && Math.abs((a.timestamp ?? 0) - (b.timestamp ?? 0)) < 60_000;
 }
 
@@ -1027,8 +1201,16 @@ function mergeHistoryWithLive(loaded: ChatMessage[], live: ChatMessage[]) {
 
   const merged = [...loaded];
   for (const message of live) {
-    if (message.id.startsWith("history-") && merged.some((loadedMessage) => isSameHistoryMessage(loadedMessage, message))) continue;
-    if (merged.some((loadedMessage) => isSameHistoryMessage(loadedMessage, message))) continue;
+    const compatibleIndex = merged.findIndex((loadedMessage) => isCompatibleHistoryMessage(loadedMessage, message));
+    if (compatibleIndex >= 0) {
+      const loadedMessage = merged[compatibleIndex]!;
+      merged[compatibleIndex] = {
+        ...loadedMessage,
+        thinking: loadedMessage.thinking || message.thinking,
+        attachments: mergeAttachments(loadedMessage.attachments, message.attachments),
+      };
+      continue;
+    }
     if (message.isStreaming || message.id.startsWith("user-") || message.id.startsWith("assistant-") || message.id.startsWith("tool-")) {
       merged.push(message);
     }
@@ -1050,7 +1232,7 @@ type HistoryMessage = {
 function parseHistoryMessages(sessionKey: string, history: HistoryMessage[]): ChatMessage[] {
   const toolOutputs = new Map<string, string>();
   const toolChanges = new Map<string, CodeChangeInfo[]>();
-  const parsed: Array<{ role: string; content: string; thinking?: string; tools: ToolCallInfo[]; timestamp: number }> = [];
+  const parsed: Array<{ role: string; content: string; attachments?: ChatAttachment[]; thinking?: string; tools: ToolCallInfo[]; timestamp: number }> = [];
 
   for (let i = 0; i < history.length; i++) {
     const m = history[i]!;
@@ -1094,22 +1276,16 @@ function parseHistoryMessages(sessionKey: string, history: HistoryMessage[]): Ch
 
     let content = "";
     let thinking = "";
+    let attachments: ChatAttachment[] = [];
     const msgTools: ToolCallInfo[] = [];
 
-    if (typeof m.content === "string") {
-      content = m.content;
-    } else if (Array.isArray(m.content)) {
+    const parsedContent = parseMessageContent(m.content, `history-${i}`);
+    content = parsedContent.text;
+    thinking = parsedContent.thinking;
+    attachments = parsedContent.attachments;
+
+    if (Array.isArray(m.content)) {
       const blocks = m.content as Array<{ type: string; text?: string; thinking?: string; name?: string; id?: string; arguments?: Record<string, unknown> }>;
-      content = blocks
-        .filter(b => b.type === "text" && b.text)
-        .map(b => b.text)
-        .join("");
-
-      thinking = blocks
-        .filter(b => b.type === "thinking" && b.thinking)
-        .map(b => b.thinking)
-        .join("\n");
-
       if (m.role === "assistant") {
         for (const block of blocks) {
           if (block.type === "toolCall" && block.name) {
@@ -1135,7 +1311,7 @@ function parseHistoryMessages(sessionKey: string, history: HistoryMessage[]): Ch
       }
     }
 
-    parsed.push({ role: m.role, content, thinking, tools: msgTools, timestamp: m.timestamp ?? Date.now() });
+    parsed.push({ role: m.role, content, attachments, thinking, tools: msgTools, timestamp: m.timestamp ?? Date.now() });
   }
 
   const loaded: ChatMessage[] = [];
@@ -1185,11 +1361,12 @@ function parseHistoryMessages(sessionKey: string, history: HistoryMessage[]): Ch
       pendingTools = [];
 
       const { visible } = extractUiActionDirectives(p.content);
-      if (visible.length > 0 || p.thinking) {
+      if (visible.length > 0 || p.thinking || p.attachments?.length) {
         loaded.push({
           id: `history-${i}`,
           role: "assistant",
           content: visible,
+          attachments: p.attachments,
           thinking: p.thinking || undefined,
           timestamp: p.timestamp,
         });
@@ -1197,10 +1374,10 @@ function parseHistoryMessages(sessionKey: string, history: HistoryMessage[]): Ch
     }
   }
 
-  return loaded;
+  return coalesceAssistantMediaMessages(loaded);
 }
 
-function processChatEvent(sessionKey: string, event: string, payload: Record<string, unknown>) {
+function processChatEvent(engine: BrowserEngine, sessionKey: string, event: string, payload: Record<string, unknown>) {
   const runId = typeof payload.runId === "string" ? payload.runId : undefined;
 
   if (isStopSuppressed(sessionKey)) {
@@ -1409,27 +1586,20 @@ function processChatEvent(sessionKey: string, event: string, payload: Record<str
 
     if (state === "final" && message?.role === "assistant") {
       forgetActiveRun(sessionKey, runId);
-      const content = message.content;
-      let text = "";
-      if (Array.isArray(content)) {
-        text = (content as Array<Record<string, unknown>>)
-          .filter((b) => b.type === "text" && b.text)
-          .map((b) => b.text as string)
-          .join("");
-      } else if (typeof content === "string") {
-        text = content;
-      }
+      const parsedContent = parseMessageContent(message.content, `final-${Date.now()}`);
+      const text = parsedContent.text;
 
       const { visible, actions } = extractUiActionDirectives(text);
       streamingUiDirectiveBuffers.delete(streamingDirectiveKey(sessionKey, runId));
       updateChatSession(sessionKey, (current) => {
         return {
           ...current,
-          messages: applyFinalAssistantText(current.messages, visible),
+          messages: applyFinalAssistantText(current.messages, visible, parsedContent.attachments),
           isStreaming: false,
           loading: false,
         };
       });
+      window.setTimeout(() => void refreshSessionHistory(engine, sessionKey), 350);
       void executeUiActionDirectives(sessionKey, actions);
       emitChatSessionActivity(sessionKey, { working: false });
     } else if (state === "final" || state === "aborted" || state === "error") {
@@ -1455,7 +1625,7 @@ function ensureEngineEventBridge(engine: BrowserEngine) {
     if (!payload) return;
 
     for (const sessionKey of resolveEventSessionKeys(payload)) {
-      processChatEvent(sessionKey, event, payload);
+      processChatEvent(engine, sessionKey, event, payload);
     }
   });
 }
@@ -1472,6 +1642,21 @@ function ensureEngineSessionSubscription(engine: BrowserEngine, sessionKey: stri
   void engine.subscribe(sessionKey).catch(() => {
     sessions.delete(sessionKey);
   });
+}
+
+async function refreshSessionHistory(engine: BrowserEngine, sessionKey: string) {
+  const result = await engine.rpc("chat.history", { sessionKey }).catch(() => null);
+  const history = (result as { messages?: HistoryMessage[] } | null)?.messages;
+  if (!history) return;
+
+  const loaded = parseHistoryMessages(sessionKey, history);
+  updateChatSession(sessionKey, (current) => ({
+    ...current,
+    messages: mergeHistoryWithLive(loaded, current.messages),
+    loading: false,
+    historyLoaded: true,
+    historyPromise: undefined,
+  }));
 }
 
 function ensureSessionHistory(engine: BrowserEngine, sessionKey: string) {

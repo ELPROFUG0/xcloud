@@ -69,6 +69,12 @@ export class BrowserEngine {
 
   get connected(): boolean { return this._connected; }
   get state(): ConnectionState { return this._state; }
+  get authToken(): string { return this.config.token; }
+  get httpBaseUrl(): string {
+    if (this.config.url.startsWith("wss://")) return `https://${this.config.url.slice("wss://".length).replace(/\/+$/, "")}`;
+    if (this.config.url.startsWith("ws://")) return `http://${this.config.url.slice("ws://".length).replace(/\/+$/, "")}`;
+    return this.config.url.replace(/\/+$/, "");
+  }
 
   /** Update config (e.g. after token change) and reset reconnect backoff */
   updateConfig(partial: Partial<EngineConfig>) {

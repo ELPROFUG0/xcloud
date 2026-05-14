@@ -3,6 +3,7 @@ mod engine;
 mod pty;
 
 use std::process::Command as StdCommand;
+use std::path::PathBuf;
 use tauri::Manager;
 
 #[tauri::command]
@@ -47,6 +48,36 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+#[tauri::command]
+async fn read_openclaw_media(path: String) -> Result<Vec<u8>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(|| "HOME is not available".to_string())?;
+        let media_root = home.join(".openclaw").join("media");
+        let requested = if let Some(rest) = path.strip_prefix("~/") {
+            home.join(rest)
+        } else {
+            PathBuf::from(path)
+        };
+
+        let media_root = media_root
+            .canonicalize()
+            .map_err(|e| format!("media root unavailable: {}", e))?;
+        let requested = requested
+            .canonicalize()
+            .map_err(|e| format!("media file unavailable: {}", e))?;
+
+        if !requested.starts_with(&media_root) {
+            return Err("media path is outside the OpenClaw media directory".to_string());
+        }
+
+        std::fs::read(requested).map_err(|e| format!("read media failed: {}", e))
+    })
+    .await
+    .map_err(|e| format!("media task failed: {}", e))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -87,6 +118,7 @@ pub fn run() {
             greet,
             run_shell,
             spawn_shell,
+            read_openclaw_media,
             audio::local_speech_status,
             audio::prepare_local_speech,
             audio::transcribe_audio,

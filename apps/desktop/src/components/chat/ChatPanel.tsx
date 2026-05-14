@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useMemo, useState, useCallback, memo } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { BaseDirectory, readTextFile } from "@tauri-apps/plugin-fs";
 import type { BrowserEngine } from "@/lib/engine";
 import { useChat } from "@/hooks/use-chat";
 import type { AppToolHandler } from "@/hooks/use-chat";
@@ -16,6 +18,9 @@ import { CodeBlock, CodeBlockHeader, CodeBlockTitle, CodeBlockFilename, CodeBloc
 import type { BundledLanguage } from "shiki";
 import { EmojiPicker } from "../ui/EmojiPicker";
 import { updateAgentEmoji } from "@/lib/update-identity";
+import { Attachment, AttachmentInfo, AttachmentPreview, Attachments } from "../ai-elements/attachments";
+import type { AttachmentData } from "../ai-elements/attachments";
+import type { ChatAttachment } from "@/types/chat";
 
 interface ChatPanelProps {
   engine: BrowserEngine;
@@ -94,6 +99,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
       messages.length,
       last?.id ?? "",
       last?.content.length ?? 0,
+      last?.attachments?.map((attachment) => attachment.url).join("|") ?? "",
       last?.isStreaming ? "streaming" : "idle",
       last?.tool?.status ?? "",
       last?.tool?.output?.length ?? 0,
@@ -473,6 +479,9 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
                 <div className="max-w-[85%] rounded-2xl bg-user-bubble px-4 py-2 text-[13px] leading-relaxed text-text break-words overflow-hidden">
                   {page.userMessage.content}
                 </div>
+                {page.userMessage.attachments?.length ? (
+                  <MessageAttachments attachments={page.userMessage.attachments} engine={engine} align="end" />
+                ) : null}
                 <div className={`flex items-center gap-1 mt-1 ${hoveredMsgId === page.userMessage.id ? "visible" : "invisible"}`}>
                   <span className="text-[11px] text-text-muted/70">{formatTime(page.userMessage.timestamp)}</span>
                   <CopyButton text={page.userMessage.content} />
@@ -507,7 +516,10 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
                           <Shimmer className="text-[13px]" duration={1.5}>Thinking...</Shimmer>
                         ) : null}
                       </div>
-                      {msg.content && (
+                      {msg.attachments?.length ? (
+                        <MessageAttachments attachments={msg.attachments} engine={engine} />
+                      ) : null}
+                      {(msg.content || msg.attachments?.length) && (
                         <div className={`flex items-center gap-1 mt-1 ${hoveredMsgId === msg.id ? "visible" : "invisible"}`}>
                           <CopyButton text={msg.content} />
                           <span className="text-[11px] text-text-muted/70">{formatTime(msg.timestamp)}</span>
@@ -581,6 +593,189 @@ function CopyButton({ text }: { text: string }) {
         </svg>
       )}
     </button>
+  );
+}
+
+function isAbsoluteHttpUrl(value: string) {
+  return /^https?:\/\//i.test(value);
+}
+
+function joinBaseUrl(baseUrl: string, path: string) {
+  if (isAbsoluteHttpUrl(path) || path.startsWith("blob:") || path.startsWith("data:")) return path;
+  return `${baseUrl.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+
+function isLocalMediaSource(value: string) {
+  if (!value) return false;
+  if (isAbsoluteHttpUrl(value) || value.startsWith("blob:") || value.startsWith("data:")) return false;
+  if (value.startsWith("/api/") || value.startsWith("/__openclaw__/")) return false;
+  return value.startsWith("/") || value.startsWith("~/") || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+function resolveAttachmentUrl(attachment: ChatAttachment, engine: BrowserEngine) {
+  const rawUrl = attachment.url.trim();
+  return isLocalMediaSource(rawUrl) ? rawUrl : joinBaseUrl(engine.httpBaseUrl, rawUrl);
+}
+
+function outgoingRecordId(url: string) {
+  try {
+    const parsed = new URL(url, window.location.origin);
+    const segments = parsed.pathname.split("/");
+    const outgoingIndex = segments.indexOf("outgoing");
+    const recordId = outgoingIndex >= 0 ? segments[outgoingIndex + 2] : undefined;
+    return recordId ? decodeURIComponent(recordId) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readOutgoingRecordAssetUrl(url: string) {
+  const recordId = outgoingRecordId(url);
+  if (!recordId) return null;
+
+  const content = await readTextFile(`.openclaw/media/outgoing/records/${recordId}.json`, {
+    baseDir: BaseDirectory.Home,
+  }).catch(() => "");
+  if (!content.trim()) return null;
+
+  try {
+    const record = JSON.parse(content) as { original?: { path?: string }; source?: { path?: string }; path?: string };
+    return record.original?.path ?? record.source?.path ?? record.path ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const localMediaCache = new Map<string, string>();
+const localMediaRequests = new Map<string, Promise<string | null>>();
+
+function mediaTypeForPath(path: string) {
+  if (/\.jpe?g(?:[?#].*)?$/i.test(path)) return "image/jpeg";
+  if (/\.webp(?:[?#].*)?$/i.test(path)) return "image/webp";
+  if (/\.gif(?:[?#].*)?$/i.test(path)) return "image/gif";
+  if (/\.avif(?:[?#].*)?$/i.test(path)) return "image/avif";
+  if (/\.svg(?:[?#].*)?$/i.test(path)) return "image/svg+xml";
+  return "image/png";
+}
+
+async function localMediaObjectUrl(path: string) {
+  if (localMediaCache.has(path)) return localMediaCache.get(path)!;
+  if (localMediaRequests.has(path)) return localMediaRequests.get(path)!;
+
+  const request = invoke<number[]>("read_openclaw_media", { path })
+    .then((bytes) => {
+      const objectUrl = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mediaTypeForPath(path) }));
+      localMediaCache.set(path, objectUrl);
+      return objectUrl;
+    })
+    .catch(() => null)
+    .finally(() => {
+      localMediaRequests.delete(path);
+    });
+
+  localMediaRequests.set(path, request);
+  return request;
+}
+
+async function resolveStableImageUrl(url: string, engine: BrowserEngine) {
+  const resolvedUrl = isLocalMediaSource(url) ? url : joinBaseUrl(engine.httpBaseUrl, url);
+  if (isLocalMediaSource(resolvedUrl)) return localMediaObjectUrl(resolvedUrl);
+  if (resolvedUrl.includes("/api/chat/media/outgoing/")) {
+    const localPath = await readOutgoingRecordAssetUrl(resolvedUrl);
+    return localPath ? localMediaObjectUrl(localPath) : null;
+  }
+  return resolvedUrl;
+}
+
+function isImageAttachment(attachment: ChatAttachment) {
+  return (attachment.mediaType ?? "").startsWith("image/") || /\.(?:png|jpe?g|gif|webp|avif|svg)(?:[?#].*)?$/i.test(attachment.url);
+}
+
+function MessageAttachments({ attachments, engine, align = "start" }: { attachments: ChatAttachment[]; engine: BrowserEngine; align?: "start" | "end" }) {
+  return (
+    <Attachments
+      variant="grid"
+      className={`mt-3 max-w-full ${align === "end" ? "ml-auto justify-end" : "ml-0 justify-start"}`}
+    >
+      {attachments.map((attachment) => (
+        <MessageAttachment key={attachment.id} attachment={attachment} engine={engine} />
+      ))}
+    </Attachments>
+  );
+}
+
+function MessageAttachment({ attachment, engine }: { attachment: ChatAttachment; engine: BrowserEngine }) {
+  const resolvedUrl = useMemo(() => resolveAttachmentUrl(attachment, engine), [attachment, engine]);
+  const [displayUrl, setDisplayUrl] = useState<string | null>(isImageAttachment(attachment) ? null : resolvedUrl);
+  const isImage = isImageAttachment(attachment);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!isImage) {
+      setDisplayUrl(resolvedUrl);
+      return;
+    }
+
+    setDisplayUrl(null);
+    void resolveStableImageUrl(attachment.url, engine).then((stableUrl) => {
+      if (!cancelled) setDisplayUrl(stableUrl);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [attachment.url, engine, isImage, resolvedUrl]);
+
+  const data: AttachmentData = {
+    id: attachment.id,
+    type: "file",
+    url: displayUrl ?? "",
+    mediaType: attachment.mediaType ?? (isImage ? "image/*" : "application/octet-stream"),
+    filename: attachment.filename ?? attachment.alt ?? "Attachment",
+  };
+
+  const openAttachment = (event: React.MouseEvent) => {
+    event.preventDefault();
+    import("@tauri-apps/plugin-opener").then(({ openUrl }) => openUrl(resolvedUrl)).catch(() => {});
+  };
+
+  if (isImage) {
+    return (
+      <a
+        href={resolvedUrl}
+        onClick={openAttachment}
+        className="block max-w-full rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-white/20"
+      >
+        <Attachment
+          data={data}
+          className="h-80 w-80 max-w-full overflow-hidden rounded-xl bg-transparent sm:h-96 sm:w-96"
+        >
+          {displayUrl ? (
+            <AttachmentPreview className="size-full rounded-xl bg-transparent" />
+          ) : (
+            <div className="h-full w-full animate-pulse rounded-xl bg-white/5" />
+          )}
+        </Attachment>
+      </a>
+    );
+  }
+
+  return (
+    <a
+      href={resolvedUrl}
+      onClick={openAttachment}
+      className="block max-w-full rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-white/20"
+    >
+      <Attachment
+        data={data}
+        className="!size-auto max-w-full overflow-hidden rounded-xl border border-white/10 bg-[#212121]"
+      >
+        <div className="flex min-w-56 items-center gap-3 p-3 text-[12px] text-text">
+          <AttachmentPreview />
+          <AttachmentInfo showMediaType />
+        </div>
+      </Attachment>
+    </a>
   );
 }
 

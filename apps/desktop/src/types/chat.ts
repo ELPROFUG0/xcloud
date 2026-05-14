@@ -4,11 +4,23 @@ export interface ChatMessage {
   id: string;
   role: MessageRole;
   content: string;
+  attachments?: ChatAttachment[];
   thinking?: string;
   timestamp: number;
   isStreaming?: boolean;
   tools?: ToolCallInfo[];
   tool?: ToolCallInfo;
+}
+
+export interface ChatAttachment {
+  id: string;
+  type: "file";
+  url: string;
+  mediaType?: string;
+  filename?: string;
+  alt?: string;
+  width?: number;
+  height?: number;
 }
 
 export interface ToolCallInfo {

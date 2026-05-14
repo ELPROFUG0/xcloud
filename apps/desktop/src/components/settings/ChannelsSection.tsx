@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { ChevronLeft, AlertCircle, CheckCircle, Eye, EyeOff, PlayCircle } from "lucide-react";
+import { ChevronLeft, AlertCircle, CheckCircle, Eye, EyeOff, PlayCircle, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { BrowserEngine } from "@/lib/engine";
 import type { AgentInfo } from "@/hooks/use-agents";
@@ -52,7 +52,7 @@ const CHANNELS: ChannelConfig[] = [
     id: "discord", name: "Discord", logo: discordLogo,
     description: "Add your agent as a Discord bot in your server.",
     fields: [
-      { key: "botToken", label: "Bot Token", placeholder: "MTIz...", type: "password" },
+      { key: "token", label: "Bot Token", placeholder: "MTIz...", type: "password" },
       { key: "dmPolicy", label: "DM Policy", placeholder: "pairing", type: "select", options: ["pairing", "allowlist", "open", "disabled"] },
     ],
   },
@@ -129,6 +129,8 @@ const TELEGRAM_DM_POLICIES = [
 ] as const;
 
 const BOTFATHER_URL = "https://t.me/BotFather";
+const DISCORD_DEVELOPER_PORTAL_URL = "https://discord.com/developers/applications";
+const DISCORD_BOT_PERMISSIONS = "274878024704";
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -269,7 +271,10 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
   const [telegramPairingOutput, setTelegramPairingOutput] = useState("");
   const [telegramPairingRunning, setTelegramPairingRunning] = useState(false);
   const [telegramTokenVisible, setTelegramTokenVisible] = useState(false);
+  const [discordTokenVisible, setDiscordTokenVisible] = useState(false);
+  const [discordApplicationId, setDiscordApplicationId] = useState("");
   const [showTelegramSecurity, setShowTelegramSecurity] = useState(false);
+  const [showDiscordSecurity, setShowDiscordSecurity] = useState(false);
   const [showWhatsAppSecurity, setShowWhatsAppSecurity] = useState(false);
   const [whatsAppLoginRunning, setWhatsAppLoginRunning] = useState(false);
   const [whatsAppLoginOutput, setWhatsAppLoginOutput] = useState("");
@@ -392,7 +397,11 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
 
   const saveChannel = useCallback(async (channelId: string, forceEnabled?: boolean) => {
     const rawValues = channelValues[channelId] ?? {};
-    const values = channelId === "telegram" ? { dmPolicy: "pairing", ...rawValues } : rawValues;
+    const values = channelId === "telegram"
+      ? { dmPolicy: "pairing", ...rawValues }
+      : channelId === "discord"
+        ? { dmPolicy: "pairing", groupPolicy: "open", ...rawValues }
+        : rawValues;
     const enabled = forceEnabled ?? channelEnabled[channelId] ?? false;
     if (!enabled && Object.values(values).every(v => !v.trim())) return;
 
@@ -444,7 +453,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
     setTimeout(() => setChannelSaved((prev) => ({ ...prev, [channelId]: false })), 3000);
   }, [buildTelegramAccountsPatch, buildTelegramBindingsPatch, channelValues, channelEnabled, engine]);
 
-  const listPairings = useCallback(async (channelId: "telegram" | "whatsapp") => {
+  const listPairings = useCallback(async (channelId: "telegram" | "whatsapp" | "discord") => {
     setTelegramPairingRunning(true);
     setTelegramPairingOutput("");
     try {
@@ -457,7 +466,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
     }
   }, []);
 
-  const approvePairing = useCallback(async (channelId: "telegram" | "whatsapp") => {
+  const approvePairing = useCallback(async (channelId: "telegram" | "whatsapp" | "discord") => {
     const code = telegramPairingCode.trim();
     if (!code) {
       setTelegramPairingOutput("Paste the pairing code first.");
@@ -599,7 +608,12 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
           const enabled = channelEnabled[ch.id] ?? false;
           const isTelegram = ch.id === "telegram";
           const isWhatsApp = ch.id === "whatsapp";
+          const isDiscord = ch.id === "discord";
           const hasTelegramCredential = Object.values(telegramAgentBots).some((botToken) => botToken.trim());
+          const hasDiscordCredential = Boolean((values.token ?? "").trim());
+          const discordInviteUrl = discordApplicationId.trim()
+            ? `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(discordApplicationId.trim())}&permissions=${DISCORD_BOT_PERMISSIONS}&scope=bot%20applications.commands`
+            : "";
           const selectedTelegramAgent = agents.find((agent) => agent.id === selectedTelegramAgentId) ?? agents[0];
           const mainTelegramAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
           const selectedTelegramAgentIsMain = Boolean(selectedTelegramAgent && mainTelegramAgent && selectedTelegramAgent.id === mainTelegramAgent.id);
@@ -1021,6 +1035,212 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                         void saveChannel(ch.id, true);
                       }}
                       disabled={saving}
+                      className="rounded-2xl bg-text text-bg px-8 py-2 text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+                    >
+                      {saving ? "Saving..." : saved ? "Saved" : "Save"}
+                    </button>
+                  </div>
+
+                  {error && (
+                    <div className="flex items-center gap-1 text-[10px] text-red-400">
+                      <AlertCircle className="h-3 w-3" />{error}
+                    </div>
+                  )}
+                </>
+              ) : isDiscord ? (
+                <>
+                  <div className="border-b border-border/50 py-3.5">
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#262626] text-[11px] font-medium text-text-muted">1</div>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="text-sm font-semibold text-text">Create a Discord bot</h4>
+                        <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                          Open the Discord Developer Portal, create an application, add a bot, then copy its token. Enable Message Content Intent if you want the agent to read normal message text.
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            onClick={() => window.open(DISCORD_DEVELOPER_PORTAL_URL, "_blank", "noopener,noreferrer")}
+                            className="flex h-9 items-center gap-1.5 rounded-xl bg-[#262626] px-3 text-sm font-medium text-text transition-colors hover:bg-[#2d2d2d]"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            Open Developer Portal
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="border-b border-border/50 py-3.5">
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#262626] text-[11px] font-medium text-text-muted">2</div>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="text-sm font-semibold text-text">Paste the bot token</h4>
+                        <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                          This is the token from the Bot page. OpenClaw uses it to connect to Discord Gateway and reply through the Discord API.
+                        </p>
+                        <div className="mt-3 flex items-center justify-between border-b border-border/50 py-3.5">
+                          <div className="min-w-0 mr-4">
+                            <span className="block text-sm font-medium text-text">Bot token</span>
+                            <span className="block truncate text-[10px] text-text-muted">Keep this secret; rotate it if it was shared</span>
+                          </div>
+                          <div className="relative shrink-0">
+                            <input
+                              type={discordTokenVisible ? "text" : "password"}
+                              value={values.token ?? ""}
+                              onChange={(e) => updateChannelField(ch.id, "token", e.target.value)}
+                              placeholder="MTIz..."
+                              className="h-9 w-56 rounded-xl bg-[#262626] py-1.5 pl-3 pr-9 text-sm font-mono text-text placeholder:text-text-muted focus:outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setDiscordTokenVisible((visible) => !visible)}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-text-muted transition-colors hover:text-text"
+                            >
+                              {discordTokenVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="border-b border-border/50 py-3.5">
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#262626] text-[11px] font-medium text-text-muted">3</div>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="text-sm font-semibold text-text">Invite it to your server</h4>
+                        <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                          Paste the Application ID from General Information to generate an invite link, or use OAuth2 URL Generator in Discord with bot and applications.commands selected.
+                        </p>
+                        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                          <input
+                            value={discordApplicationId}
+                            onChange={(e) => setDiscordApplicationId(e.target.value.replace(/\D/g, ""))}
+                            placeholder="Application ID"
+                            className="h-9 min-w-0 flex-1 rounded-xl bg-[#262626] px-3 text-sm font-mono text-text placeholder:text-text-muted focus:outline-none"
+                          />
+                          <button
+                            onClick={() => {
+                              if (discordInviteUrl) window.open(discordInviteUrl, "_blank", "noopener,noreferrer");
+                            }}
+                            disabled={!discordInviteUrl}
+                            className="flex h-9 items-center justify-center gap-1.5 rounded-xl bg-[#262626] px-3 text-sm font-medium text-text transition-colors hover:bg-[#2d2d2d] disabled:opacity-40"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            Open invite
+                          </button>
+                        </div>
+                        <div className="mt-3 border-t border-border/50 pt-3">
+                          <button
+                            onClick={() => setShowDiscordSecurity((value) => !value)}
+                            className="flex h-9 w-full items-center justify-between rounded-xl bg-[#262626] px-3 text-sm text-text-muted transition-colors hover:text-text"
+                          >
+                            <span>Advanced access</span>
+                            <span className="text-[10px] uppercase tracking-wide">{values.dmPolicy || "pairing"}</span>
+                          </button>
+                          {showDiscordSecurity && (
+                            <div className="mt-3 space-y-3">
+                              <div className="flex items-center justify-between border-b border-border/50 py-3.5">
+                                <div className="min-w-0 mr-4">
+                                  <span className="block text-sm font-medium text-text">Who can DM</span>
+                                  <span className="block truncate text-[10px] text-text-muted">Pairing is recommended for Discord DMs</span>
+                                </div>
+                                <select
+                                  value={values.dmPolicy || "pairing"}
+                                  onChange={(e) => updateChannelField(ch.id, "dmPolicy", e.target.value)}
+                                  className="h-9 w-48 appearance-none rounded-xl bg-[#262626] py-1.5 pl-3 pr-9 text-sm text-text transition-colors hover:bg-[#2d2d2d] focus:outline-none cursor-pointer"
+                                >
+                                  {TELEGRAM_DM_POLICIES.map((policy) => (
+                                    <option key={policy.id} value={policy.id}>{policy.label}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="flex items-center justify-between border-b border-border/50 py-3.5">
+                                <div className="min-w-0 mr-4">
+                                  <span className="block text-sm font-medium text-text">Server channels</span>
+                                  <span className="block truncate text-[10px] text-text-muted">Open is easiest; allowlist can be configured later with channel IDs</span>
+                                </div>
+                                <select
+                                  value={values.groupPolicy || "open"}
+                                  onChange={(e) => updateChannelField(ch.id, "groupPolicy", e.target.value)}
+                                  className="h-9 w-48 appearance-none rounded-xl bg-[#262626] py-1.5 pl-3 pr-9 text-sm text-text transition-colors hover:bg-[#2d2d2d] focus:outline-none cursor-pointer"
+                                >
+                                  {["open", "allowlist", "disabled"].map((policy) => (
+                                    <option key={policy} value={policy}>{policy}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              {["allowlist", "open"].includes(values.dmPolicy || "pairing") && (
+                                <div className="border-b border-border/50 py-3.5">
+                                  <div className="mb-2">
+                                    <span className="block text-sm font-medium text-text">DM allowlist</span>
+                                    <span className="block text-[10px] text-text-muted">Use Discord user IDs, mentions, or usernames separated by commas or new lines</span>
+                                  </div>
+                                  <textarea
+                                    value={values.allowFrom ?? ((values.dmPolicy || "pairing") === "open" ? "*" : "")}
+                                    onChange={(e) => updateChannelField(ch.id, "allowFrom", e.target.value)}
+                                    placeholder={"123456789012345678\n@username"}
+                                    className="min-h-20 w-full resize-none rounded-xl bg-[#262626] px-3 py-2 text-sm font-mono text-text placeholder:text-text-muted focus:outline-none"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="border-b border-border/50 py-3.5">
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#262626] text-[11px] font-medium text-text-muted">4</div>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="text-sm font-semibold text-text">Approve Discord users</h4>
+                        <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                          Ask the user to DM the bot. The agent will reply with a pairing code to paste here.
+                        </p>
+                        <div className="mt-3">
+                          <input
+                            value={telegramPairingCode}
+                            onChange={(e) => setTelegramPairingCode(e.target.value.toUpperCase())}
+                            placeholder="Pairing code, e.g. FXH8P3C7"
+                            className="h-9 w-full rounded-xl bg-[#262626] px-3 text-sm font-mono uppercase text-text placeholder:text-text-muted focus:outline-none"
+                          />
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <button
+                              onClick={() => void approvePairing("discord")}
+                              disabled={telegramPairingRunning || !telegramPairingCode.trim()}
+                              className="flex h-9 items-center gap-1.5 rounded-xl bg-text px-3 text-sm font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
+                            >
+                              <CheckCircle className="h-3.5 w-3.5" />
+                              {telegramPairingRunning ? "Approving..." : "Approve user"}
+                            </button>
+                            <button
+                              onClick={() => void listPairings("discord")}
+                              disabled={telegramPairingRunning}
+                              className="flex h-9 items-center gap-1.5 rounded-xl bg-[#262626] px-3 text-sm font-medium text-text-muted transition-colors hover:bg-white/10 hover:text-text disabled:opacity-50"
+                            >
+                              <PlayCircle className="h-3.5 w-3.5" />
+                              List pending
+                            </button>
+                          </div>
+                        </div>
+                        {telegramPairingOutput && (
+                          <pre className="mt-3 max-h-40 overflow-auto rounded-xl bg-black/30 p-3 text-[10px] leading-relaxed text-[#D4D4D4]">
+                            {telegramPairingOutput}
+                          </pre>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-center mt-4">
+                    <button
+                      onClick={() => {
+                        setChannelEnabled((prev) => ({ ...prev, [ch.id]: true }));
+                        void saveChannel(ch.id, true);
+                      }}
+                      disabled={saving || !hasDiscordCredential}
                       className="rounded-2xl bg-text text-bg px-8 py-2 text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
                     >
                       {saving ? "Saving..." : saved ? "Saved" : "Save"}
