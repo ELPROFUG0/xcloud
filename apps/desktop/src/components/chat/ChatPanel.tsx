@@ -49,6 +49,11 @@ interface Page {
   responses: ChatMessage[];
 }
 
+type ImagePreviewState = {
+  url: string;
+  alt: string;
+};
+
 function isMutationToolName(name: string) {
   const lower = name.toLowerCase();
   return lower.includes("write")
@@ -143,6 +148,8 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
 
   const { messages, isStreaming, loading, send, stop } = useChat({ engine, sessionKey: activeSession, appTools });
   const sentInitialPromptRef = useRef<string | null>(null);
+  const [imagePreview, setImagePreview] = useState<ImagePreviewState | null>(null);
+  const [imagePreviewClosing, setImagePreviewClosing] = useState(false);
 
   const pages = useMemo(() => paginate(messages), [messages]);
   const latestMessageScrollKey = useMemo(() => {
@@ -165,6 +172,29 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
   const [showSessions, setShowSessions] = useState(false);
   const [sessionList, setSessionList] = useState<Array<{ key: string; preview: string; updatedAt: number }>>([]);
   const sessionsRef = useRef<HTMLDivElement>(null);
+
+  const openImagePreview = useCallback((preview: ImagePreviewState) => {
+    setImagePreviewClosing(false);
+    setImagePreview(preview);
+  }, []);
+
+  const closeImagePreview = useCallback(() => {
+    if (!imagePreview || imagePreviewClosing) return;
+    setImagePreviewClosing(true);
+    window.setTimeout(() => {
+      setImagePreview(null);
+      setImagePreviewClosing(false);
+    }, 160);
+  }, [imagePreview, imagePreviewClosing]);
+
+  useEffect(() => {
+    if (!imagePreview) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeImagePreview();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [imagePreview, closeImagePreview]);
 
   // Load sessions for this agent
   useEffect(() => {
@@ -532,7 +562,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
                   {page.userMessage.content}
                 </div>
                 {page.userMessage.attachments?.length ? (
-                  <MessageAttachments attachments={page.userMessage.attachments} engine={engine} align="end" />
+                  <MessageAttachments attachments={page.userMessage.attachments} engine={engine} align="end" onPreviewImage={openImagePreview} />
                 ) : null}
                 <div className={`flex items-center gap-1 mt-1 ${hoveredMsgId === page.userMessage.id ? "visible" : "invisible"}`}>
                   <span className="text-[11px] text-text-muted/70">{formatTime(page.userMessage.timestamp)}</span>
@@ -569,7 +599,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
                         ) : null}
                       </div>
                       {msg.attachments?.length ? (
-                        <MessageAttachments attachments={msg.attachments} engine={engine} />
+                        <MessageAttachments attachments={msg.attachments} engine={engine} onPreviewImage={openImagePreview} />
                       ) : null}
                       {(msg.content || msg.attachments?.length) && (
                         <div className={`flex items-center gap-1 mt-1 ${hoveredMsgId === msg.id ? "visible" : "invisible"}`}>
@@ -602,6 +632,42 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
             contextIsMain={currentAgent?.isDefault}
             agentOptions={agents}
             selectedAgentId={agentId}
+          />
+        </div>
+      )}
+
+      {imagePreview && (
+        <div
+          className={`fixed inset-0 z-[80] flex items-center justify-center bg-black/75 px-6 py-8 backdrop-blur-sm ${
+            imagePreviewClosing
+              ? "animate-[imagePreviewOverlayOut_160ms_ease-in_forwards]"
+              : "animate-[imagePreviewOverlayIn_160ms_ease-out]"
+          }`}
+          onClick={closeImagePreview}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Image preview"
+        >
+          <button
+            type="button"
+            className="absolute right-5 top-5 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white/80 transition-colors hover:bg-white/16 hover:text-white"
+            onClick={(event) => {
+              event.stopPropagation();
+              closeImagePreview();
+            }}
+            aria-label="Close image preview"
+          >
+            <X className="h-4 w-4" />
+          </button>
+          <img
+            src={imagePreview.url}
+            alt={imagePreview.alt}
+            className={`max-h-full max-w-full rounded-2xl object-contain shadow-2xl ${
+              imagePreviewClosing
+                ? "animate-[imagePreviewImageOut_160ms_ease-in_forwards]"
+                : "animate-[imagePreviewImageIn_180ms_cubic-bezier(0.2,0.8,0.2,1)]"
+            }`}
+            onClick={(event) => event.stopPropagation()}
           />
         </div>
       )}
@@ -743,20 +809,38 @@ function isImageAttachment(attachment: ChatAttachment) {
   return (attachment.mediaType ?? "").startsWith("image/") || /\.(?:png|jpe?g|gif|webp|avif|svg)(?:[?#].*)?$/i.test(attachment.url);
 }
 
-function MessageAttachments({ attachments, engine, align = "start" }: { attachments: ChatAttachment[]; engine: BrowserEngine; align?: "start" | "end" }) {
+function MessageAttachments({
+  attachments,
+  engine,
+  align = "start",
+  onPreviewImage,
+}: {
+  attachments: ChatAttachment[];
+  engine: BrowserEngine;
+  align?: "start" | "end";
+  onPreviewImage: (preview: ImagePreviewState) => void;
+}) {
   return (
     <Attachments
       variant="grid"
       className={`mt-3 max-w-full ${align === "end" ? "ml-auto justify-end" : "ml-0 justify-start"}`}
     >
       {attachments.map((attachment) => (
-        <MessageAttachment key={attachment.id} attachment={attachment} engine={engine} />
+        <MessageAttachment key={attachment.id} attachment={attachment} engine={engine} onPreviewImage={onPreviewImage} />
       ))}
     </Attachments>
   );
 }
 
-function MessageAttachment({ attachment, engine }: { attachment: ChatAttachment; engine: BrowserEngine }) {
+function MessageAttachment({
+  attachment,
+  engine,
+  onPreviewImage,
+}: {
+  attachment: ChatAttachment;
+  engine: BrowserEngine;
+  onPreviewImage: (preview: ImagePreviewState) => void;
+}) {
   const resolvedUrl = useMemo(() => resolveAttachmentUrl(attachment, engine), [attachment, engine]);
   const [displayUrl, setDisplayUrl] = useState<string | null>(isImageAttachment(attachment) ? null : resolvedUrl);
   const isImage = isImageAttachment(attachment);
@@ -793,10 +877,19 @@ function MessageAttachment({ attachment, engine }: { attachment: ChatAttachment;
 
   if (isImage) {
     return (
-      <a
-        href={resolvedUrl}
-        onClick={openAttachment}
-        className="block max-w-full rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-white/20"
+      <button
+        type="button"
+        onClick={(event) => {
+          event.preventDefault();
+          if (displayUrl) {
+            onPreviewImage({
+              url: displayUrl,
+              alt: attachment.alt ?? attachment.filename ?? "Generated image",
+            });
+          }
+        }}
+        className="block max-w-full rounded-xl text-left outline-none focus-visible:ring-2 focus-visible:ring-white/20"
+        aria-label="Open image preview"
       >
         <Attachment
           data={data}
@@ -808,7 +901,7 @@ function MessageAttachment({ attachment, engine }: { attachment: ChatAttachment;
             <div className="h-full w-full animate-pulse rounded-xl bg-white/5" />
           )}
         </Attachment>
-      </a>
+      </button>
     );
   }
 
