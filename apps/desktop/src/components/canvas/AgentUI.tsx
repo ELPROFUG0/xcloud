@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { BaseDirectory, mkdir, readDir, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { homeDir } from "@tauri-apps/api/path";
-import { FolderOpen, Plus, RefreshCw, ExternalLink, ArrowLeft, ArrowRight, X, ChevronDown, MoreHorizontal } from "lucide-react";
+import { FolderOpen, Plus, RefreshCw, ExternalLink, ArrowLeft, ArrowRight, X, ChevronDown, MoreHorizontal, Share2, Copy, Check } from "lucide-react";
 import { XCLOUD_AG_UI_EVENT, xcloudCapabilities } from "@/lib/ag-ui-bridge";
 import { setRegisteredUiTools, type XCloudUiToolDefinition, type XCloudUiActionResult } from "@/lib/ui-action-registry";
 import xcloudLogo from "@/assets/xcloud-logo.svg?url";
@@ -21,6 +21,89 @@ import antigravityLogo from "@/assets/editors/antigravity.png";
 
 function shellQuote(value: string) {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+type ShareTunnelState = {
+  status: "idle" | "preparing" | "starting" | "ready" | "error";
+  url?: string;
+  pid?: number;
+  logPath?: string;
+  targetUrl?: string;
+  error?: string;
+};
+
+const TRY_CLOUDFLARE_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
+function isShareableLocalUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    return ["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"].includes(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function cloudflaredInstallScript() {
+  return `set -e
+BIN_DIR="$HOME/.openclaw/bin"
+BIN="$BIN_DIR/cloudflared"
+mkdir -p "$BIN_DIR"
+if [ -x "$BIN" ]; then
+  echo "$BIN"
+  exit 0
+fi
+
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH="$(uname -m)"
+KEY="$OS:$ARCH"
+case "$KEY" in
+  darwin:arm64)
+    URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz"
+    ARCHIVE="1"
+    ;;
+  darwin:x86_64)
+    URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz"
+    ARCHIVE="1"
+    ;;
+  linux:x86_64|linux:amd64)
+    URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+    ARCHIVE="0"
+    ;;
+  linux:aarch64|linux:arm64)
+    URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"
+    ARCHIVE="0"
+    ;;
+  *)
+    echo "Temporary share links are not supported on $OS/$ARCH yet." >&2
+    exit 2
+    ;;
+esac
+
+if ! command -v curl >/dev/null 2>&1; then
+  echo "curl is required to prepare temporary share links." >&2
+  exit 3
+fi
+
+TMP_DIR="\${TMPDIR:-/tmp}/xcloud-cloudflared-$$"
+mkdir -p "$TMP_DIR"
+cleanup() { rm -rf "$TMP_DIR"; }
+trap cleanup EXIT
+
+if [ "$ARCHIVE" = "1" ]; then
+  curl -fsSL --connect-timeout 15 --max-time 180 "$URL" -o "$TMP_DIR/cloudflared.tgz"
+  tar -xzf "$TMP_DIR/cloudflared.tgz" -C "$TMP_DIR"
+  FOUND="$(find "$TMP_DIR" -type f -name cloudflared | head -1)"
+  if [ -z "$FOUND" ]; then
+    echo "Downloaded cloudflared archive did not contain a binary." >&2
+    exit 4
+  fi
+  cp "$FOUND" "$BIN"
+else
+  curl -fsSL --connect-timeout 15 --max-time 180 "$URL" -o "$BIN"
+fi
+
+chmod 755 "$BIN"
+"$BIN" --version >/dev/null
+echo "$BIN"`;
 }
 
 async function writeShellFile(path: string, content: string) {
@@ -1051,9 +1134,12 @@ export function AgentUIContent({
   const uiToolsRef = useRef<XCloudUiToolDefinition[]>([]);
   const loadFinishTimerRef = useRef<number | null>(null);
   const menuCloseTimerRef = useRef<number | null>(null);
+  const shareTunnelRef = useRef<ShareTunnelState>({ status: "idle" });
   const [browserMenuOpen, setBrowserMenuOpen] = useState(false);
   const [browserMenuClosing, setBrowserMenuClosing] = useState(false);
   const [previewLoadPhase, setPreviewLoadPhase] = useState<"idle" | "loading" | "finishing">("idle");
+  const [shareTunnel, setShareTunnel] = useState<ShareTunnelState>({ status: "idle" });
+  const [shareCopied, setShareCopied] = useState(false);
   const pendingUiToolCallsRef = useRef(new Map<string, {
     resolve: (result: XCloudUiActionResult) => void;
     timeout: number;
@@ -1331,7 +1417,28 @@ export function AgentUIContent({
     if (menuCloseTimerRef.current !== null) {
       window.clearTimeout(menuCloseTimerRef.current);
     }
+    const activeTunnel = shareTunnelRef.current;
+    if (activeTunnel.pid) {
+      void invoke("run_shell", {
+        cmd: `kill ${activeTunnel.pid} >/dev/null 2>&1 || true`,
+      });
+    }
   }, []);
+
+  useEffect(() => {
+    shareTunnelRef.current = shareTunnel;
+  }, [shareTunnel]);
+
+  useEffect(() => {
+    if (!["preparing", "starting", "ready"].includes(shareTunnel.status)) return;
+    if (!shareTunnel.targetUrl || devServerUrl === shareTunnel.targetUrl) return;
+    if (shareTunnel.pid) {
+      void invoke("run_shell", {
+        cmd: `kill ${shareTunnel.pid} >/dev/null 2>&1 || true`,
+      });
+    }
+    setShareTunnel({ status: "idle" });
+  }, [devServerUrl, shareTunnel]);
 
   const browserButtonClass = "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-white/8 hover:text-text disabled:pointer-events-none disabled:opacity-30";
   const menuItemClass = "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[12px] text-text transition-colors hover:bg-white/6";
@@ -1388,6 +1495,184 @@ export function AgentUIContent({
       menuCloseTimerRef.current = null;
       afterClose?.();
     }, 140);
+  };
+
+  const stopShareTunnel = useCallback(async () => {
+    const activeTunnel = shareTunnelRef.current;
+    if (activeTunnel.pid) {
+      await invoke("run_shell", {
+        cmd: `kill ${activeTunnel.pid} >/dev/null 2>&1 || true`,
+      }).catch(() => {});
+    }
+    if (activeTunnel.logPath) {
+      await invoke("run_shell", {
+        cmd: `rm -f ${shellQuote(activeTunnel.logPath)}`,
+      }).catch(() => {});
+    }
+    setShareTunnel({ status: "idle" });
+    setShareCopied(false);
+  }, []);
+
+  const copyShareUrl = useCallback(async () => {
+    if (!shareTunnel.url) return;
+    await navigator.clipboard.writeText(shareTunnel.url).catch(() => {});
+    setShareCopied(true);
+    window.setTimeout(() => setShareCopied(false), 1200);
+  }, [shareTunnel.url]);
+
+  const openShareUrl = useCallback(() => {
+    if (!shareTunnel.url) return;
+    import("@tauri-apps/plugin-opener").then(({ openUrl }) => openUrl(shareTunnel.url!)).catch(() => {});
+  }, [shareTunnel.url]);
+
+  const startShareTunnel = useCallback(async () => {
+    if (!devServerUrl) {
+      setShareTunnel({ status: "error", error: "Start the local preview before sharing it." });
+      return;
+    }
+
+    if (!isShareableLocalUrl(devServerUrl)) {
+      setShareTunnel({
+        status: "error",
+        error: "Only localhost previews can be shared with a temporary URL.",
+      });
+      return;
+    }
+
+    await stopShareTunnel();
+    setShareTunnel({ status: "preparing", targetUrl: devServerUrl });
+
+    try {
+      let cloudflaredPath = (await invoke<string>("run_shell", {
+        cmd: `if [ -x "$HOME/.openclaw/bin/cloudflared" ]; then echo "$HOME/.openclaw/bin/cloudflared"; exit 0; fi
+for bin in cloudflared /opt/homebrew/bin/cloudflared /usr/local/bin/cloudflared; do
+  if command -v "$bin" >/dev/null 2>&1; then command -v "$bin"; exit 0; fi
+  if [ -x "$bin" ]; then echo "$bin"; exit 0; fi
+done
+true`,
+      })).trim();
+
+      if (!cloudflaredPath) {
+        cloudflaredPath = (await invoke<string>("run_shell", {
+          cmd: cloudflaredInstallScript(),
+        })).trim().split("\n").filter(Boolean).at(-1) ?? "";
+      }
+
+      if (!cloudflaredPath) {
+        throw new Error("Could not prepare cloudflared for temporary share links.");
+      }
+
+      const id = crypto.randomUUID().slice(0, 8);
+      const safeAgentId = agentId.replace(/[^a-z0-9_-]/gi, "-");
+      const logPath = `/tmp/xcloud-share-${safeAgentId}-${id}.log`;
+      setShareTunnel({ status: "starting", logPath, targetUrl: devServerUrl });
+      const pidText = await invoke<string>("run_shell", {
+        cmd: `rm -f ${shellQuote(logPath)}; nohup ${shellQuote(cloudflaredPath)} tunnel --url ${shellQuote(devServerUrl)} --no-autoupdate > ${shellQuote(logPath)} 2>&1 & echo $!`,
+      });
+      const pid = Number(pidText.trim());
+
+      if (!Number.isFinite(pid) || pid <= 0) {
+        setShareTunnel({
+          status: "error",
+          error: "Could not start the temporary share tunnel.",
+        });
+        return;
+      }
+
+      setShareTunnel({ status: "starting", pid, logPath, targetUrl: devServerUrl });
+
+      for (let attempt = 0; attempt < 45; attempt += 1) {
+        const log = await invoke<string>("run_shell", {
+          cmd: `cat ${shellQuote(logPath)} 2>/dev/null || true`,
+        }).catch(() => "");
+        const url = log.match(TRY_CLOUDFLARE_URL_RE)?.[0];
+        if (url) {
+          setShareTunnel({ status: "ready", url, pid, logPath, targetUrl: devServerUrl });
+          return;
+        }
+
+        if (/failed|error|unable|cannot/i.test(log) && attempt > 4) {
+          await invoke("run_shell", { cmd: `kill ${pid} >/dev/null 2>&1 || true` }).catch(() => {});
+          setShareTunnel({
+            status: "error",
+            error: log.split("\n").filter(Boolean).slice(-1)[0] ?? "Cloudflare tunnel failed to start.",
+          });
+          return;
+        }
+
+        await new Promise((resolve) => window.setTimeout(resolve, 500));
+      }
+
+      await invoke("run_shell", { cmd: `kill ${pid} >/dev/null 2>&1 || true` }).catch(() => {});
+      setShareTunnel({
+        status: "error",
+        error: "Timed out waiting for the temporary share URL.",
+      });
+    } catch (error) {
+      setShareTunnel({
+        status: "error",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [agentId, devServerUrl, stopShareTunnel]);
+
+  const renderShareStatus = () => {
+    if (shareTunnel.status === "idle") return null;
+
+    const statusText = shareTunnel.status === "preparing"
+      ? "Preparing temporary share..."
+      : shareTunnel.status === "starting"
+      ? "Creating temporary URL..."
+      : shareTunnel.status === "ready"
+        ? shareTunnel.url
+        : shareTunnel.error;
+
+    return (
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border/70 bg-[#111111] px-3">
+        <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg bg-white/[0.06] text-text-muted">
+          {shareTunnel.status === "preparing" || shareTunnel.status === "starting" ? (
+            <RefreshCw className="h-3 w-3 animate-spin" />
+          ) : shareTunnel.status === "ready" ? (
+            <Share2 className="h-3 w-3 text-[#17A7FD]" />
+          ) : (
+            <X className="h-3 w-3 text-red-400" />
+          )}
+        </div>
+        <span className={`min-w-0 flex-1 truncate text-[11px] ${
+          shareTunnel.status === "error" ? "text-red-300/85" : "text-text-muted"
+        }`}>
+          {statusText}
+        </span>
+        {shareTunnel.status === "ready" && (
+          <>
+            <button
+              type="button"
+              onClick={copyShareUrl}
+              className={browserButtonClass}
+              title="Copy share URL"
+            >
+              {shareCopied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+            </button>
+            <button
+              type="button"
+              onClick={openShareUrl}
+              className={browserButtonClass}
+              title="Open share URL"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+            </button>
+          </>
+        )}
+        <button
+          type="button"
+          onClick={shareTunnel.status === "starting" || shareTunnel.status === "ready" ? stopShareTunnel : () => setShareTunnel({ status: "idle" })}
+          className={browserButtonClass}
+          title={shareTunnel.status === "error" || shareTunnel.status === "preparing" ? "Dismiss" : "Stop sharing"}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    );
   };
 
   const renderSubHeader = () => (
@@ -1448,13 +1733,31 @@ export function AgentUIContent({
             )}
 
             {devServerUrl && (
-              <button
-                onClick={() => closeBrowserMenu(openInBrowser)}
-                className={menuItemClass}
-              >
-                <ExternalLink className="h-3.5 w-3.5" />
-                Open
-              </button>
+              <>
+                <button
+                  onClick={() => closeBrowserMenu(startShareTunnel)}
+                  className={menuItemClass}
+                >
+                  <Share2 className="h-3.5 w-3.5" />
+                  {shareTunnel.status === "ready" ? "Restart Share" : "Share"}
+                </button>
+                {shareTunnel.status === "ready" && (
+                  <button
+                    onClick={() => closeBrowserMenu(copyShareUrl)}
+                    className={menuItemClass}
+                  >
+                    {shareCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    Copy Link
+                  </button>
+                )}
+                <button
+                  onClick={() => closeBrowserMenu(openInBrowser)}
+                  className={menuItemClass}
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  Open
+                </button>
+              </>
             )}
 
             <button
@@ -1504,6 +1807,7 @@ export function AgentUIContent({
     return (
       <div className="flex min-h-0 flex-1 flex-col bg-[#111111]">
         {renderSubHeader()}
+        {renderShareStatus()}
         <div className="relative min-h-0 flex-1 bg-[#111111]">
           {devServerLoading ? (
             <div className="flex h-full items-center justify-center">
