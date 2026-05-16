@@ -38,6 +38,58 @@ export function isRedundantMutationTool(message: ChatMessage, pageHasCodeChanges
   return !output || output.includes("success") || output.includes("updated") || output.includes("written");
 }
 
+function normalizeChangePath(path: string) {
+  return path.replace(/\\/g, "/").replace(/^\/Users\/[^/]+\//, "~/");
+}
+
+function codeChangeSignature(message: ChatMessage) {
+  if (message.role !== "tool" || !message.tool?.changes?.length) return null;
+  return message.tool.changes
+    .map((change) => [
+      normalizeChangePath(change.path),
+      change.kind ?? "",
+      change.diff?.trim() || `${change.additions}:${change.deletions}:${change.firstChangedLine ?? ""}`,
+    ].join("::"))
+    .sort()
+    .join("\n---file---\n");
+}
+
+function codeChangeToolScore(message: ChatMessage) {
+  const tool = message.role === "tool" ? message.tool : undefined;
+  if (!tool?.changes?.length) return 0;
+  let score = 0;
+  if (tool.status === "done") score += 40;
+  if (tool.status === "error") score += 20;
+  if (tool.status === "running") score += 5;
+  if (tool.output) score += 4;
+  score += tool.changes.filter((change) => change.diff).length * 3;
+  return score;
+}
+
+export function dedupeDuplicateCodeChangeTools(messages: ChatMessage[]) {
+  const chosenBySignature = new Map<string, ChatMessage>();
+  for (const message of messages) {
+    const signature = codeChangeSignature(message);
+    if (!signature) continue;
+    const current = chosenBySignature.get(signature);
+    if (!current || codeChangeToolScore(message) >= codeChangeToolScore(current)) {
+      chosenBySignature.set(signature, message);
+    }
+  }
+
+  if (chosenBySignature.size === 0) return messages;
+
+  const emitted = new Set<string>();
+  return messages.filter((message) => {
+    const signature = codeChangeSignature(message);
+    if (!signature) return true;
+    const chosen = chosenBySignature.get(signature);
+    if (!chosen || emitted.has(signature) || chosen.id !== message.id) return false;
+    emitted.add(signature);
+    return true;
+  });
+}
+
 export function paginate(messages: ChatMessage[]): Page[] {
   const pages: Page[] = [];
   let current: Page | null = null;
