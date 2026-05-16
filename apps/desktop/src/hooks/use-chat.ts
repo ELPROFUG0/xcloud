@@ -400,6 +400,9 @@ const LEGACY_UI_ACTION_TOOL_CACHE_KEY = "xcloudUiActionToolCards";
 const UI_ACTION_TOOL_CACHE_KEY = "xcloudUiActionToolCards.v2";
 const CODE_CHANGE_CACHE_LIMIT = 200;
 const UI_ACTION_TOOL_CACHE_LIMIT = 200;
+const UI_ACTION_DUPLICATE_WINDOW_MS = 8_000;
+const LIVE_HISTORY_ECHO_WINDOW_MS = 8_000;
+const ASSISTANT_ECHO_WINDOW_MS = 2_500;
 const UI_ACTION_DIRECTIVE_FRAGMENT_RE = /<!--\s*xcloud:ui-action\b[\s\S]*?(?:-->|$)/g;
 
 type CodeChangeCache = Record<string, { updatedAt: number; changes: CodeChangeInfo[] }>;
@@ -488,7 +491,11 @@ function cacheUiActionTool(sessionKey: string, tool: ToolCallInfo) {
   const nextSignature = uiActionToolSignature(tool);
   const nextTools = [
     tool,
-    ...current.filter((item) => item.id !== tool.id && (!nextSignature || uiActionToolSignature(item) !== nextSignature)),
+    ...current.filter((item) => {
+      if (item.id === tool.id) return false;
+      if (!nextSignature || uiActionToolSignature(item) !== nextSignature) return true;
+      return Math.abs(item.timestamp - tool.timestamp) > UI_ACTION_DUPLICATE_WINDOW_MS;
+    }),
   ];
   cache[sessionKey] = {
     updatedAt: Date.now(),
@@ -538,23 +545,27 @@ function pickUiActionToolMessage(a: ChatMessage, b: ChatMessage) {
 }
 
 function dedupeUiActionToolMessages(messages: ChatMessage[]) {
-  const chosenBySignature = new Map<string, ChatMessage>();
+  const chosenByOccurrence = new Map<string, ChatMessage>();
 
   for (const message of messages) {
     const signature = message.role === "tool" ? uiActionToolSignature(message.tool) : null;
     if (!signature) continue;
-    const existing = chosenBySignature.get(signature);
-    chosenBySignature.set(signature, existing ? pickUiActionToolMessage(existing, message) : message);
+    const bucket = Math.floor(message.timestamp / UI_ACTION_DUPLICATE_WINDOW_MS);
+    const key = `${signature}:${bucket}`;
+    const existing = chosenByOccurrence.get(key);
+    chosenByOccurrence.set(key, existing ? pickUiActionToolMessage(existing, message) : message);
   }
 
-  if (chosenBySignature.size === 0) return messages;
+  if (chosenByOccurrence.size === 0) return messages;
   const emitted = new Set<string>();
   return messages.filter((message) => {
     const signature = message.role === "tool" ? uiActionToolSignature(message.tool) : null;
     if (!signature) return true;
-    const chosen = chosenBySignature.get(signature);
-    if (!chosen || emitted.has(signature) || chosen.id !== message.id) return false;
-    emitted.add(signature);
+    const bucket = Math.floor(message.timestamp / UI_ACTION_DUPLICATE_WINDOW_MS);
+    const key = `${signature}:${bucket}`;
+    const chosen = chosenByOccurrence.get(key);
+    if (!chosen || emitted.has(key) || chosen.id !== message.id) return false;
+    emitted.add(key);
     return true;
   });
 }
@@ -565,7 +576,16 @@ function mergeCachedUiActionTools(sessionKey: string, messages: ChatMessage[]) {
 
   const existingIds = new Set(messages.map((message) => message.role === "tool" ? message.tool?.id : undefined).filter(Boolean));
   const cachedMessages = cachedTools
-    .filter((tool) => !existingIds.has(tool.id))
+    .filter((tool) => {
+      if (existingIds.has(tool.id)) return false;
+      const signature = uiActionToolSignature(tool);
+      if (!signature) return true;
+      return !messages.some((message) => (
+        message.role === "tool"
+        && uiActionToolSignature(message.tool) === signature
+        && Math.abs(message.timestamp - tool.timestamp) <= UI_ACTION_DUPLICATE_WINDOW_MS
+      ));
+    })
     .map((tool): ChatMessage => ({
       id: `tool-${tool.id}`,
       role: "tool",
@@ -575,7 +595,7 @@ function mergeCachedUiActionTools(sessionKey: string, messages: ChatMessage[]) {
     }));
 
   if (cachedMessages.length === 0) return messages;
-  return dedupeUiActionToolMessages([...messages, ...cachedMessages].sort((a, b) => a.timestamp - b.timestamp));
+  return normalizeMessageTimeline(dedupeUiActionToolMessages([...messages, ...cachedMessages]));
 }
 
 async function startCodeChangeSnapshot(sessionKey: string, toolCallId: string, args?: Record<string, unknown>) {
@@ -1385,18 +1405,116 @@ function applyFinalAssistantText(messages: ChatMessage[], text: string, attachme
   ];
 }
 
+function attachmentListSignature(attachments?: ChatAttachment[]) {
+  return attachments?.map(attachmentKey).join("|") ?? "";
+}
+
+function isHistoryMessage(message: ChatMessage) {
+  return message.id.startsWith("history-");
+}
+
+function isSyntheticLiveMessage(message: ChatMessage) {
+  return /^(user|assistant|assistant-error|tool)-/.test(message.id);
+}
+
+function isSameVisibleMessage(a: ChatMessage, b: ChatMessage) {
+  return a.role === b.role
+    && a.content === b.content
+    && attachmentListSignature(a.attachments) === attachmentListSignature(b.attachments);
+}
+
+function isLiveHistoryEcho(a: ChatMessage, b: ChatMessage) {
+  if (a.role === "tool" || b.role === "tool") return false;
+  if (!isSameVisibleMessage(a, b)) return false;
+  if (Math.abs(a.timestamp - b.timestamp) > LIVE_HISTORY_ECHO_WINDOW_MS) return false;
+  return (isHistoryMessage(a) && isSyntheticLiveMessage(b)) || (isHistoryMessage(b) && isSyntheticLiveMessage(a));
+}
+
+function isAssistantFinalEcho(a: ChatMessage, b: ChatMessage) {
+  if (a.role !== "assistant" || b.role !== "assistant") return false;
+  if (!a.content.trim() || !b.content.trim()) return false;
+  if (!isSameVisibleMessage(a, b)) return false;
+  if (Math.abs(a.timestamp - b.timestamp) > ASSISTANT_ECHO_WINDOW_MS) return false;
+  return isSyntheticLiveMessage(a) || isSyntheticLiveMessage(b);
+}
+
+function mergeEchoMessage(a: ChatMessage, b: ChatMessage) {
+  const preferred = isHistoryMessage(a) ? a : isHistoryMessage(b) ? b : a.timestamp <= b.timestamp ? a : b;
+  const other = preferred === a ? b : a;
+  return {
+    ...preferred,
+    content: preferred.content || other.content,
+    thinking: preferred.thinking || other.thinking,
+    attachments: mergeAttachments(preferred.attachments, other.attachments),
+    isStreaming: Boolean(preferred.isStreaming && other.isStreaming),
+    timestamp: Math.min(preferred.timestamp, other.timestamp),
+  };
+}
+
+function mergeToolMessage(existing: ChatMessage, incoming: ChatMessage): ChatMessage {
+  if (existing.role !== "tool" || incoming.role !== "tool" || !existing.tool || !incoming.tool) return existing;
+  return {
+    ...existing,
+    timestamp: Math.min(existing.timestamp, incoming.timestamp),
+    tool: {
+      ...existing.tool,
+      ...incoming.tool,
+      args: incoming.tool.args ?? existing.tool.args,
+      output: incoming.tool.output ?? existing.tool.output,
+      changes: mergeCodeChanges(existing.tool.changes, incoming.tool.changes),
+      status: incoming.tool.status === "done" || existing.tool.status === "done"
+        ? "done"
+        : incoming.tool.status === "error" || existing.tool.status === "error"
+          ? "error"
+          : "running",
+      timestamp: Math.min(existing.tool.timestamp, incoming.tool.timestamp),
+    },
+  };
+}
+
+function normalizeMessageTimeline(messages: ChatMessage[]) {
+  const ordered = messages
+    .map((message, index) => ({ message, index }))
+    .sort((a, b) => {
+      const timeDelta = a.message.timestamp - b.message.timestamp;
+      if (timeDelta !== 0) return timeDelta;
+      return a.index - b.index;
+    });
+
+  const normalized: ChatMessage[] = [];
+  for (const { message } of ordered) {
+    if (message.role === "tool" && message.tool?.id) {
+      const existingIndex = normalized.findIndex((candidate) => candidate.role === "tool" && candidate.tool?.id === message.tool?.id);
+      if (existingIndex >= 0) {
+        normalized[existingIndex] = mergeToolMessage(normalized[existingIndex]!, message);
+        continue;
+      }
+    }
+
+    const echoIndex = normalized.findIndex((candidate) => isLiveHistoryEcho(candidate, message) || isAssistantFinalEcho(candidate, message));
+    if (echoIndex >= 0) {
+      normalized[echoIndex] = mergeEchoMessage(normalized[echoIndex]!, message);
+      continue;
+    }
+
+    normalized.push(message);
+  }
+
+  return normalized;
+}
+
 function isSameHistoryMessage(a: ChatMessage, b: ChatMessage) {
   if (a.role !== b.role) return false;
   if (a.role === "tool" || b.role === "tool") return a.tool?.id !== undefined && a.tool?.id === b.tool?.id;
-  const aAttachments = a.attachments?.map(attachmentKey).join("|") ?? "";
-  const bAttachments = b.attachments?.map(attachmentKey).join("|") ?? "";
-  return a.content === b.content && aAttachments === bAttachments && Math.abs((a.timestamp ?? 0) - (b.timestamp ?? 0)) < 60_000;
+  const aAttachments = attachmentListSignature(a.attachments);
+  const bAttachments = attachmentListSignature(b.attachments);
+  return a.content === b.content && aAttachments === bAttachments && Math.abs((a.timestamp ?? 0) - (b.timestamp ?? 0)) <= LIVE_HISTORY_ECHO_WINDOW_MS;
 }
 
 function isCompatibleHistoryMessage(a: ChatMessage, b: ChatMessage) {
   if (a.role !== b.role) return false;
   if (a.role === "tool" || b.role === "tool") return isSameHistoryMessage(a, b);
-  return a.content === b.content && Math.abs((a.timestamp ?? 0) - (b.timestamp ?? 0)) < 60_000;
+  return isLiveHistoryEcho(a, b) || isAssistantFinalEcho(a, b);
 }
 
 function mergeHistoryWithLive(loaded: ChatMessage[], live: ChatMessage[]) {
@@ -1419,7 +1537,7 @@ function mergeHistoryWithLive(loaded: ChatMessage[], live: ChatMessage[]) {
       merged.push(message);
     }
   }
-  return dedupeUiActionToolMessages(merged);
+  return normalizeMessageTimeline(dedupeUiActionToolMessages(merged));
 }
 
 type HistoryMessage = {
@@ -1569,7 +1687,7 @@ function parseHistoryMessages(sessionKey: string, history: HistoryMessage[]): Ch
     }
   }
 
-  return dedupeUiActionToolMessages(mergeCachedUiActionTools(sessionKey, coalesceAssistantMediaMessages(loaded)));
+  return normalizeMessageTimeline(dedupeUiActionToolMessages(mergeCachedUiActionTools(sessionKey, coalesceAssistantMediaMessages(loaded))));
 }
 
 function processChatEvent(engine: BrowserEngine, sessionKey: string, event: string, payload: Record<string, unknown>) {
