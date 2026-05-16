@@ -10,6 +10,8 @@
     "tools": [
       "xcloud_context",
       "xcloud_ui_action",
+      "xcloud_agent_create",
+      "xcloud_agent_ui_create",
       "workspace_agent_create"
     ]
   },

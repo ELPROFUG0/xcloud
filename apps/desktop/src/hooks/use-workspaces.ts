@@ -159,6 +159,7 @@ Workspace operating rules:
 - When enough context is clear, create real persistent specialists with the workspace_agent_create tool. Do not stop at only writing TEAM.md, MEMORY.md, or local notes.
 - Specialist agent ids must start with "${workspace.id}-" so Unicore can attach them to this workspace tree.
 - For every specialist, provide tailored IDENTITY.md, SOUL.md, AGENTS.md, PROJECT_BRIEF.md, and SOURCE_SPEC.md content through workspace_agent_create. Do not use a fixed template unless it genuinely fits the project.
+- If the user asks a specialist to have its own UI, interface, preview, or app, set createUi: true in workspace_agent_create. That UI belongs in the specialist agent's own OpenClaw agent folder, never in this workspace main UI repo.
 - If a task belongs to a specialist, delegate or route it to the linked agent when OpenClaw session/subagent tools are available; otherwise say clearly which linked agent should own it.
 - If the user asks for recurring work, create or propose the real automation/cron schedule.
 - If a task needs an external app like X/Twitter, verify whether the integration is connected. If it is not connected, ask the user to connect it. Never publish externally without explicit approval unless the user configured auto-publish.

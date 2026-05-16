@@ -12,6 +12,8 @@ const UNICORE_WORKSPACE_PLUGIN_ID: &str = "unicore-workspace";
 const WORKSPACE_AGENT_CREATE_TOOL: &str = "workspace_agent_create";
 const XCLOUD_CONTEXT_TOOL: &str = "xcloud_context";
 const XCLOUD_UI_ACTION_TOOL: &str = "xcloud_ui_action";
+const XCLOUD_AGENT_CREATE_TOOL: &str = "xcloud_agent_create";
+const XCLOUD_AGENT_UI_CREATE_TOOL: &str = "xcloud_agent_ui_create";
 const UNICORE_WORKSPACE_PLUGIN_JSON: &str =
     include_str!("../unicore-openclaw-extensions/unicore-workspace/openclaw.plugin.json");
 const UNICORE_WORKSPACE_PLUGIN_INDEX: &str =
@@ -290,6 +292,8 @@ fn ensure_unicore_workspace_config() -> Result<bool, String> {
             WORKSPACE_AGENT_CREATE_TOOL,
             XCLOUD_CONTEXT_TOOL,
             XCLOUD_UI_ACTION_TOOL,
+            XCLOUD_AGENT_CREATE_TOOL,
+            XCLOUD_AGENT_UI_CREATE_TOOL,
         ] {
             if !also_allow
                 .iter()

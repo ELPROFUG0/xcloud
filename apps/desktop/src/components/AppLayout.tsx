@@ -60,6 +60,13 @@ const MAIN_AGENT_ID = "main";
 const DELETED_AGENTS_KEY = "xcloudDeletedAgents";
 const UNICORE_WORKSPACE_PLUGIN_ID = "unicore-workspace";
 const WORKSPACE_AGENT_CREATE_TOOL = "workspace_agent_create";
+const UNICORE_ALLOWED_TOOLS = [
+  "xcloud_context",
+  "xcloud_ui_action",
+  "xcloud_agent_create",
+  "xcloud_agent_ui_create",
+  WORKSPACE_AGENT_CREATE_TOOL,
+];
 
 interface TerminalContextState {
   visible: boolean;
@@ -200,9 +207,10 @@ function withUnicoreWorkspaceSupport(config: Record<string, unknown>) {
   const currentAlsoAllow = Array.isArray(tools.alsoAllow)
     ? tools.alsoAllow.map(String).filter(Boolean)
     : [];
-  const nextAlsoAllow = currentAlsoAllow.includes(WORKSPACE_AGENT_CREATE_TOOL)
-    ? currentAlsoAllow
-    : [...currentAlsoAllow, WORKSPACE_AGENT_CREATE_TOOL];
+  const nextAlsoAllow = [
+    ...currentAlsoAllow,
+    ...UNICORE_ALLOWED_TOOLS.filter((toolName) => !currentAlsoAllow.includes(toolName)),
+  ];
 
   const nextConfig = {
     ...config,

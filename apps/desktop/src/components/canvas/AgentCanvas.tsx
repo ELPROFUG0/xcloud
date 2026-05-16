@@ -178,6 +178,12 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
   // Agent UI state
   const agentUI = useAgentUI(agentId, wsPath);
 
+  useEffect(() => {
+    if (agentUI.autoOpenRevision <= 0 || !agentUI.repoPath) return;
+    setTab("ui");
+    agentUI.launchPreview();
+  }, [agentUI.autoOpenRevision]);
+
   // Resize observer
   useLayoutEffect(() => {
     if (!containerRef.current) return;

@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, useEffect, useCallback, useLayoutEffect } from "react";
 import ForceGraph2D from "react-force-graph-2d";
 import type { AgentInfo } from "@/hooks/use-agents";
-import { getWorkspaceDir, type WorkspaceInfo } from "@/hooks/use-workspaces";
+import { getWorkspaceAgentId, getWorkspaceDir, type WorkspaceInfo } from "@/hooks/use-workspaces";
 import { BaseDirectory, readTextFile } from "@tauri-apps/plugin-fs";
 import { AgentUIContent, useAgentUI } from "./AgentUI";
 import type { DetailPanel } from "./AgentCanvas";
@@ -39,7 +39,8 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
   const labelOffsets = useRef<Record<string, number>>({});
   const animFrameRef = useRef<number>(0);
   const [, forceRender] = useState(0);
-  const workspaceUI = useAgentUI("main", ".openclaw/workspace");
+  const workspaceAgentId = getWorkspaceAgentId(workspace.id);
+  const workspaceUI = useAgentUI(workspaceAgentId, getWorkspaceDir(workspace.id));
   const canvasTabs = useMemo(() => [
     { id: "canvas" as const, label: "Canvas" },
     { id: "ui" as const, label: "UI" },
@@ -152,6 +153,12 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
       cancelAnimationFrame(animFrameRef.current);
     };
   }, [activeNode]);
+
+  useEffect(() => {
+    if (workspaceUI.autoOpenRevision <= 0 || !workspaceUI.repoPath) return;
+    setTab("ui");
+    workspaceUI.launchPreview();
+  }, [workspaceUI.autoOpenRevision]);
 
   const connectedNodes = useMemo(() => {
     if (!activeNode) return new Set<string>();

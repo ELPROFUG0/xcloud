@@ -32,6 +32,14 @@ type ShareTunnelState = {
   error?: string;
 };
 
+type AgentUiConfig = {
+  repoPath?: string;
+  port?: number;
+  ownerAgentId?: string;
+  openInPreview?: boolean;
+  updatedAt?: string;
+};
+
 const TRY_CLOUDFLARE_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
 function isShareableLocalUrl(url: string) {
   try {
@@ -801,7 +809,9 @@ export function useAgentUI(_agentId: string, wsPath: string) {
   const [devServerLoading, setDevServerLoading] = useState(false);
   const [uiView, setUiView] = useState<"menu" | "create" | "preview">("menu");
   const [hasProject, setHasProject] = useState(false);
+  const [autoOpenRevision, setAutoOpenRevision] = useState(0);
   const [home, setHome] = useState<string>("");
+  const lastConfigSignatureRef = useRef("");
 
   const configPath = `${wsPath}/ui-config.json`;
   const fullConfigPath = home ? `${home.replace(/\/$/, "")}/${configPath}` : "";
@@ -812,37 +822,18 @@ export function useAgentUI(_agentId: string, wsPath: string) {
       .catch(() => setHome(""));
   }, []);
 
-  // Load saved config
-  useEffect(() => {
-    if (!fullConfigPath) return;
-    invoke<string>("run_shell", { cmd: `cat "${fullConfigPath}" 2>/dev/null || echo "{}"` })
-      .then(async (content) => {
-        const config = JSON.parse(content);
-        if (config.repoPath) {
-          setRepoPath(config.repoPath);
-          // Check if project has package.json with dev script
-          const pkgCheck = await invoke<string>("run_shell", { cmd: `grep -q '"dev"' "${config.repoPath}/package.json" 2>/dev/null && echo "yes" || echo "no"` }).catch(() => "no");
-          setHasProject(pkgCheck.trim() === "yes");
-          if (config.port) {
-            try {
-              const status = await invoke<string>("run_shell", {
-                cmd: `curl -s -o /dev/null -w "%{http_code}" http://localhost:${config.port} 2>/dev/null || echo "0"`,
-              });
-              if (["200", "304", "302"].includes(status.trim())) {
-                setDevServerUrl(`http://localhost:${config.port}`);
-                setUiView("preview");
-              }
-            } catch { /* */ }
-          }
-        }
-      })
-      .catch(() => {});
-  }, [fullConfigPath]);
-
   // Save config
   const saveConfig = useCallback(async (path: string, port?: number) => {
     if (!fullConfigPath) return;
-    const config = { repoPath: path, ...(port ? { port } : {}) };
+    const existingRaw = await invoke<string>("run_shell", { cmd: `cat "${fullConfigPath}" 2>/dev/null || echo "{}"` }).catch(() => "{}");
+    let existing: AgentUiConfig = {};
+    try {
+      existing = JSON.parse(existingRaw) as AgentUiConfig;
+    } catch {
+      existing = {};
+    }
+    const config: AgentUiConfig = { ...existing, repoPath: path, ...(port ? { port } : {}) };
+    delete config.openInPreview;
     await invoke("run_shell", { cmd: `echo '${JSON.stringify(config)}' > "${fullConfigPath}"` }).catch(() => {});
   }, [fullConfigPath]);
 
@@ -895,15 +886,107 @@ export function useAgentUI(_agentId: string, wsPath: string) {
 
       const htmlContent = await readTextFile(`${cleanPath}/index.html`).catch(() => "");
       if (htmlContent) {
-        setDevServerUrl(`file://${cleanPath}/index.html`);
-        setDevServerLoading(false);
-        return;
+        const port = savedPort ?? (3100 + Math.floor(Math.random() * 900));
+        await invoke("spawn_shell", {
+          cmd: `cd ${shellQuote(cleanPath)} && if command -v python3 >/dev/null 2>&1; then python3 -m http.server ${port} --bind 127.0.0.1; elif command -v python >/dev/null 2>&1; then python -m http.server ${port} --bind 127.0.0.1; else npx --yes serve . -l ${port}; fi`,
+        }).catch(() => {});
+        saveConfig(path, port);
+
+        let retries = 0;
+        while (retries < 20) {
+          try {
+            const status = await invoke<string>("run_shell", {
+              cmd: `curl -s -o /dev/null -w "%{http_code}" http://localhost:${port}/index.html 2>/dev/null || echo "0"`,
+            });
+            if (["200", "304", "302"].includes(status.trim())) {
+              setDevServerUrl(`http://localhost:${port}/index.html`);
+              setDevServerLoading(false);
+              return;
+            }
+          } catch { /* */ }
+          retries++;
+          await new Promise(r => setTimeout(r, 500));
+        }
       }
       setDevServerLoading(false);
     } catch {
       setDevServerLoading(false);
     }
   }, [saveConfig]);
+
+  const loadSavedConfig = useCallback(async (initial = false) => {
+    if (!fullConfigPath) return;
+    const content = await invoke<string>("run_shell", { cmd: `cat "${fullConfigPath}" 2>/dev/null || echo "{}"` }).catch(() => "{}");
+    let config: AgentUiConfig = {};
+    try {
+      config = JSON.parse(content) as AgentUiConfig;
+    } catch {
+      config = {};
+    }
+
+    const nextRepoPath = typeof config.repoPath === "string" && config.repoPath.trim()
+      ? config.repoPath.trim()
+      : null;
+    const nextPort = Number.isFinite(Number(config.port)) ? Number(config.port) : undefined;
+    const signature = nextRepoPath ? `${nextRepoPath}:${nextPort ?? ""}:${config.updatedAt ?? ""}:${config.openInPreview ? "open" : ""}` : "";
+    const changed = lastConfigSignatureRef.current !== signature;
+    lastConfigSignatureRef.current = signature;
+
+    if (!nextRepoPath) {
+      setRepoPath(null);
+      setDevServerUrl(null);
+      setHasProject(false);
+      setUiView("menu");
+      return;
+    }
+
+    setRepoPath(nextRepoPath);
+    const projectCheck = await invoke<string>("run_shell", {
+      cmd: `(([ -f "${nextRepoPath}/package.json" ] && (grep -q '"dev"' "${nextRepoPath}/package.json" || grep -q '"start"' "${nextRepoPath}/package.json")) || [ -f "${nextRepoPath}/index.html" ]) && echo yes || echo no`,
+    }).catch(() => "no");
+    setHasProject(projectCheck.trim() === "yes");
+
+    let running = false;
+    if (nextPort) {
+      const status = await invoke<string>("run_shell", {
+        cmd: `curl -s -o /dev/null -w "%{http_code}" http://localhost:${nextPort} 2>/dev/null || echo "0"`,
+      }).catch(() => "0");
+      running = ["200", "304", "302"].includes(status.trim());
+      if (running) setDevServerUrl(`http://localhost:${nextPort}`);
+    }
+
+    const autoOpenKey = `xcloud-ui-auto-open:${fullConfigPath}:${config.updatedAt ?? signature}`;
+    const requestedAutoOpen = config.openInPreview === true && !sessionStorage.getItem(autoOpenKey);
+    const shouldOpen = requestedAutoOpen || (!initial && changed);
+    if (shouldOpen) {
+      if (requestedAutoOpen) sessionStorage.setItem(autoOpenKey, "1");
+      setUiView("preview");
+      setAutoOpenRevision((value) => value + 1);
+      if (!running && !devServerUrl && !devServerLoading) {
+        setDevServerLoading(true);
+        void startDevServer(nextRepoPath, nextPort);
+      }
+    }
+  }, [devServerLoading, devServerUrl, fullConfigPath, startDevServer]);
+
+  useEffect(() => {
+    if (!fullConfigPath) return;
+    lastConfigSignatureRef.current = "";
+    void loadSavedConfig(true);
+    const timer = window.setInterval(() => {
+      void loadSavedConfig(false);
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [fullConfigPath, loadSavedConfig]);
+
+  useEffect(() => {
+    if (uiView !== "preview" || !repoPath || devServerUrl || devServerLoading) return;
+    const timer = window.setInterval(() => {
+      setDevServerLoading(true);
+      void startDevServer(repoPath);
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [devServerLoading, devServerUrl, repoPath, startDevServer, uiView]);
 
   // Select repo
   const selectRepo = useCallback(async () => {
@@ -966,7 +1049,7 @@ export function useAgentUI(_agentId: string, wsPath: string) {
 
   return {
     agentId: _agentId,
-    repoPath, devServerUrl, devServerLoading, uiView, hasProject,
+    repoPath, devServerUrl, devServerLoading, uiView, hasProject, autoOpenRevision,
     setUiView, selectRepo, disconnectRepo, launchPreview, createUI,
   };
 }
