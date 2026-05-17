@@ -17,6 +17,7 @@ import { WorkspaceCanvas } from "./canvas/WorkspaceCanvas";
 import { SettingsPanel } from "./SettingsPanel";
 import { DevPreview } from "./DevPreview";
 import { OnboardingScreen } from "./OnboardingScreen";
+import { getCanvasPanelOpen, setCanvasPanelOpen } from "@/lib/canvas-preferences";
 const TerminalPanel = lazy(() => import("./terminal/TerminalPanel").then(m => ({ default: m.TerminalPanel })));
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { homeDir } from "@tauri-apps/api/path";
@@ -476,7 +477,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const [showNewChat, setShowNewChat] = useState(false);
   const [initialChatPrompt, setInitialChatPrompt] = useState<string | undefined>(undefined);
   const [initialChatPromptHidden, setInitialChatPromptHidden] = useState(false);
-  const [showCanvas, setShowCanvas] = useState(true);
+  const [showCanvas, setShowCanvas] = useState(() => getCanvasPanelOpen(MAIN_AGENT_ID));
   const [showSettings, setShowSettings] = useState(false);
   const [sidebarAnimationKey, setSidebarAnimationKey] = useState(0);
   const [settingsSection, setSettingsSection] = useState<"models" | "keys" | "channels" | "skills" | "integrations" | "memory" | "appearance" | "engine" | "general">("models");
@@ -505,6 +506,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     const saved = localStorage.getItem("terminalHeight");
     return saved ? Number(saved) : 300;
   });
+  const [mountedCanvasAgentIds, setMountedCanvasAgentIds] = useState<string[]>([]);
   const canvasViewportRef = useRef<Record<string, { x: number; y: number; zoom: number }>>({});
   const dragging = useRef(false);
   const draggingCanvas = useRef(false);
@@ -521,6 +523,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const currentAgentId = activeAgentId ?? activeWorkspaceCoordinatorId ?? defaultAgentId;
   const isWorkspaceCoordinatorActive = Boolean(activeWorkspace && activeWorkspaceCoordinatorId && currentAgentId === activeWorkspaceCoordinatorId);
   const hasChat = activeAgentId !== null && !showNewChat;
+  const hasCanvasSurface = hasChat && !hasWorkspaceChat;
   const activeChatSessionKey = hasChat
     ? hasWorkspaceChat
       ? (activeSessionKey ?? `agent:${getWorkspaceAgentId(activeWorkspace!.id)}:general`)
@@ -532,6 +535,31 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const activeTerminalKey = showSettings ? "settings" : activeAgentId ? `agent:${currentAgentId}` : hasWorkspaceChat ? `workspace:${activeWorkspace.id}` : showNewChat ? "new-chat" : "workspace";
   const activeTerminal = terminalByContext[activeTerminalKey];
   const showTerminal = activeTerminal?.visible ?? false;
+
+  useEffect(() => {
+    if (!hasCanvasSurface) {
+      setCanvasExpanded(false);
+      return;
+    }
+    setShowCanvas(getCanvasPanelOpen(currentAgentId));
+    setCanvasExpanded(false);
+  }, [currentAgentId, hasCanvasSurface]);
+
+  useEffect(() => {
+    if (!hasCanvasSurface) return;
+    setMountedCanvasAgentIds((ids) => ids.includes(currentAgentId) ? ids : [...ids, currentAgentId]);
+  }, [currentAgentId, hasCanvasSurface]);
+
+  useEffect(() => {
+    const knownAgentIds = new Set(agents.map((agent) => agent.id));
+    setMountedCanvasAgentIds((ids) => ids.filter((id) => id === currentAgentId || knownAgentIds.has(id)));
+  }, [agents, currentAgentId]);
+
+  const renderedCanvasAgentIds = useMemo(() => {
+    const ids = mountedCanvasAgentIds.filter((id, index, list) => list.indexOf(id) === index);
+    if (hasCanvasSurface && !ids.includes(currentAgentId)) ids.push(currentAgentId);
+    return ids;
+  }, [currentAgentId, hasCanvasSurface, mountedCanvasAgentIds]);
 
   const getPreferredAgentSession = useCallback((agentId: string) => {
     return getAgentSessions(agentId)[0]?.key ?? getDefaultSessionKeyForAgent(agentId);
@@ -875,6 +903,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setInitialChatPromptHidden(false);
     setShowSettings(false);
     setShowPreview(false);
+    setShowCanvas(getCanvasPanelOpen(id));
   }, [clearUnreadForAgent, getPreferredAgentSession]);
 
   const handleSelectWorkspace = useCallback((id: string) => {
@@ -889,7 +918,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setInitialChatPromptHidden(false);
     setShowSettings(false);
     setShowPreview(false);
-    setShowCanvas(true);
+    setShowCanvas(getCanvasPanelOpen(coordinatorId));
     setCanvasExpanded(false);
   }, [clearUnreadForAgent, getPreferredAgentSession, triggerSidebarAnimation]);
 
@@ -904,7 +933,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setInitialChatPromptHidden(false);
     setShowSettings(false);
     setShowPreview(false);
-    setShowCanvas(true);
+    setShowCanvas(getCanvasPanelOpen(coordinatorId));
     setCanvasExpanded(false);
   }, [clearUnreadForAgent, getPreferredAgentSession]);
 
@@ -1137,6 +1166,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
       setShowNewChat(false);
       setShowSettings(false);
       setShowPreview(false);
+      setShowCanvas(getCanvasPanelOpen(imported.id));
       window.alert(`Agent imported: ${imported.name}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1154,6 +1184,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setInitialChatPromptHidden(false);
     setShowSettings(false);
     setShowPreview(false);
+    setShowCanvas(getCanvasPanelOpen(agentId));
   }, [clearUnreadForSession]);
 
   const handleNewChat = useCallback(() => {
@@ -1179,7 +1210,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setShowNewChat(false);
     setShowSettings(false);
     setShowPreview(false);
-    setShowCanvas(false);
+    setShowCanvas(getCanvasPanelOpen(agentId));
     setCanvasExpanded(false);
   }, []);
 
@@ -1194,7 +1225,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     return () => window.removeEventListener("xcloud-create-workspace-request", handleWorkspaceRequest);
   }, [handleCreateWorkspace]);
 
-  const showThirdPanel = showPreview || showSettings || (showCanvas && !hasWorkspaceChat);
+  const showThirdPanel = showPreview || showSettings || (showCanvas && hasCanvasSurface);
   const terminalContextChanged = previousTerminalKeyRef.current !== null && previousTerminalKeyRef.current !== activeTerminalKey;
   const mountedTerminalEntries = Object.entries(terminalByContext).filter(([, state]) => state.mounted);
 
@@ -1547,20 +1578,24 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
             }}
           >
             <div className="flex-1 min-h-0" style={{ minWidth: canvasExpanded ? undefined : canvasWidth }}>
-              {/* Canvas — always mounted, hidden when preview active */}
+              {/* Canvas surfaces stay mounted per agent so UI previews do not reload on agent switches. */}
               <div className="h-full" style={{ display: showPreview ? "none" : undefined, visibility: canvasTransitioning ? "hidden" : "visible" }}>
-                {!hasWorkspaceChat && (
-                  <AgentCanvas
-                    key={currentAgentId}
-                    engine={engine}
-                    agentId={currentAgentId}
-                    agentAvatar={agents.find(a => a.id === currentAgentId)?.avatar}
-                    savedViewport={canvasViewportRef.current[currentAgentId]}
-                    onViewportChange={(vp) => { canvasViewportRef.current[currentAgentId] = vp; }}
-                    onNodeDetail={setNodeDetail}
-                    onCanvasSettings={() => setShowCanvasSettings(!showCanvasSettings)}
-                  />
-                )}
+                {renderedCanvasAgentIds.map((canvasAgentId) => {
+                  const isActiveCanvas = hasCanvasSurface && canvasAgentId === currentAgentId;
+                  return (
+                    <div key={canvasAgentId} className="h-full" style={{ display: isActiveCanvas ? undefined : "none" }}>
+                      <AgentCanvas
+                        engine={engine}
+                        agentId={canvasAgentId}
+                        agentAvatar={agents.find((agent) => agent.id === canvasAgentId)?.avatar}
+                        savedViewport={canvasViewportRef.current[canvasAgentId]}
+                        onViewportChange={(vp) => { canvasViewportRef.current[canvasAgentId] = vp; }}
+                        onNodeDetail={setNodeDetail}
+                        onCanvasSettings={() => setShowCanvasSettings((value) => !value)}
+                      />
+                    </div>
+                  );
+                })}
               </div>
               {showPreview && <DevPreview />}
             </div>
@@ -1587,7 +1622,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
       </div>
 
       {/* Canvas controls — fixed top right */}
-      {!showSettings && !showPreview && (
+      {!showSettings && !showPreview && hasCanvasSurface && (
         <div className="fixed z-20 flex items-center gap-1" style={{ top: 14, right: 20 }}>
           {/* Expand/collapse canvas to full width */}
           {showCanvas && (
@@ -1619,7 +1654,12 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
           )}
           {/* Show/hide canvas */}
           <button
-            onClick={() => { setShowCanvas(!showCanvas); if (canvasExpanded) setCanvasExpanded(false); }}
+            onClick={() => {
+              const nextOpen = !showCanvas;
+              setShowCanvas(nextOpen);
+              setCanvasPanelOpen(currentAgentId, nextOpen);
+              if (!nextOpen && canvasExpanded) setCanvasExpanded(false);
+            }}
             className="flex h-6 w-6 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-white/8 hover:text-text"
             title={showCanvas ? "Hide canvas" : "Show canvas"}
           >

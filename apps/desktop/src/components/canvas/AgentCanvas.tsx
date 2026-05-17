@@ -8,6 +8,7 @@ import orbOverlayUrl from "@/assets/orb-overlay.png?url";
 import { useAgentUI, AgentUIContent } from "./AgentUI";
 import { ContinuousTabs } from "./ContinuousTabs";
 import { CanvasSearchControl } from "./CanvasSearchControl";
+import { getCanvasSurfaceTab, setCanvasSurfaceTab, type CanvasSurfaceTab } from "@/lib/canvas-preferences";
 
 export interface DetailPanel {
   title: string;
@@ -97,6 +98,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
   const wsPath = agentId === "main" ? ".openclaw/workspace" : `.openclaw/workspace/${agentId}`;
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<any>(null);
+  const restoreUiPreviewRef = useRef(getCanvasSurfaceTab(agentId) === "ui");
 
   const [agentData, setAgentData] = useState<AgentData>({
     identity: { name: "", emoji: "", creature: "", vibe: "" },
@@ -106,7 +108,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
     memoryFiles: [],
     integrations: (() => { try { const d = JSON.parse(localStorage.getItem("composioConnected") ?? "[]"); return d.map((i: unknown) => typeof i === "string" ? { slug: i, logo: "" } : i); } catch { return []; } })(),
   });
-  const [tab, setTab] = useState<"canvas" | "ui">("canvas");
+  const [tab, setTab] = useState<CanvasSurfaceTab>(() => getCanvasSurfaceTab(agentId));
   const [showLabels, setShowLabels] = useState(() => localStorage.getItem("canvasShowLabels") !== "false");
   const [useOrbs, setUseOrbs] = useState(() => localStorage.getItem("canvasUseOrbs") === "true");
   const [dataLoaded, setDataLoaded] = useState(false);
@@ -177,12 +179,28 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
 
   // Agent UI state
   const agentUI = useAgentUI(agentId, wsPath);
+  const setPersistentTab = useCallback((nextTab: CanvasSurfaceTab) => {
+    setTab(nextTab);
+    setCanvasSurfaceTab(agentId, nextTab);
+  }, [agentId]);
+
+  useEffect(() => {
+    const savedTab = getCanvasSurfaceTab(agentId);
+    restoreUiPreviewRef.current = savedTab === "ui";
+    setTab(savedTab);
+  }, [agentId]);
 
   useEffect(() => {
     if (agentUI.autoOpenRevision <= 0 || !agentUI.repoPath) return;
-    setTab("ui");
+    setPersistentTab("ui");
     agentUI.launchPreview();
-  }, [agentUI.autoOpenRevision]);
+  }, [agentUI.autoOpenRevision, agentUI.repoPath, setPersistentTab]);
+
+  useEffect(() => {
+    if (!restoreUiPreviewRef.current || tab !== "ui" || !agentUI.repoPath) return;
+    restoreUiPreviewRef.current = false;
+    agentUI.launchPreview();
+  }, [agentUI.repoPath, agentUI.launchPreview, tab]);
 
   // Resize observer
   useLayoutEffect(() => {
@@ -335,13 +353,13 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
       } else if (node.id === "agent") {
         onNodeDetail({ title: "Agent Config", type: "markdown", content: await readTextFile(`${wsPath}/AGENTS.md`, { baseDir: BaseDirectory.Home }).catch(() => "No AGENTS.md") });
       } else if (node.id === "ui-repo") {
-        setTab("ui");
+        setPersistentTab("ui");
         agentUI.launchPreview();
       } else if (node.id.startsWith("trait-")) {
         // traits don't have detail
       }
     } catch { /* */ }
-  }, [wsPath, agentData, agentUI, onNodeDetail]);
+  }, [wsPath, agentData, agentUI, onNodeDetail, setPersistentTab]);
 
   // Build graph data
   const graphData = useMemo(() => {
@@ -669,7 +687,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
           tabs={canvasTabs}
           activeId={tab}
           onChange={(nextTab) => {
-            setTab(nextTab);
+            setPersistentTab(nextTab);
             if (nextTab === "ui") {
               if (agentUI.repoPath && agentUI.uiView === "menu" && !agentUI.devServerUrl) agentUI.launchPreview();
               else if (agentUI.devServerUrl) agentUI.setUiView("preview");

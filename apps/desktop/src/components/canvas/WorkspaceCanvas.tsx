@@ -7,6 +7,7 @@ import { AgentUIContent, useAgentUI } from "./AgentUI";
 import type { DetailPanel } from "./AgentCanvas";
 import { ContinuousTabs } from "./ContinuousTabs";
 import { CanvasSearchControl } from "./CanvasSearchControl";
+import { getCanvasSurfaceTab, setCanvasSurfaceTab, type CanvasSurfaceTab } from "@/lib/canvas-preferences";
 
 interface WorkspaceCanvasProps {
   workspace: WorkspaceInfo;
@@ -27,9 +28,11 @@ interface WorkspaceLink {
 }
 
 export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCanvasProps) {
-  const [tab, setTab] = useState<"canvas" | "ui">("canvas");
+  const workspaceAgentId = getWorkspaceAgentId(workspace.id);
+  const [tab, setTab] = useState<CanvasSurfaceTab>(() => getCanvasSurfaceTab(workspaceAgentId));
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<any>(null);
+  const restoreUiPreviewRef = useRef(getCanvasSurfaceTab(workspaceAgentId) === "ui");
   const [dimensions, setDimensions] = useState({ width: 400, height: 400 });
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -39,8 +42,11 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
   const labelOffsets = useRef<Record<string, number>>({});
   const animFrameRef = useRef<number>(0);
   const [, forceRender] = useState(0);
-  const workspaceAgentId = getWorkspaceAgentId(workspace.id);
   const workspaceUI = useAgentUI(workspaceAgentId, getWorkspaceDir(workspace.id));
+  const setPersistentTab = useCallback((nextTab: CanvasSurfaceTab) => {
+    setTab(nextTab);
+    setCanvasSurfaceTab(workspaceAgentId, nextTab);
+  }, [workspaceAgentId]);
   const canvasTabs = useMemo(() => [
     { id: "canvas" as const, label: "Canvas" },
     { id: "ui" as const, label: "UI" },
@@ -156,9 +162,21 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
 
   useEffect(() => {
     if (workspaceUI.autoOpenRevision <= 0 || !workspaceUI.repoPath) return;
-    setTab("ui");
+    setPersistentTab("ui");
     workspaceUI.launchPreview();
-  }, [workspaceUI.autoOpenRevision]);
+  }, [workspaceUI.autoOpenRevision, workspaceUI.repoPath, setPersistentTab]);
+
+  useEffect(() => {
+    const savedTab = getCanvasSurfaceTab(workspaceAgentId);
+    restoreUiPreviewRef.current = savedTab === "ui";
+    setTab(savedTab);
+  }, [workspaceAgentId]);
+
+  useEffect(() => {
+    if (!restoreUiPreviewRef.current || tab !== "ui" || !workspaceUI.repoPath) return;
+    restoreUiPreviewRef.current = false;
+    workspaceUI.launchPreview();
+  }, [tab, workspaceUI.repoPath, workspaceUI.launchPreview]);
 
   const connectedNodes = useMemo(() => {
     if (!activeNode) return new Set<string>();
@@ -333,7 +351,7 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
           tabs={canvasTabs}
           activeId={tab}
           onChange={(nextTab) => {
-            setTab(nextTab);
+            setPersistentTab(nextTab);
             if (nextTab === "ui" && workspaceUI.repoPath && workspaceUI.uiView === "menu" && !workspaceUI.devServerUrl) {
               workspaceUI.launchPreview();
             }
@@ -380,7 +398,7 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
             onNodeClick={(node: any) => {
               const workspaceNode = node as WorkspaceNode;
               void showNodeDetail(workspaceNode);
-              if (workspaceNode.id === "ui") setTab("ui");
+              if (workspaceNode.id === "ui") setPersistentTab("ui");
             }}
             onNodeDrag={(node: any) => {
               draggingNode.current = (node as WorkspaceNode).id;
