@@ -1472,9 +1472,11 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
             await getCurrentWindow().startDragging();
           }}
         >
-          {showSettings ? (
-            /* Settings + Terminal (vertical split) */
-            <div className="flex flex-1 min-w-0 min-h-0 flex-col overflow-hidden">
+          {/* Settings stays mounted separately so Chat/Canvas can remain alive behind it. */}
+          <div
+            className="flex flex-1 min-w-0 min-h-0 flex-col overflow-hidden"
+            style={{ display: showSettings ? undefined : "none" }}
+          >
               <div className="flex flex-1 min-h-0 justify-center overflow-y-auto">
                 <div className="w-full max-w-2xl px-6 py-6">
                   <SettingsPanel
@@ -1492,7 +1494,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                 activeKey={activeTerminalKey}
                 entries={mountedTerminalEntries}
                 height={terminalHeight}
-                isOpen={showTerminal}
+                isOpen={showTerminal && showSettings}
                 disableTransition={isDragging || terminalContextChanged}
                 onResizeMouseDown={onTerminalMouseDown}
                 onClose={(key) => {
@@ -1503,9 +1505,11 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                 }}
               />
             </div>
-          ) : (
-            <>
-          <div className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
+
+          <div
+            className="flex flex-1 min-h-0 min-w-0 overflow-hidden"
+            style={{ display: showSettings ? "none" : undefined }}
+          >
           {/* Chat area */}
           <div className="flex flex-1 min-w-0 min-h-0 flex-col overflow-hidden" style={{ display: canvasExpanded ? "none" : undefined }}>
             {/* Chat area */}
@@ -1606,7 +1610,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
             activeKey={activeTerminalKey}
             entries={mountedTerminalEntries}
             height={terminalHeight}
-            isOpen={showTerminal}
+            isOpen={showTerminal && !showSettings}
             disableTransition={isDragging || terminalContextChanged}
             onResizeMouseDown={onTerminalMouseDown}
             onClose={(key) => {
@@ -1616,8 +1620,6 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
               }));
             }}
           />
-            </>
-          )}
         </div>
       </div>
 
