@@ -21,7 +21,8 @@ interface UseChatReturn {
   stop: () => Promise<void>;
 }
 
-const CHAT_HISTORY_TIMEOUT_MS = 1_000;
+const CHAT_HISTORY_TIMEOUT_MS = 4_000;
+const INITIAL_HISTORY_SETTLE_REFRESH_DELAYS_MS = [900, 2_400, 5_000];
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -1249,11 +1250,12 @@ function clearSessionStoppedHistory(sessionKey: string) {
   writeStoppedHistoryMarkers(markers);
 }
 
-function shouldHideStoppedHistoryAssistant(sessionKey: string, timestamp?: number) {
+function shouldHideStoppedHistoryAssistant(sessionKey: string, timestamp?: number, runId?: string) {
   const marker = readStoppedHistoryMarkers()[sessionKey];
   if (!marker?.stoppedAt) return false;
+  if (runId && marker.runIds?.includes(runId)) return true;
   const messageTime = timestamp ?? Date.now();
-  return messageTime >= marker.stoppedAt - 2_000;
+  return messageTime >= marker.stoppedAt - 2_000 && messageTime <= marker.stoppedAt + 30_000;
 }
 
 function createEmptySessionState(): ChatSessionState {
@@ -1547,6 +1549,7 @@ type HistoryMessage = {
   timestamp?: number;
   toolCallId?: string;
   toolName?: string;
+  runId?: string;
   details?: unknown;
   isError?: boolean;
   openclawAbort?: { aborted?: boolean };
@@ -1560,7 +1563,7 @@ function parseHistoryMessages(sessionKey: string, history: HistoryMessage[]): Ch
   for (let i = 0; i < history.length; i++) {
     const m = history[i]!;
     if (m.openclawAbort?.aborted) continue;
-    if (m.role === "assistant" && shouldHideStoppedHistoryAssistant(sessionKey, m.timestamp)) continue;
+    if (m.role === "assistant" && shouldHideStoppedHistoryAssistant(sessionKey, m.timestamp, m.runId)) continue;
     if (m.role === "toolResult" && Array.isArray(m.content)) {
       const text = (m.content as Array<{ type: string; text?: string }>)
         .filter(b => b.type === "text" && b.text)
@@ -1594,7 +1597,7 @@ function parseHistoryMessages(sessionKey: string, history: HistoryMessage[]): Ch
   for (let i = 0; i < history.length; i++) {
     const m = history[i]!;
     if (m.openclawAbort?.aborted) continue;
-    if (m.role === "assistant" && shouldHideStoppedHistoryAssistant(sessionKey, m.timestamp)) continue;
+    if (m.role === "assistant" && shouldHideStoppedHistoryAssistant(sessionKey, m.timestamp, m.runId)) continue;
     if (m.role !== "user" && m.role !== "assistant") continue;
 
     let content = "";
@@ -2050,6 +2053,7 @@ function ensureSessionHistory(engine: BrowserEngine, sessionKey: string) {
           historyPromise: undefined,
         };
       });
+      scheduleSessionHistoryRefreshes(engine, sessionKey, INITIAL_HISTORY_SETTLE_REFRESH_DELAYS_MS);
     })
     .catch(() => {
       updateChatSession(sessionKey, (current) => ({
@@ -2058,6 +2062,7 @@ function ensureSessionHistory(engine: BrowserEngine, sessionKey: string) {
         historyLoaded: false,
         historyPromise: undefined,
       }));
+      scheduleSessionHistoryRefreshes(engine, sessionKey, INITIAL_HISTORY_SETTLE_REFRESH_DELAYS_MS);
     });
 
   chatSessions.set(sessionKey, {

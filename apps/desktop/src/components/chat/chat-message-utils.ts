@@ -1,7 +1,7 @@
 import type { ChatMessage } from "@/types/chat";
 
 export interface Page {
-  userMessage: ChatMessage;
+  userMessage?: ChatMessage;
   responses: ChatMessage[];
 }
 
@@ -97,7 +97,11 @@ export function paginate(messages: ChatMessage[]): Page[] {
     if (msg.role === "user") {
       current = { userMessage: msg, responses: [] };
       pages.push(current);
-    } else if (current) {
+    } else {
+      if (!current) {
+        current = { responses: [] };
+        pages.push(current);
+      }
       current.responses.push(msg);
     }
   }

@@ -19,9 +19,9 @@ export function ChatMessages({ pages, engine, onPreviewImage }: ChatMessagesProp
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6">
-      {pages.map((page) => (
+      {pages.map((page, index) => (
         <ChatMessagePage
-          key={page.userMessage.id}
+          key={page.userMessage?.id ?? page.responses[0]?.id ?? `page-${index}`}
           page={page}
           engine={engine}
           hoveredMsgId={hoveredMsgId}
@@ -46,29 +46,32 @@ function ChatMessagePage({
   setHoveredMsgId: (id: string | null) => void;
   onPreviewImage: (preview: ImagePreviewState) => void;
 }) {
+  const userMessage = page.userMessage;
   const responses = dedupeDuplicateCodeChangeTools(page.responses);
   const pageHasCodeChanges = responses.some((response) => response.role === "tool" && Boolean(response.tool?.changes?.length));
 
   return (
     <div>
-      <div
-        className="flex flex-col items-end py-4"
-        onMouseEnter={() => setHoveredMsgId(page.userMessage.id)}
-        onMouseLeave={() => setHoveredMsgId(null)}
-      >
-        {page.userMessage.content ? (
-          <div className="max-w-[85%] rounded-2xl bg-user-bubble px-4 py-2 text-[13px] leading-relaxed text-text break-words overflow-hidden">
-            {page.userMessage.content}
+      {userMessage ? (
+        <div
+          className="flex flex-col items-end py-4"
+          onMouseEnter={() => setHoveredMsgId(userMessage.id)}
+          onMouseLeave={() => setHoveredMsgId(null)}
+        >
+          {userMessage.content ? (
+            <div className="max-w-[85%] rounded-2xl bg-user-bubble px-4 py-2 text-[13px] leading-relaxed text-text break-words overflow-hidden">
+              {userMessage.content}
+            </div>
+          ) : null}
+          {userMessage.attachments?.length ? (
+            <MessageAttachments attachments={userMessage.attachments} engine={engine} align="end" onPreviewImage={onPreviewImage} />
+          ) : null}
+          <div className={`flex items-center gap-1 mt-1 ${hoveredMsgId === userMessage.id ? "visible" : "invisible"}`}>
+            <span className="text-[11px] text-text-muted/70">{formatTime(userMessage.timestamp)}</span>
+            <CopyButton text={userMessage.content} />
           </div>
-        ) : null}
-        {page.userMessage.attachments?.length ? (
-          <MessageAttachments attachments={page.userMessage.attachments} engine={engine} align="end" onPreviewImage={onPreviewImage} />
-        ) : null}
-        <div className={`flex items-center gap-1 mt-1 ${hoveredMsgId === page.userMessage.id ? "visible" : "invisible"}`}>
-          <span className="text-[11px] text-text-muted/70">{formatTime(page.userMessage.timestamp)}</span>
-          <CopyButton text={page.userMessage.content} />
         </div>
-      </div>
+      ) : null}
 
       <div className="py-4">
         {responses
