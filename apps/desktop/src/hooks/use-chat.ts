@@ -47,6 +47,7 @@ const APP_CONTEXT_END = "<!-- /unicore:app-context -->";
 const UI_ACTION_DIRECTIVE_START = "<!-- xcloud:ui-action";
 const UI_ACTION_DIRECTIVE_RE = /<!--\s*xcloud:ui-action\s+({[\s\S]*?})\s*-->/g;
 const streamingUiDirectiveBuffers = new Map<string, string>();
+const streamingAssistantTextByRun = new Map<string, string>();
 const toolFileSnapshots = new Map<string, Promise<FileSnapshot | undefined>>();
 const sessionFileSnapshots = new Map<string, Promise<FileSnapshot | undefined>>();
 
@@ -1033,6 +1034,35 @@ function streamingDirectiveKey(sessionKey: string, runId?: string) {
   return `${sessionKey}:${runId ?? "active"}`;
 }
 
+function streamingTextKey(sessionKey: string, runId?: string) {
+  return `${sessionKey}:${runId ?? "active"}`;
+}
+
+function forgetStreamingText(sessionKey: string, runId?: string) {
+  streamingAssistantTextByRun.delete(streamingTextKey(sessionKey, runId));
+}
+
+function assistantTextDelta(sessionKey: string, runId: string | undefined, data: Record<string, unknown> | undefined) {
+  const key = streamingTextKey(sessionKey, runId);
+  const rawText = typeof data?.text === "string"
+    ? extractUiActionDirectives(data.text).visible
+    : "";
+
+  if (rawText) {
+    const previous = streamingAssistantTextByRun.get(key) ?? "";
+    streamingAssistantTextByRun.set(key, rawText);
+    return rawText.startsWith(previous) ? rawText.slice(previous.length) : rawText;
+  }
+
+  const rawDelta = typeof data?.delta === "string"
+    ? stripUiActionDirectivesForStreaming(sessionKey, runId, data.delta)
+    : "";
+  if (!rawDelta) return "";
+
+  streamingAssistantTextByRun.set(key, `${streamingAssistantTextByRun.get(key) ?? ""}${rawDelta}`);
+  return rawDelta;
+}
+
 function splitTrailingUiDirectivePrefix(content: string) {
   const maxLength = Math.min(content.length, UI_ACTION_DIRECTIVE_START.length - 1);
   for (let length = maxLength; length > 0; length -= 1) {
@@ -1386,17 +1416,6 @@ function ensureStreamingAssistant(messages: ChatMessage[], content = ""): ChatMe
   ];
 }
 
-function setStreamingAssistantText(messages: ChatMessage[], text: string): ChatMessage[] {
-  const last = messages[messages.length - 1];
-  if (last?.role === "assistant" && last.isStreaming) {
-    return [...messages.slice(0, -1), { ...last, content: text }];
-  }
-  return [
-    ...messages,
-    { id: `assistant-${Date.now()}`, role: "assistant", content: text, timestamp: Date.now(), isStreaming: true },
-  ];
-}
-
 function isEmptyStreamingAssistant(message: ChatMessage) {
   return message.role === "assistant"
     && Boolean(message.isStreaming)
@@ -1425,14 +1444,36 @@ function dropStreamingAssistant(messages: ChatMessage[]): ChatMessage[] {
 function applyFinalAssistantText(messages: ChatMessage[], text: string, attachments?: ChatAttachment[]): ChatMessage[] {
   if (!text.trim() && !attachments?.length) return finishStreamingAssistant(messages);
 
-  const last = messages[messages.length - 1];
-  if (last?.role === "assistant") {
-    const currentText = last.content.trim();
-    const finalText = text.trim();
-    if (last.isStreaming || currentText === finalText || finalText.startsWith(currentText) || currentText.startsWith(finalText)) {
+  const finalText = text.trim();
+  let lastUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index]?.role === "user") {
+      lastUserIndex = index;
+      break;
+    }
+  }
+
+  for (let index = messages.length - 1; index > lastUserIndex; index--) {
+    const message = messages[index];
+    if (message?.role !== "assistant") continue;
+    const currentText = message.content.trim();
+    const isCompatibleFinal =
+      message.isStreaming ||
+      currentText === finalText ||
+      finalText.startsWith(currentText) ||
+      currentText.startsWith(finalText) ||
+      (!currentText && Boolean(attachments?.length));
+
+    if (isCompatibleFinal) {
+      const next = [...messages];
+      next[index] = {
+        ...message,
+        content: text,
+        attachments: mergeAttachments(message.attachments, attachments),
+        isStreaming: false,
+      };
       return removeEmptyStreamingAssistants([
-        ...messages.slice(0, -1),
-        { ...last, content: text, attachments: mergeAttachments(last.attachments, attachments), isStreaming: false },
+        ...next,
       ]);
     }
   }
@@ -1501,6 +1542,15 @@ function isAssistantFinalEcho(a: ChatMessage, b: ChatMessage) {
   return isHistoryLiveEchoWindow(a, b, ASSISTANT_ECHO_WINDOW_MS, ASSISTANT_ECHO_CLOCK_SKEW_MS);
 }
 
+function isDuplicateAssistantInTurn(a: ChatMessage, b: ChatMessage) {
+  if (a.role !== "assistant" || b.role !== "assistant") return false;
+  if (a.isStreaming || b.isStreaming) return false;
+  if (!a.content.trim() && !a.attachments?.length) return false;
+  if (!b.content.trim() && !b.attachments?.length) return false;
+  if (!isSameVisibleMessage(a, b)) return false;
+  return Math.abs(a.timestamp - b.timestamp) <= ASSISTANT_ECHO_WINDOW_MS;
+}
+
 function mergeEchoMessage(a: ChatMessage, b: ChatMessage) {
   const preferred = isHistoryMessage(a) ? a : isHistoryMessage(b) ? b : a.timestamp <= b.timestamp ? a : b;
   const other = preferred === a ? b : a;
@@ -1535,27 +1585,87 @@ function mergeToolMessage(existing: ChatMessage, incoming: ChatMessage): ChatMes
   };
 }
 
-function normalizeMessageTimeline(messages: ChatMessage[]) {
-  const ordered = messages
-    .map((message, index) => ({ message, index }))
-    .sort((a, b) => {
-      const timeDelta = a.message.timestamp - b.message.timestamp;
-      if (timeDelta !== 0) return timeDelta;
-      return a.index - b.index;
-    });
+function toolArgsSignature(args?: Record<string, unknown>) {
+  if (!args) return "";
+  try {
+    return JSON.stringify(args);
+  } catch {
+    return String(args);
+  }
+}
 
+function isCompatibleToolMessage(a: ChatMessage, b: ChatMessage) {
+  if (a.role !== "tool" || b.role !== "tool" || !a.tool || !b.tool) return false;
+  if (a.tool.id && b.tool.id && a.tool.id === b.tool.id) return true;
+  return a.tool.name === b.tool.name
+    && toolArgsSignature(a.tool.args) === toolArgsSignature(b.tool.args)
+    && Math.abs(a.timestamp - b.timestamp) <= ASSISTANT_ECHO_WINDOW_MS;
+}
+
+function insertToolInCurrentTurn(messages: ChatMessage[], toolMessage: ChatMessage) {
+  let lastUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index]?.role === "user") {
+      lastUserIndex = index;
+      break;
+    }
+  }
+
+  const existingIndex = messages.findIndex((candidate) => isCompatibleToolMessage(candidate, toolMessage));
+  if (existingIndex >= 0) {
+    const next = [...messages];
+    next[existingIndex] = mergeToolMessage(next[existingIndex]!, toolMessage);
+    return next;
+  }
+
+  for (let index = messages.length - 1; index > lastUserIndex; index--) {
+    if (messages[index]?.role === "assistant") {
+      return [
+        ...messages.slice(0, index),
+        toolMessage,
+        ...messages.slice(index),
+      ];
+    }
+  }
+
+  return [...messages, toolMessage];
+}
+
+function toolMessageFromInfo(tool: ToolCallInfo): ChatMessage {
+  return {
+    id: `tool-${tool.id}`,
+    role: "tool",
+    content: "",
+    timestamp: tool.timestamp,
+    tool,
+  };
+}
+
+function normalizeMessageTimeline(messages: ChatMessage[]) {
   const normalized: ChatMessage[] = [];
-  for (const { message } of ordered) {
-    if (message.role === "tool" && message.tool?.id) {
-      const existingIndex = normalized.findIndex((candidate) => candidate.role === "tool" && candidate.tool?.id === message.tool?.id);
-      if (existingIndex >= 0) {
-        normalized[existingIndex] = mergeToolMessage(normalized[existingIndex]!, message);
-        continue;
+  for (const message of messages) {
+    if (message.role === "tool" && message.tool) {
+      normalized.splice(0, normalized.length, ...insertToolInCurrentTurn(normalized, message));
+      continue;
+    }
+
+    let searchStart = 0;
+    if (message.role === "assistant") {
+      for (let index = normalized.length - 1; index >= 0; index--) {
+        if (normalized[index]?.role === "user") {
+          searchStart = index + 1;
+          break;
+        }
       }
     }
 
-    const echoIndex = normalized.findIndex((candidate) =>
-      isUserHistoryEcho(candidate, message) || isLiveHistoryEcho(candidate, message) || isAssistantFinalEcho(candidate, message),
+    const echoIndex = normalized.findIndex((candidate, index) =>
+      index >= searchStart && (
+        isUserHistoryEcho(candidate, message) ||
+        isLiveHistoryEcho(candidate, message) ||
+        isAssistantFinalEcho(candidate, message) ||
+        isDuplicateAssistantInTurn(candidate, message)
+      ),
     );
     if (echoIndex >= 0) {
       normalized[echoIndex] = mergeEchoMessage(normalized[echoIndex]!, message);
@@ -1570,7 +1680,7 @@ function normalizeMessageTimeline(messages: ChatMessage[]) {
 
 function isSameHistoryMessage(a: ChatMessage, b: ChatMessage) {
   if (a.role !== b.role) return false;
-  if (a.role === "tool" || b.role === "tool") return a.tool?.id !== undefined && a.tool?.id === b.tool?.id;
+  if (a.role === "tool" || b.role === "tool") return isCompatibleToolMessage(a, b);
   const aAttachments = attachmentListSignature(a.attachments);
   const bAttachments = attachmentListSignature(b.attachments);
   return a.content === b.content && aAttachments === bAttachments && Math.abs((a.timestamp ?? 0) - (b.timestamp ?? 0)) <= LIVE_HISTORY_ECHO_WINDOW_MS;
@@ -1608,7 +1718,11 @@ function mergeHistoryWithLive(loaded: ChatMessage[], live: ChatMessage[]) {
       continue;
     }
     if (message.isStreaming || message.id.startsWith("user-") || message.id.startsWith("assistant-") || message.id.startsWith("tool-")) {
-      merged.push(message);
+      if (message.role === "tool") {
+        merged.splice(0, merged.length, ...insertToolInCurrentTurn(merged, message));
+      } else {
+        merged.push(message);
+      }
     }
   }
   return normalizeMessageTimeline(dedupeUiActionToolMessages(merged));
@@ -1773,6 +1887,7 @@ function processChatEvent(engine: BrowserEngine, sessionKey: string, event: stri
       const state = payload.state as string;
       if (state === "final" || state === "aborted" || state === "error") {
         forgetActiveRun(sessionKey, runId);
+        forgetStreamingText(sessionKey, runId);
         updateChatSession(sessionKey, (current) => ({
           ...current,
           messages: dropStreamingAssistant(current.messages),
@@ -1792,24 +1907,6 @@ function processChatEvent(engine: BrowserEngine, sessionKey: string, event: stri
     const message = payload.message as Record<string, unknown> | undefined;
     const role = typeof message?.role === "string" ? message.role : undefined;
     const isAssistantUpdate = role === "assistant";
-    if (isAssistantUpdate) {
-      const parsedContent = parseMessageContent(message?.content, `session-message-${Date.now()}`);
-      const finalAttachments = mergeAttachments(
-        parsedContent.attachments,
-        extractHistoryAttachments(message?.attachments, `session-message-${Date.now()}`),
-      );
-      const { visible, actions } = extractUiActionDirectives(parsedContent.text);
-      if (visible || finalAttachments?.length) {
-        updateChatSession(sessionKey, (current) => ({
-          ...current,
-          messages: applyFinalAssistantText(current.messages, visible, finalAttachments),
-          isStreaming: false,
-          loading: false,
-        }));
-        void executeUiActionDirectives(sessionKey, actions);
-        emitChatSessionActivity(sessionKey, { working: false });
-      }
-    }
     scheduleSessionHistoryRefreshes(engine, sessionKey, isAssistantUpdate ? [350, 1_100, 2_400] : [300, 1_000]);
     return;
   }
@@ -1819,19 +1916,13 @@ function processChatEvent(engine: BrowserEngine, sessionKey: string, event: stri
     const data = payload.data as Record<string, unknown> | undefined;
 
     if (stream === "assistant" && (typeof data?.delta === "string" || typeof data?.text === "string")) {
-      const delta = typeof data?.delta === "string"
-        ? stripUiActionDirectivesForStreaming(sessionKey, runId, data.delta)
-        : "";
-      const text = typeof data?.text === "string"
-        ? extractUiActionDirectives(data.text).visible
-        : "";
+      const delta = assistantTextDelta(sessionKey, runId, data);
+      if (!delta) return;
       updateChatSession(sessionKey, (state) => ({
         ...state,
         isStreaming: true,
         loading: false,
-        messages: delta
-          ? ensureStreamingAssistant(state.messages, delta)
-          : setStreamingAssistantText(state.messages, text),
+        messages: ensureStreamingAssistant(state.messages, delta),
       }));
       emitChatSessionActivity(sessionKey, { working: true });
     }
@@ -1873,18 +1964,7 @@ function processChatEvent(engine: BrowserEngine, sessionKey: string, event: stri
         }
         updateChatMessages(sessionKey, (messages) => {
           if (messages.some((message) => message.role === "tool" && message.tool?.id === toolCallId)) return messages;
-          const last = messages[messages.length - 1];
-          if (last?.isStreaming && last.content === "") {
-            return dedupeUiActionToolMessages([
-              ...messages.slice(0, -1),
-              { id: `tool-${toolCallId}`, role: "tool" as const, content: "", timestamp: Date.now(), tool: toolInfo },
-              last,
-            ]);
-          }
-          return dedupeUiActionToolMessages([
-            ...messages,
-            { id: `tool-${toolCallId}`, role: "tool" as const, content: "", timestamp: Date.now(), tool: toolInfo },
-          ]);
+          return dedupeUiActionToolMessages(insertToolInCurrentTurn(messages, toolMessageFromInfo(toolInfo)));
         });
         emitChatSessionActivity(sessionKey, { working: true });
       } else if (phase === "end") {
@@ -1932,18 +2012,7 @@ function processChatEvent(engine: BrowserEngine, sessionKey: string, event: stri
         }
         updateChatMessages(sessionKey, (messages) => {
           if (messages.some((message) => message.role === "tool" && message.tool?.id === toolCallId)) return messages;
-          const last = messages[messages.length - 1];
-          if (last?.isStreaming && last.content === "") {
-            return dedupeUiActionToolMessages([
-              ...messages.slice(0, -1),
-              { id: `tool-${toolCallId}`, role: "tool" as const, content: "", timestamp: Date.now(), tool: toolInfo },
-              last,
-            ]);
-          }
-          return dedupeUiActionToolMessages([
-            ...messages,
-            { id: `tool-${toolCallId}`, role: "tool" as const, content: "", timestamp: Date.now(), tool: toolInfo },
-          ]);
+          return dedupeUiActionToolMessages(insertToolInCurrentTurn(messages, toolMessageFromInfo(toolInfo)));
         });
       }
 
@@ -2013,6 +2082,7 @@ function processChatEvent(engine: BrowserEngine, sessionKey: string, event: stri
 
       const { visible, actions } = extractUiActionDirectives(text);
       streamingUiDirectiveBuffers.delete(streamingDirectiveKey(sessionKey, runId));
+      forgetStreamingText(sessionKey, runId);
       updateChatSession(sessionKey, (current) => {
         return {
           ...current,
@@ -2026,6 +2096,7 @@ function processChatEvent(engine: BrowserEngine, sessionKey: string, event: stri
       emitChatSessionActivity(sessionKey, { working: false });
     } else if (state === "final" || state === "aborted" || state === "error") {
       forgetActiveRun(sessionKey, runId);
+      forgetStreamingText(sessionKey, runId);
       updateChatSession(sessionKey, (current) => ({
         ...current,
         messages: state === "aborted" ? dropStreamingAssistant(current.messages) : finishStreamingAssistant(current.messages),
