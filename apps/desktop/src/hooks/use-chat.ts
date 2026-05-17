@@ -403,11 +403,35 @@ const CODE_CHANGE_CACHE_LIMIT = 200;
 const UI_ACTION_TOOL_CACHE_LIMIT = 200;
 const UI_ACTION_DUPLICATE_WINDOW_MS = 8_000;
 const LIVE_HISTORY_ECHO_WINDOW_MS = 8_000;
-const ASSISTANT_ECHO_WINDOW_MS = 2_500;
+const USER_HISTORY_ECHO_WINDOW_MS = 30 * 60_000;
+const USER_HISTORY_ECHO_CLOCK_SKEW_MS = 1_000;
+const ASSISTANT_ECHO_WINDOW_MS = 5 * 60_000;
+const ASSISTANT_ECHO_CLOCK_SKEW_MS = 5_000;
 const UI_ACTION_DIRECTIVE_FRAGMENT_RE = /<!--\s*xcloud:ui-action\b[\s\S]*?(?:-->|$)/g;
 
 type CodeChangeCache = Record<string, { updatedAt: number; changes: CodeChangeInfo[] }>;
 type UiActionToolCache = Record<string, { updatedAt: number; tools: ToolCallInfo[] }>;
+
+function normalizeEpochMillis(value: number) {
+  return value > 0 && value < 10_000_000_000 ? value * 1000 : value;
+}
+
+function parseChatTimestamp(value: unknown, fallback = Date.now()) {
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isFinite(time) && time > 0 ? time : fallback;
+  }
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return normalizeEpochMillis(value);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return normalizeEpochMillis(numeric);
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return fallback;
+}
 
 function codeChangeCacheKey(sessionKey: string, toolCallId: string) {
   return `${sessionKey}::${toolCallId}`;
@@ -1250,11 +1274,11 @@ function clearSessionStoppedHistory(sessionKey: string) {
   writeStoppedHistoryMarkers(markers);
 }
 
-function shouldHideStoppedHistoryAssistant(sessionKey: string, timestamp?: number, runId?: string) {
+function shouldHideStoppedHistoryAssistant(sessionKey: string, timestamp?: unknown, runId?: string) {
   const marker = readStoppedHistoryMarkers()[sessionKey];
   if (!marker?.stoppedAt) return false;
   if (runId && marker.runIds?.includes(runId)) return true;
-  const messageTime = timestamp ?? Date.now();
+  const messageTime = parseChatTimestamp(timestamp);
   return messageTime >= marker.stoppedAt - 2_000 && messageTime <= marker.stoppedAt + 30_000;
 }
 
@@ -1373,17 +1397,29 @@ function setStreamingAssistantText(messages: ChatMessage[], text: string): ChatM
   ];
 }
 
+function isEmptyStreamingAssistant(message: ChatMessage) {
+  return message.role === "assistant"
+    && Boolean(message.isStreaming)
+    && !message.content.trim()
+    && !message.thinking
+    && !message.attachments?.length;
+}
+
+function removeEmptyStreamingAssistants(messages: ChatMessage[]) {
+  return messages.filter((message) => !isEmptyStreamingAssistant(message));
+}
+
 function finishStreamingAssistant(messages: ChatMessage[]): ChatMessage[] {
   const last = messages[messages.length - 1];
-  if (last?.role !== "assistant" || !last.isStreaming) return messages;
-  if (!last.content.trim() && !last.thinking && !last.attachments?.length) return messages.slice(0, -1);
-  return [...messages.slice(0, -1), { ...last, isStreaming: false }];
+  if (last?.role !== "assistant" || !last.isStreaming) return removeEmptyStreamingAssistants(messages);
+  if (isEmptyStreamingAssistant(last)) return removeEmptyStreamingAssistants(messages);
+  return removeEmptyStreamingAssistants([...messages.slice(0, -1), { ...last, isStreaming: false }]);
 }
 
 function dropStreamingAssistant(messages: ChatMessage[]): ChatMessage[] {
   const last = messages[messages.length - 1];
-  if (last?.role === "assistant" && last.isStreaming) return messages.slice(0, -1);
-  return messages;
+  if (last?.role === "assistant" && last.isStreaming) return removeEmptyStreamingAssistants(messages.slice(0, -1));
+  return removeEmptyStreamingAssistants(messages);
 }
 
 function applyFinalAssistantText(messages: ChatMessage[], text: string, attachments?: ChatAttachment[]): ChatMessage[] {
@@ -1394,21 +1430,27 @@ function applyFinalAssistantText(messages: ChatMessage[], text: string, attachme
     const currentText = last.content.trim();
     const finalText = text.trim();
     if (last.isStreaming || currentText === finalText || finalText.startsWith(currentText) || currentText.startsWith(finalText)) {
-      return [
+      return removeEmptyStreamingAssistants([
         ...messages.slice(0, -1),
         { ...last, content: text, attachments: mergeAttachments(last.attachments, attachments), isStreaming: false },
-      ];
+      ]);
     }
   }
 
   return [
-    ...finishStreamingAssistant(messages),
+    ...removeEmptyStreamingAssistants(finishStreamingAssistant(messages)),
     { id: `assistant-${Date.now()}`, role: "assistant", content: text, attachments, timestamp: Date.now() },
   ];
 }
 
 function attachmentListSignature(attachments?: ChatAttachment[]) {
   return attachments?.map(attachmentKey).join("|") ?? "";
+}
+
+function comparableMessageContent(message: ChatMessage) {
+  return stripRuntimeAnnotations(stripAppContext(message.content))
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function isHistoryMessage(message: ChatMessage) {
@@ -1419,25 +1461,44 @@ function isSyntheticLiveMessage(message: ChatMessage) {
   return /^(user|assistant|assistant-error|tool)-/.test(message.id);
 }
 
+function historyMinusLiveTimestamp(a: ChatMessage, b: ChatMessage) {
+  const aIsHistory = isHistoryMessage(a);
+  const bIsHistory = isHistoryMessage(b);
+  const aIsLive = isSyntheticLiveMessage(a);
+  const bIsLive = isSyntheticLiveMessage(b);
+  if (aIsHistory && bIsLive) return a.timestamp - b.timestamp;
+  if (bIsHistory && aIsLive) return b.timestamp - a.timestamp;
+  return null;
+}
+
+function isHistoryLiveEchoWindow(a: ChatMessage, b: ChatMessage, windowMs: number, clockSkewMs: number) {
+  const delta = historyMinusLiveTimestamp(a, b);
+  return delta !== null && delta >= -clockSkewMs && delta <= windowMs;
+}
+
 function isSameVisibleMessage(a: ChatMessage, b: ChatMessage) {
   return a.role === b.role
-    && a.content === b.content
+    && comparableMessageContent(a) === comparableMessageContent(b)
     && attachmentListSignature(a.attachments) === attachmentListSignature(b.attachments);
+}
+
+function isUserHistoryEcho(a: ChatMessage, b: ChatMessage) {
+  if (a.role !== "user" || b.role !== "user") return false;
+  if (!isSameVisibleMessage(a, b)) return false;
+  return isHistoryLiveEchoWindow(a, b, USER_HISTORY_ECHO_WINDOW_MS, USER_HISTORY_ECHO_CLOCK_SKEW_MS);
 }
 
 function isLiveHistoryEcho(a: ChatMessage, b: ChatMessage) {
   if (a.role === "tool" || b.role === "tool") return false;
   if (!isSameVisibleMessage(a, b)) return false;
-  if (Math.abs(a.timestamp - b.timestamp) > LIVE_HISTORY_ECHO_WINDOW_MS) return false;
-  return (isHistoryMessage(a) && isSyntheticLiveMessage(b)) || (isHistoryMessage(b) && isSyntheticLiveMessage(a));
+  return isHistoryLiveEchoWindow(a, b, LIVE_HISTORY_ECHO_WINDOW_MS, USER_HISTORY_ECHO_CLOCK_SKEW_MS);
 }
 
 function isAssistantFinalEcho(a: ChatMessage, b: ChatMessage) {
   if (a.role !== "assistant" || b.role !== "assistant") return false;
   if (!a.content.trim() || !b.content.trim()) return false;
   if (!isSameVisibleMessage(a, b)) return false;
-  if (Math.abs(a.timestamp - b.timestamp) > ASSISTANT_ECHO_WINDOW_MS) return false;
-  return isSyntheticLiveMessage(a) || isSyntheticLiveMessage(b);
+  return isHistoryLiveEchoWindow(a, b, ASSISTANT_ECHO_WINDOW_MS, ASSISTANT_ECHO_CLOCK_SKEW_MS);
 }
 
 function mergeEchoMessage(a: ChatMessage, b: ChatMessage) {
@@ -1493,7 +1554,9 @@ function normalizeMessageTimeline(messages: ChatMessage[]) {
       }
     }
 
-    const echoIndex = normalized.findIndex((candidate) => isLiveHistoryEcho(candidate, message) || isAssistantFinalEcho(candidate, message));
+    const echoIndex = normalized.findIndex((candidate) =>
+      isUserHistoryEcho(candidate, message) || isLiveHistoryEcho(candidate, message) || isAssistantFinalEcho(candidate, message),
+    );
     if (echoIndex >= 0) {
       normalized[echoIndex] = mergeEchoMessage(normalized[echoIndex]!, message);
       continue;
@@ -1516,6 +1579,7 @@ function isSameHistoryMessage(a: ChatMessage, b: ChatMessage) {
 function isCompatibleHistoryMessage(a: ChatMessage, b: ChatMessage) {
   if (a.role !== b.role) return false;
   if (a.role === "tool" || b.role === "tool") return isSameHistoryMessage(a, b);
+  if (a.role === "user") return isUserHistoryEcho(a, b);
   return isLiveHistoryEcho(a, b) || isAssistantFinalEcho(a, b);
 }
 
@@ -1525,14 +1589,22 @@ function mergeHistoryWithLive(loaded: ChatMessage[], live: ChatMessage[]) {
 
   const merged = [...loaded];
   for (const message of live) {
-    const compatibleIndex = merged.findIndex((loadedMessage) => isCompatibleHistoryMessage(loadedMessage, message));
+    let compatibleIndex = -1;
+    let compatibleDelta = Number.POSITIVE_INFINITY;
+    for (let index = 0; index < merged.length; index++) {
+      const loadedMessage = merged[index]!;
+      if (!isCompatibleHistoryMessage(loadedMessage, message)) continue;
+      const delta = Math.abs(loadedMessage.timestamp - message.timestamp);
+      if (delta < compatibleDelta) {
+        compatibleIndex = index;
+        compatibleDelta = delta;
+      }
+    }
     if (compatibleIndex >= 0) {
       const loadedMessage = merged[compatibleIndex]!;
-      merged[compatibleIndex] = {
-        ...loadedMessage,
-        thinking: loadedMessage.thinking || message.thinking,
-        attachments: mergeAttachments(loadedMessage.attachments, message.attachments),
-      };
+      merged[compatibleIndex] = loadedMessage.role === "tool" && message.role === "tool"
+        ? mergeToolMessage(loadedMessage, message)
+        : mergeEchoMessage(loadedMessage, message);
       continue;
     }
     if (message.isStreaming || message.id.startsWith("user-") || message.id.startsWith("assistant-") || message.id.startsWith("tool-")) {

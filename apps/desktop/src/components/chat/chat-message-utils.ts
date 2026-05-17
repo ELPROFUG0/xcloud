@@ -7,6 +7,29 @@ export interface Page {
 
 const UI_ACTION_DIRECTIVE_RENDER_RE = /<!--\s*xcloud:ui-action\b[\s\S]*?(?:-->|$)/g;
 const UI_ACTION_DIRECTIVE_RENDER_START = "<!-- xcloud:ui-action";
+const USER_HISTORY_ECHO_WINDOW_MS = 30 * 60_000;
+const USER_HISTORY_ECHO_CLOCK_SKEW_MS = 1_000;
+
+function normalizeEpochMillis(value: number) {
+  return value > 0 && value < 10_000_000_000 ? value * 1000 : value;
+}
+
+function parseMessageTimestamp(value: unknown, fallback = Date.now()) {
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isFinite(time) && time > 0 ? time : fallback;
+  }
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return normalizeEpochMillis(value);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return normalizeEpochMillis(numeric);
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return fallback;
+}
 
 export function stripHiddenUiActionDirectives(content: string) {
   let visible = content.replace(UI_ACTION_DIRECTIVE_RENDER_RE, "").trim();
@@ -90,19 +113,112 @@ export function dedupeDuplicateCodeChangeTools(messages: ChatMessage[]) {
   });
 }
 
+function isEmptyStreamingAssistant(message: ChatMessage) {
+  return message.role === "assistant"
+    && Boolean(message.isStreaming)
+    && !message.content.trim()
+    && !message.thinking
+    && !message.attachments?.length;
+}
+
+function isFinalAssistantResponse(message: ChatMessage) {
+  return message.role === "assistant"
+    && !message.isStreaming
+    && Boolean(message.content.trim() || message.thinking || message.attachments?.length);
+}
+
+function pageHasFinalAssistant(page: Page) {
+  return page.responses.some(isFinalAssistantResponse);
+}
+
+function lastFinalAssistantTimestamp(page: Page) {
+  for (let index = page.responses.length - 1; index >= 0; index--) {
+    const response = page.responses[index]!;
+    if (isFinalAssistantResponse(response)) return parseMessageTimestamp(response.timestamp);
+  }
+  return null;
+}
+
+function compactStreamingPlaceholders(responses: ChatMessage[]) {
+  const hasFinalAssistant = responses.some(isFinalAssistantResponse);
+  let lastEmptyStreaming: ChatMessage | null = null;
+
+  for (const message of responses) {
+    if (isEmptyStreamingAssistant(message)) lastEmptyStreaming = message;
+  }
+
+  const compacted = responses.filter((message) => {
+    if (!isEmptyStreamingAssistant(message)) return true;
+    return false;
+  });
+
+  if (!hasFinalAssistant && lastEmptyStreaming) compacted.push(lastEmptyStreaming);
+  return compacted;
+}
+
+function attachmentListSignature(message: ChatMessage) {
+  return message.attachments
+    ?.map((attachment) => `${attachment.mediaType ?? ""}:${attachment.filename ?? attachment.alt ?? attachment.url}`)
+    .join("|") ?? "";
+}
+
+function comparableMessageContent(message: ChatMessage) {
+  return stripHiddenUiActionDirectives(message.content)
+    .replace(/(?:^|\n)[ \t]*\[[A-Z][a-z]{2}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s+[A-Z]{2,5}\][ \t]*/g, "\n")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isSyntheticHistoryUserEcho(a: ChatMessage, b: ChatMessage) {
+  if (a.role !== "user" || b.role !== "user") return false;
+  const aIsHistory = a.id.startsWith("history-");
+  const bIsHistory = b.id.startsWith("history-");
+  const aIsLive = a.id.startsWith("user-");
+  const bIsLive = b.id.startsWith("user-");
+  if (!((aIsHistory && bIsLive) || (bIsHistory && aIsLive))) return false;
+  const historyTimestamp = parseMessageTimestamp(aIsHistory ? a.timestamp : b.timestamp);
+  const liveTimestamp = parseMessageTimestamp(aIsLive ? a.timestamp : b.timestamp);
+  const historyMinusLive = historyTimestamp - liveTimestamp;
+  return comparableMessageContent(a) === comparableMessageContent(b)
+    && attachmentListSignature(a) === attachmentListSignature(b)
+    && historyMinusLive >= -USER_HISTORY_ECHO_CLOCK_SKEW_MS
+    && historyMinusLive <= USER_HISTORY_ECHO_WINDOW_MS;
+}
+
 export function paginate(messages: ChatMessage[]): Page[] {
   const pages: Page[] = [];
   let current: Page | null = null;
+  let carriedEmptyStreaming: ChatMessage | null = null;
+
+  const appendResponse = (page: Page, message: ChatMessage) => {
+    page.responses = compactStreamingPlaceholders([...page.responses, message]);
+  };
+
   for (const msg of messages) {
     if (msg.role === "user") {
-      current = { userMessage: msg, responses: [] };
+      const finalAssistantTimestamp = current ? lastFinalAssistantTimestamp(current) : null;
+      const incomingIsHistoryEchoForLiveUser = msg.id.startsWith("history-") && current?.userMessage?.id.startsWith("user-");
+      const belongsToCurrentTurn = finalAssistantTimestamp === null
+        || incomingIsHistoryEchoForLiveUser
+        || parseMessageTimestamp(msg.timestamp) <= finalAssistantTimestamp + 1_000;
+      if (current?.userMessage && isSyntheticHistoryUserEcho(current.userMessage, msg) && belongsToCurrentTurn) {
+        current.userMessage = current.userMessage.id.startsWith("history-") ? current.userMessage : msg;
+        continue;
+      }
+      current = { userMessage: msg, responses: carriedEmptyStreaming ? [carriedEmptyStreaming] : [] };
+      current.responses = compactStreamingPlaceholders(current.responses);
+      carriedEmptyStreaming = null;
       pages.push(current);
     } else {
+      if (isEmptyStreamingAssistant(msg) && (!current || pageHasFinalAssistant(current))) {
+        carriedEmptyStreaming = msg;
+        continue;
+      }
       if (!current) {
         current = { responses: [] };
         pages.push(current);
       }
-      current.responses.push(msg);
+      appendResponse(current, msg);
     }
   }
   return pages;
@@ -110,7 +226,7 @@ export function paginate(messages: ChatMessage[]): Page[] {
 
 export function formatTime(timestamp?: number): string {
   if (!timestamp) return "";
-  const d = new Date(timestamp);
+  const d = new Date(parseMessageTimestamp(timestamp));
   const now = new Date();
   const isToday = d.toDateString() === now.toDateString();
   const yesterday = new Date(now);
