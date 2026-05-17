@@ -263,6 +263,19 @@ async function addAgentIfMissing(params) {
 	});
 }
 
+async function updateAgentConfigName(params) {
+	const name = normalizeOptionalText(params.name);
+	if (!name) return;
+	return enqueueAgentConfigWrite(async () => {
+		const config = await readConfigFromDisk(resolveConfig(params.ctx));
+		const list = listConfigAgents(config);
+		const agent = list.find((entry) => normalizeOptionalText(entry.id) === params.agentId);
+		if (!agent || agent.name === name) return;
+		agent.name = name;
+		await fs.writeFile(resolveConfigPath(), `${JSON.stringify(config, null, 2)}\n`, "utf8");
+	});
+}
+
 async function writeAgentFiles(params) {
 	await fs.mkdir(params.agentWorkspacePath, { recursive: true });
 	const files = [
@@ -583,16 +596,17 @@ var unicore_workspace_default = definePluginEntry({
 					agentWorkspacePath,
 					model
 				});
-				await writeAgentFiles({
-					agentWorkspacePath,
-					workspaceId: null,
-					name,
-					role,
-					input
-				});
-				const ui = input.createUi === true
-					? await ensureAgentUi({
-						agentId,
+					await writeAgentFiles({
+						agentWorkspacePath,
+						workspaceId: null,
+						name,
+						role,
+						input
+					});
+					await updateAgentConfigName({ ctx, agentId, name });
+					const ui = input.createUi === true
+						? await ensureAgentUi({
+							agentId,
 						uiBriefMd: normalizeOptionalText(input.uiBriefMd) || role || name
 					})
 					: null;
@@ -638,16 +652,17 @@ var unicore_workspace_default = definePluginEntry({
 					agentWorkspacePath,
 					model
 				});
-				await writeAgentFiles({
-					agentWorkspacePath,
-					workspaceId,
-					name,
-					role,
-					input
-				});
-				const ui = input.createUi === true
-					? await ensureAgentUi({
-						agentId,
+					await writeAgentFiles({
+						agentWorkspacePath,
+						workspaceId,
+						name,
+						role,
+						input
+					});
+					await updateAgentConfigName({ ctx, agentId, name });
+					const ui = input.createUi === true
+						? await ensureAgentUi({
+							agentId,
 						uiBriefMd: normalizeOptionalText(input.uiBriefMd) || role || name
 					})
 					: null;

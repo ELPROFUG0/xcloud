@@ -46,6 +46,15 @@ function pickInternalAvatar(agentId: string) {
   return INTERNAL_AVATARS[hashAgentId(agentId) % INTERNAL_AVATARS.length];
 }
 
+function humanizeAgentId(agentId: string) {
+  if (agentId === "main") return "Main";
+  return agentId
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 async function updateField(agentId: string, field: string, value: string): Promise<void> {
   const path = getIdentityPath(agentId);
   const regex = new RegExp(`(\\*\\*${field}:\\*\\*\\s*)[^\\r\\n]*`, "i");
@@ -64,7 +73,8 @@ async function updateField(agentId: string, field: string, value: string): Promi
 
     await writeTextFile(path, content, { baseDir: BaseDirectory.Home });
   } catch {
-    const content = `- **${field}:** ${value}\n`;
+    const name = field.toLowerCase() === "name" ? value : humanizeAgentId(agentId);
+    const content = `# IDENTITY.md\n\n- **Name:** ${name}\n- **${field}:** ${value}\n`;
     await writeTextFile(path, content, { baseDir: BaseDirectory.Home });
   }
 }
@@ -96,6 +106,9 @@ export async function ensureAgentDefaultAvatar(agentId: string): Promise<string 
   const buffer = new Uint8Array(await (await resp.blob()).arrayBuffer());
   try { await mkdir(destDir, { baseDir: BaseDirectory.Home, recursive: true }); } catch { /* ok */ }
   await writeFile(destPath, buffer, { baseDir: BaseDirectory.Home });
-  await updateAgentAvatar(agentId, "avatar.jpg");
+  const identityContent = await readTextFile(getIdentityPath(agentId), { baseDir: BaseDirectory.Home }).catch(() => "");
+  if (identityContent.trim()) {
+    await updateAgentAvatar(agentId, "avatar.jpg");
+  }
   return "avatar.jpg";
 }
