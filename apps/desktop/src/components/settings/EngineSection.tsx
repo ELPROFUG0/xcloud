@@ -10,6 +10,383 @@ import cloudServerLogo from "@/assets/engine/cloud-server.png";
 import macMiniLogo from "@/assets/engine/mac-mini.svg";
 import localDesktopLogo from "@/assets/engine/local-desktop.svg";
 
+const XCLOUD_TERMINAL_PLUGIN_MANIFEST = `{
+  "id": "xcloud-terminal",
+  "name": "xCloud Terminal",
+  "description": "Remote terminal bridge for xCloud.",
+  "enabledByDefault": true,
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
+`;
+
+const XCLOUD_TERMINAL_PLUGIN_PACKAGE = `{
+  "name": "@xcloud/openclaw-terminal-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@lydell/node-pty": "1.2.0-beta.12"
+  },
+  "openclaw": { "extensions": ["./index.js"] }
+}
+`;
+
+const XCLOUD_TERMINAL_PLUGIN_INDEX = `import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+const sessions = new Map();
+let ptyModulePromise = null;
+
+async function loadPty() {
+  ptyModulePromise ??= (async () => {
+    let lastError = null;
+    for (const specifier of ["@lydell/node-pty", "@lydell/node-pty/index.js"]) {
+      try {
+        return await import(specifier);
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw lastError ?? new Error("Cannot load @lydell/node-pty.");
+  })();
+  const module = await ptyModulePromise;
+  const spawn = module.spawn ?? module.default?.spawn;
+  if (!spawn) throw new Error("PTY support is unavailable on this engine.");
+  return spawn;
+}
+
+function int(value, fallback, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(numeric)));
+}
+
+function text(value) {
+  return typeof value === "string" && value.trim() ? value : "";
+}
+
+function authProfilesPath() {
+  return path.join(os.homedir(), ".openclaw", "agents", "main", "agent", "auth-profiles.json");
+}
+
+function authProfileProvider(profile) {
+  if (!profile || typeof profile !== "object") return "";
+  if (typeof profile.provider === "string" && profile.provider) return profile.provider;
+  const credential = profile.credential;
+  if (credential && typeof credential === "object" && typeof credential.provider === "string") return credential.provider;
+  return "";
+}
+
+function hasAuthProvider(profiles, provider) {
+  if (!profiles || typeof profiles !== "object") return false;
+  return Object.entries(profiles).some(([id, profile]) => (
+    authProfileProvider(profile) === provider ||
+    (typeof id === "string" && id.startsWith(provider + ":"))
+  ));
+}
+
+async function disconnectAuthProvider(providerRaw) {
+  const provider = text(providerRaw).trim();
+  if (!provider) throw new Error("Auth provider is required.");
+  const filePath = authProfilesPath();
+  let raw = "";
+  try {
+    raw = await fs.readFile(filePath, "utf8");
+  } catch (err) {
+    if (err && typeof err === "object" && err.code === "ENOENT") {
+      return { ok: true, provider, removed: 0, status: { openaiCodex: false, githubCopilot: false } };
+    }
+    throw err;
+  }
+
+  const value = JSON.parse(raw || "{}");
+  const profiles = value?.profiles && typeof value.profiles === "object" && !Array.isArray(value.profiles)
+    ? value.profiles
+    : null;
+  if (!profiles) {
+    return { ok: true, provider, removed: 0, status: { openaiCodex: false, githubCopilot: false } };
+  }
+
+  let removed = 0;
+  for (const [id, profile] of Object.entries(profiles)) {
+    if (authProfileProvider(profile) === provider || (typeof id === "string" && id.startsWith(provider + ":"))) {
+      delete profiles[id];
+      removed += 1;
+    }
+  }
+  if (removed > 0) await fs.writeFile(filePath, JSON.stringify(value, null, 2) + "\\n", "utf8");
+
+  return {
+    ok: true,
+    provider,
+    removed,
+    status: {
+      openaiCodex: hasAuthProvider(profiles, "openai-codex"),
+      githubCopilot: hasAuthProvider(profiles, "github-copilot")
+    }
+  };
+}
+
+function shell(command) {
+  if (process.platform === "win32") {
+    return { command: process.env.ComSpec || "cmd.exe", args: command ? ["/d", "/s", "/c", command] : [] };
+  }
+  return { command: process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/bash"), args: command ? ["-lc", command] : ["-l"] };
+}
+
+function push(session, data) {
+  session.seq += 1;
+  session.chunks.push({ seq: session.seq, data });
+  if (session.chunks.length > 2000) session.chunks.splice(0, session.chunks.length - 2000);
+  session.updatedAt = Date.now();
+}
+
+function session(id) {
+  const key = text(id);
+  if (!key) throw new Error("PTY id is required.");
+  const found = sessions.get(key);
+  if (!found) throw new Error("Remote terminal session not found.");
+  return found;
+}
+
+function sweep() {
+  const now = Date.now();
+  for (const [id, value] of sessions) {
+    if (value.exited && now - value.updatedAt > 300000) sessions.delete(id);
+  }
+}
+
+function fail(respond, err) {
+  respond(false, void 0, {
+    code: "UNAVAILABLE",
+    message: err instanceof Error ? err.message : String(err)
+  });
+}
+
+function register(api) {
+  api.registerGatewayMethod("xcloud.pty.spawn", async ({ params, respond }) => {
+    try {
+      sweep();
+      const spawn = await loadPty();
+      const command = text(params?.command);
+      const cols = int(params?.cols, 80, 20, 400);
+      const rows = int(params?.rows, 24, 8, 120);
+      const cwdRaw = text(params?.cwd);
+      const cwd = cwdRaw ? cwdRaw.replace(/^~(?=\\/|$)/, os.homedir()) : os.homedir();
+      const launch = shell(command);
+      const pty = spawn(launch.command, launch.args, {
+        name: "xterm-256color",
+        cols,
+        rows,
+        cwd,
+        env: { ...process.env, TERM: process.env.TERM || "xterm-256color" }
+      });
+      const id = randomUUID();
+      const value = { id, pty, chunks: [], seq: 0, exited: false, exitCode: null, signal: null, updatedAt: Date.now() };
+      pty.onData((data) => push(value, data));
+      pty.onExit((event) => {
+        value.exited = true;
+        value.exitCode = typeof event.exitCode === "number" ? event.exitCode : null;
+        value.signal = typeof event.signal === "number" || typeof event.signal === "string" ? event.signal : null;
+        value.updatedAt = Date.now();
+      });
+      sessions.set(id, value);
+      respond(true, { id, pid: pty.pid ?? null, cols, rows });
+    } catch (err) {
+      fail(respond, err);
+    }
+  }, { scope: "operator.admin" });
+
+  api.registerGatewayMethod("xcloud.pty.read", async ({ params, respond }) => {
+    try {
+      const value = session(params?.id);
+      const after = int(params?.after, 0, 0, Number.MAX_SAFE_INTEGER);
+      respond(true, {
+        id: value.id,
+        chunks: value.chunks.filter((chunk) => chunk.seq > after),
+        lastSeq: value.seq,
+        exited: value.exited,
+        exitCode: value.exitCode,
+        signal: value.signal
+      });
+    } catch (err) {
+      fail(respond, err);
+    }
+  }, { scope: "operator.admin" });
+
+  api.registerGatewayMethod("xcloud.pty.write", async ({ params, respond }) => {
+    try {
+      const value = session(params?.id);
+      const data = typeof params?.data === "string" ? params.data : "";
+      if (data && !value.exited) value.pty.write(data);
+      respond(true, { ok: true });
+    } catch (err) {
+      fail(respond, err);
+    }
+  }, { scope: "operator.admin" });
+
+  api.registerGatewayMethod("xcloud.pty.resize", async ({ params, respond }) => {
+    try {
+      const value = session(params?.id);
+      const cols = int(params?.cols, 80, 20, 400);
+      const rows = int(params?.rows, 24, 8, 120);
+      if (!value.exited) value.pty.resize(cols, rows);
+      respond(true, { ok: true, cols, rows });
+    } catch (err) {
+      fail(respond, err);
+    }
+  }, { scope: "operator.admin" });
+
+  api.registerGatewayMethod("xcloud.pty.kill", async ({ params, respond }) => {
+    try {
+      const value = session(params?.id);
+      try { value.pty.kill(); } catch {}
+      sessions.delete(value.id);
+      respond(true, { ok: true });
+    } catch (err) {
+      fail(respond, err);
+    }
+  }, { scope: "operator.admin" });
+
+  api.registerGatewayMethod("xcloud.auth.disconnect", async ({ params, respond }) => {
+    try {
+      respond(true, await disconnectAuthProvider(params?.provider));
+    } catch (err) {
+      fail(respond, err);
+    }
+  }, { scope: "operator.admin" });
+}
+
+export default definePluginEntry({
+  id: "xcloud-terminal",
+  name: "xCloud Terminal",
+  description: "Remote terminal bridge for xCloud.",
+  register
+});
+`;
+
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function base64Text(value: string) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function writePluginFileCommand(fileName: string, content: string) {
+  return `printf %s ${shellQuote(base64Text(content))} | decode_b64 > "$PLUGIN_DIR/${fileName}"`;
+}
+
+function buildRemoteHelperFilesCommand() {
+  const resolveRoots = `OPENCLAW_ROOTS="$(node - <<'NODE'
+const fs = require("fs");
+const path = require("path");
+const cp = require("child_process");
+const os = require("os");
+const roots = [];
+function add(root) {
+  if (!root) return;
+  try { root = fs.realpathSync(root); } catch {}
+  if (!fs.existsSync(path.join(root, "dist"))) return;
+  if (!roots.includes(root)) roots.push(root);
+}
+try {
+  const bin = cp.execSync("command -v openclaw", { encoding: "utf8", shell: "/bin/sh" }).trim();
+  let current = fs.realpathSync(bin);
+  if (fs.existsSync(current) && fs.statSync(current).isFile()) current = path.dirname(current);
+  for (let i = 0; i < 10; i += 1) {
+    add(current);
+    const next = path.dirname(current);
+    if (next === current) break;
+    current = next;
+  }
+} catch {}
+try {
+  const npmRoot = cp.execSync("npm root -g", { encoding: "utf8" }).trim();
+  add(path.join(npmRoot, "openclaw"));
+} catch {}
+try {
+  const runtimeDeps = path.join(os.homedir(), ".openclaw", "plugin-runtime-deps");
+  for (const entry of fs.readdirSync(runtimeDeps, { withFileTypes: true })) {
+    if (entry.isDirectory() && entry.name.startsWith("openclaw-")) {
+      add(path.join(runtimeDeps, entry.name));
+    }
+  }
+} catch {}
+process.stdout.write(roots.join("\\n"));
+NODE
+)"`;
+  const writeFiles = [
+    `PLUGIN_DIR="$OPENCLAW_ROOT/dist/extensions/xcloud-terminal"`,
+    `mkdir -p "$PLUGIN_DIR"`,
+    writePluginFileCommand("openclaw.plugin.json", XCLOUD_TERMINAL_PLUGIN_MANIFEST),
+    writePluginFileCommand("package.json", XCLOUD_TERMINAL_PLUGIN_PACKAGE),
+    writePluginFileCommand("index.js", XCLOUD_TERMINAL_PLUGIN_INDEX),
+    `echo "Installed xCloud remote helper in $PLUGIN_DIR"`,
+  ].join(" && ");
+  const installDependency = `if [ ! -f "$OPENCLAW_ROOT/node_modules/@lydell/node-pty/package.json" ]; then echo "Installing @lydell/node-pty in $OPENCLAW_ROOT"; npm install --prefix "$OPENCLAW_ROOT" --no-save --omit=dev @lydell/node-pty@1.2.0-beta.12; fi`;
+  return [
+    `unset npm_config_prefix`,
+    resolveRoots,
+    `if [ -z "$OPENCLAW_ROOTS" ]; then echo "Could not locate the OpenClaw install used by this host."; exit 1; fi`,
+    `decode_b64() { if base64 --decode </dev/null >/dev/null 2>&1; then base64 --decode; else base64 -D; fi; }`,
+    `printf '%s\\n' "$OPENCLAW_ROOTS" | while IFS= read -r OPENCLAW_ROOT; do ${installDependency}; ${writeFiles}; done`,
+  ].join(" && ");
+}
+
+function buildRemoteHelperUpdateCommand() {
+  return [
+    "openclaw --version >/dev/null",
+    buildRemoteHelperFilesCommand(),
+    "openclaw config set plugins.entries.xcloud-terminal.enabled true --strict-json",
+    "openclaw config set gateway.controlUi.allowedOrigins '[\"http://localhost:1420\",\"http://127.0.0.1:1420\",\"tauri://localhost\",\"http://tauri.localhost\"]' --strict-json",
+    "openclaw gateway restart",
+    "echo \"xCloud remote helper updated.\"",
+  ].join(" && ");
+}
+
+function buildRemoteSetupCommand() {
+  return [
+    "unset npm_config_prefix",
+    "npm install -g openclaw@latest",
+    "TOKEN=$(openssl rand -hex 24)",
+    buildRemoteHelperFilesCommand(),
+    "openclaw onboard --non-interactive --accept-risk --mode local --gateway-bind lan --gateway-auth token --gateway-token \"$TOKEN\" --install-daemon --skip-channels --skip-skills --skip-search --skip-ui",
+    "openclaw config set plugins.entries.xcloud-terminal.enabled true --strict-json",
+    "openclaw config set gateway.controlUi.allowedOrigins '[\"http://localhost:1420\",\"http://127.0.0.1:1420\",\"tauri://localhost\",\"http://tauri.localhost\"]' --strict-json",
+    "openclaw gateway restart",
+    "IP=$(hostname -I 2>/dev/null | awk '{print $1}' || ipconfig getifaddr en0)",
+    "echo \"URL: ws://$IP:18789\"",
+    "echo \"Token: $TOKEN\"",
+  ].join(" && ");
+}
+
+const DISPLAY_REMOTE_SETUP_COMMAND = [
+  "npm install -g openclaw@latest",
+  "# installs the xCloud remote terminal helper",
+  "openclaw onboard --gateway-bind lan ...",
+  "openclaw gateway restart",
+  "echo URL and Token",
+].join("\n");
+
+const DISPLAY_REMOTE_HELPER_UPDATE_COMMAND = [
+  "# for an engine that is already connected",
+  "install/update xCloud remote terminal helper",
+  "openclaw gateway restart",
+  "keep current URL and Token",
+].join("\n");
+
 interface EngineSectionProps {
   engine: BrowserEngine;
 }
@@ -104,7 +481,7 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
   const [vpsToken, setVpsToken] = useState(() => localStorage.getItem("engineVpsToken") ?? "");
   const [engineSaved, setEngineSaved] = useState(false);
   const [engineStatus, setEngineStatus] = useState<{ running: boolean; port: number; pid: number | null; managed: boolean } | null>(null);
-  const [copiedScript, setCopiedScript] = useState(false);
+  const [copiedScript, setCopiedScript] = useState<"setup" | "helper" | null>(null);
   const [selectedEngineView, setSelectedEngineView] = useState<EngineMode | null>(null);
 
   useEffect(() => {
@@ -225,7 +602,8 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
           const token = isMini ? macMiniToken : vpsToken;
           const setUrl = isMini ? setMacMiniUrl : setVpsUrl;
           const setToken = isMini ? setMacMiniToken : setVpsToken;
-          const installCmd = "npm install -g openclaw@latest && TOKEN=$(openssl rand -hex 24) && openclaw onboard --non-interactive --accept-risk --mode local --gateway-bind lan --gateway-auth token --gateway-token \"$TOKEN\" --install-daemon --skip-channels --skip-skills --skip-search --skip-ui && openclaw config set gateway.controlUi.allowedOrigins '[\"http://localhost:1420\",\"http://127.0.0.1:1420\",\"tauri://localhost\",\"http://tauri.localhost\"]' --strict-json && openclaw gateway restart && IP=$(hostname -I 2>/dev/null | awk '{print $1}' || ipconfig getifaddr en0) && echo \"URL: ws://$IP:18789\" && echo \"Token: $TOKEN\"";
+          const installCmd = buildRemoteSetupCommand();
+          const helperUpdateCmd = buildRemoteHelperUpdateCommand();
 
           return (
             <div>
@@ -272,28 +650,48 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
                   className="w-52 rounded-xl bg-[#262626] px-3 py-1.5 text-sm text-text font-mono placeholder:text-text-muted text-right focus:outline-none"
                 />
               </div>
-
               {/* Setup script */}
               <div className="py-4 border-b border-border/50">
                 <h4 className="text-[13px] font-medium mb-1">
-                  {isMini ? "Setup your Mac Mini" : "Setup your VPS"}
+                  {isMini ? "Setup new Mac Mini" : "Setup new VPS"}
                 </h4>
                 <p className="text-xs text-text-muted mb-3">
                   {isMini
-                    ? "Run this command on your Mac Mini. It will install the engine and output the URL and token."
-                    : "SSH into your VPS and run this command. It will install the engine and output the URL and token."}
+                    ? "Use this for a fresh Mac Mini. It installs the engine and outputs a new URL and token."
+                    : "Use this for a fresh VPS. It installs the engine and outputs a new URL and token."}
                 </p>
                 <div className="flex items-center gap-2">
-                  <pre className="flex-1 min-w-0 rounded-xl bg-[#262626] px-3 py-2.5 text-[11px] font-mono text-text-muted leading-relaxed overflow-x-auto">{installCmd}</pre>
+                  <pre className="flex-1 min-w-0 rounded-xl bg-[#262626] px-3 py-2.5 text-[11px] font-mono text-text-muted leading-relaxed overflow-x-auto">{DISPLAY_REMOTE_SETUP_COMMAND}</pre>
                   <button
                     onClick={() => {
                       navigator.clipboard.writeText(installCmd);
-                      setCopiedScript(true);
-                      setTimeout(() => setCopiedScript(false), 2000);
+                      setCopiedScript("setup");
+                      setTimeout(() => setCopiedScript(null), 2000);
                     }}
                     className="shrink-0 flex h-9 w-9 items-center justify-center rounded-xl bg-[#262626] text-text-muted hover:text-text transition-colors"
                   >
-                    {copiedScript ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+                    {copiedScript === "setup" ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Helper repair */}
+              <div className="py-4 border-b border-border/50">
+                <h4 className="text-[13px] font-medium mb-1">Repair / update remote helper</h4>
+                <p className="text-xs text-text-muted mb-3">
+                  Use this when this engine is already connected. It keeps the current URL and token.
+                </p>
+                <div className="flex items-center gap-2">
+                  <pre className="flex-1 min-w-0 rounded-xl bg-[#262626] px-3 py-2.5 text-[11px] font-mono text-text-muted leading-relaxed overflow-x-auto">{DISPLAY_REMOTE_HELPER_UPDATE_COMMAND}</pre>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(helperUpdateCmd);
+                      setCopiedScript("helper");
+                      setTimeout(() => setCopiedScript(null), 2000);
+                    }}
+                    className="shrink-0 flex h-9 w-9 items-center justify-center rounded-xl bg-[#262626] text-text-muted hover:text-text transition-colors"
+                  >
+                    {copiedScript === "helper" ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
                   </button>
                 </div>
               </div>

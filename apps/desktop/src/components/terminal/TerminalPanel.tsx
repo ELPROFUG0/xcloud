@@ -10,6 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { X, Search, AlertTriangle, ArrowDown, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/cn";
+import type { BrowserEngine } from "@/lib/engine";
 import "@xterm/xterm/css/xterm.css";
 
 // CLI agent icons (from existing assets/editors/)
@@ -77,6 +78,42 @@ const SEARCH_DECORATIONS = {
   activeMatchColorOverviewRuler: "#ffd33d",
 };
 
+const ANSI_PATTERN = /\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/g;
+const URL_PATTERN = /https?:\/\/[^\s<>"'`)\]}]+/g;
+const TRUSTED_AUTH_HOSTS = new Set([
+  "auth.openai.com",
+  "github.com",
+]);
+
+function stripAnsi(value: string) {
+  return value.replace(ANSI_PATTERN, "");
+}
+
+function normalizeAuthUrl(raw: string) {
+  const trimmed = raw.replace(/[.,;:!?]+$/g, "");
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "https:") return null;
+    if (!TRUSTED_AUTH_HOSTS.has(url.hostname)) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function maybeOpenAuthUrlLocally(output: string, opened: Set<string>) {
+  const text = stripAnsi(output);
+  for (const match of text.matchAll(URL_PATTERN)) {
+    const url = normalizeAuthUrl(match[0]);
+    if (!url || opened.has(url)) continue;
+    opened.add(url);
+    import("@tauri-apps/plugin-opener")
+      .then(({ openUrl }) => openUrl(url))
+      .catch(() => {});
+    return;
+  }
+}
+
 // ── Error boundary ──────────────────────────────────────────────────────────
 class TerminalErrorBoundary extends Component<
   { children: ReactNode; onClose?: () => void },
@@ -106,7 +143,9 @@ class TerminalErrorBoundary extends Component<
 // ── Types ───────────────────────────────────────────────────────────────────
 interface TerminalTab {
   id: number;
-  ptyId: number;
+  transport: "local" | "remote";
+  ptyId?: number;
+  remotePtyId?: string;
   title: string;
   icon: string;
   agentId: string;
@@ -116,6 +155,8 @@ interface TerminalPanelProps {
   className?: string;
   onClose?: () => void;
   initialCommand?: string;
+  remoteEngine?: BrowserEngine;
+  remoteLabel?: string;
 }
 
 export function TerminalPanel(props: TerminalPanelProps) {
@@ -127,7 +168,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
 }
 
 // ── Main component ──────────────────────────────────────────────────────────
-function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPanelProps) {
+function TerminalPanelInner({ className, onClose, initialCommand, remoteEngine, remoteLabel }: TerminalPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -141,12 +182,23 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
   const searchInputRef = useRef<HTMLInputElement>(null);
   const initRef = useRef(false);
   const lastInitialCommandRef = useRef<string | undefined>(undefined);
+  const tabSeqRef = useRef(1);
+  const tabsRef = useRef<TerminalTab[]>([]);
 
   const parkedRef = useRef<Map<number, { xterm: XTerm; wrapper: HTMLDivElement; fitAddon: FitAddon; searchAddon: SearchAddon }>>(new Map());
   const unlistenersRef = useRef<Map<number, () => void>>(new Map());
+  const isRemoteTerminal = Boolean(remoteEngine?.isRemote);
+
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
 
   // ── Detect installed CLIs ─────────────────────────────────────────────────
   useEffect(() => {
+    if (isRemoteTerminal) {
+      setInstalledAgents(new Set(["shell"]));
+      return;
+    }
     async function detect() {
       const installed = new Set<string>(["shell"]);
       for (const agent of CLI_AGENTS) {
@@ -159,7 +211,7 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
       setInstalledAgents(installed);
     }
     detect();
-  }, []);
+  }, [isRemoteTerminal]);
 
 
   // ── Create tab ────────────────────────────────────────────────────────────
@@ -168,18 +220,35 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
       const agent = CLI_AGENTS.find(a => a.id === agentId) ?? CLI_AGENTS[0]!;
       const launchCmd = command ?? (agent.command ? agent.command : null);
       const isAuthLaunch = command?.includes("# xcloud-auth-") ?? false;
+      const tabId = tabSeqRef.current++;
+      let ptyId: number | undefined;
+      let remotePtyId: string | undefined;
 
-      const ptyId: number = await invoke("pty_spawn", {
-        cols: 80,
-        rows: 24,
-        cwd: null,
-        command: isAuthLaunch ? launchCmd : null,
-      });
+      if (remoteEngine?.isRemote) {
+        if (!remoteEngine.connected) throw new Error("Remote engine is not connected.");
+        const spawned = await remoteEngine.rpc("xcloud.pty.spawn", {
+          cols: 80,
+          rows: 24,
+          cwd: null,
+          command: launchCmd,
+        });
+        remotePtyId = typeof spawned.id === "string" ? spawned.id : undefined;
+        if (!remotePtyId) throw new Error("Remote engine did not return a terminal id.");
+      } else {
+        ptyId = await invoke("pty_spawn", {
+          cols: 80,
+          rows: 24,
+          cwd: null,
+          command: isAuthLaunch ? launchCmd : null,
+        });
+      }
 
       const tab: TerminalTab = {
-        id: ptyId,
+        id: tabId,
+        transport: remotePtyId ? "remote" : "local",
         ptyId,
-        title: agent.label,
+        remotePtyId,
+        title: remotePtyId && remoteLabel ? `${remoteLabel}` : agent.label,
         icon: agent.icon,
         agentId: agent.id,
       };
@@ -214,27 +283,79 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
       xterm.onScroll(() => { const buf = xterm.buffer.active; setIsAtBottom(buf.viewportY >= buf.baseY); });
       xterm.onWriteParsed(() => { const buf = xterm.buffer.active; setIsAtBottom(buf.viewportY >= buf.baseY); });
 
-      xterm.onData((data) => { invoke("pty_write", { id: ptyId, data }).catch(() => {}); });
+      if (remotePtyId && remoteEngine) {
+        xterm.onData((data) => {
+          remoteEngine.rpc("xcloud.pty.write", { id: remotePtyId, data }).catch(() => {});
+        });
+        const openedAuthUrls = new Set<string>();
+        let lastSeq = 0;
+        let stopped = false;
+        let polling = false;
+        let exitWritten = false;
+        const poll = async () => {
+          if (stopped || polling) return;
+          polling = true;
+          try {
+            const result = await remoteEngine.rpc("xcloud.pty.read", { id: remotePtyId, after: lastSeq });
+            const chunks = Array.isArray(result.chunks) ? result.chunks : [];
+            for (const chunk of chunks) {
+              if (!chunk || typeof chunk !== "object") continue;
+              const seq = Number((chunk as { seq?: unknown }).seq);
+              const data = (chunk as { data?: unknown }).data;
+              if (Number.isFinite(seq)) lastSeq = Math.max(lastSeq, seq);
+              if (typeof data === "string") {
+                const output = isAuthLaunch ? data.replace(/\r?\n?🦞 OpenClaw[^\r\n]*(?:\r?\n\s+[^\r\n]+)?\r?\n?/g, "\r\n") : data;
+                if (isAuthLaunch) maybeOpenAuthUrlLocally(output, openedAuthUrls);
+                xterm.write(output);
+              }
+            }
+            if (result.exited === true && !exitWritten) {
+              exitWritten = true;
+              xterm.write("\r\n\x1b[38;5;241m[Process exited]\x1b[0m\r\n");
+              stopped = true;
+              window.clearInterval(interval);
+            }
+          } catch (err) {
+            if (!stopped) {
+              stopped = true;
+              window.clearInterval(interval);
+              const message = err instanceof Error ? err.message : String(err);
+              xterm.write(`\r\n\x1b[38;5;203m[Remote terminal unavailable: ${message}]\x1b[0m\r\n`);
+            }
+          } finally {
+            polling = false;
+          }
+        };
+        const interval = window.setInterval(poll, 80);
+        void poll();
+        unlistenersRef.current.set(tabId, () => {
+          stopped = true;
+          window.clearInterval(interval);
+        });
+      } else if (ptyId !== undefined) {
+        xterm.onData((data) => { invoke("pty_write", { id: ptyId, data }).catch(() => {}); });
 
-      const unlisten = await listen<{ id: number; data: string }>("pty-output", (event) => {
-        if (event.payload.id !== ptyId) return;
-        let data = event.payload.data;
-        if (isAuthLaunch) {
-          data = data.replace(/\r?\n?🦞 OpenClaw[^\r\n]*(?:\r?\n\s+[^\r\n]+)?\r?\n?/g, "\r\n");
-        }
-        xterm.write(data);
-      });
-      const unlistenExit = await listen<{ id: number; code: number | null }>("pty-exit", (event) => {
-        if (event.payload.id === ptyId) xterm.write("\r\n\x1b[38;5;241m[Process exited]\x1b[0m\r\n");
-      });
+        const unlisten = await listen<{ id: number; data: string }>("pty-output", (event) => {
+          if (event.payload.id !== ptyId) return;
+          let data = event.payload.data;
+          if (isAuthLaunch) {
+            data = data.replace(/\r?\n?🦞 OpenClaw[^\r\n]*(?:\r?\n\s+[^\r\n]+)?\r?\n?/g, "\r\n");
+          }
+          xterm.write(data);
+        });
+        const unlistenExit = await listen<{ id: number; code: number | null }>("pty-exit", (event) => {
+          if (event.payload.id === ptyId) xterm.write("\r\n\x1b[38;5;241m[Process exited]\x1b[0m\r\n");
+        });
 
-      unlistenersRef.current.set(ptyId, () => { unlisten(); unlistenExit(); });
-      parkedRef.current.set(ptyId, { xterm, wrapper, fitAddon, searchAddon });
+        unlistenersRef.current.set(tabId, () => { unlisten(); unlistenExit(); });
+      }
+
+      parkedRef.current.set(tabId, { xterm, wrapper, fitAddon, searchAddon });
 
       setTabs((prev) => [...prev, tab]);
-      setActiveTab(ptyId);
+      setActiveTab(tabId);
 
-      if (launchCmd && !isAuthLaunch) {
+      if (launchCmd && !isAuthLaunch && ptyId !== undefined) {
         setTimeout(() => {
           invoke("pty_write", { id: ptyId, data: `${launchCmd}\n` }).catch(() => {});
         }, 450);
@@ -243,9 +364,46 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
       return ptyId;
     } catch (err) {
       console.error("Failed to create terminal:", err);
+      const tabId = tabSeqRef.current++;
+      const message = err instanceof Error ? err.message : String(err);
+      const xterm = new XTerm({
+        cursorBlink: true,
+        fontFamily: '"JetBrains Mono", "JetBrainsMono Nerd Font", "MesloLGM Nerd Font", "MesloLGM NF", "MesloLGS NF", "MesloLGS Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", "CaskaydiaCove Nerd Font", "Menlo", "Monaco", "Courier New", monospace',
+        fontSize: 12,
+        theme: TERMINAL_THEME,
+        allowProposedApi: true,
+        scrollback: 5000,
+        macOptionIsMeta: false,
+        cursorStyle: "block",
+        cursorInactiveStyle: "outline",
+      });
+      const fitAddon = new FitAddon();
+      const searchAddon = new SearchAddon();
+      xterm.loadAddon(fitAddon);
+      xterm.loadAddon(searchAddon);
+      const wrapper = document.createElement("div");
+      wrapper.style.width = "100%";
+      wrapper.style.height = "100%";
+      xterm.open(wrapper);
+      xterm.write("\x1b[38;5;203mTerminal failed to start\x1b[0m\r\n\r\n");
+      xterm.write(`${message}\r\n\r\n`);
+      if (remoteEngine?.isRemote) {
+        xterm.write("The remote engine may need Settings > Engine > Repair / update remote helper.\r\n");
+        xterm.write("After updating the helper, wait for the gateway to reconnect and try Login again.\r\n");
+      }
+      const tab: TerminalTab = {
+        id: tabId,
+        transport: "local",
+        title: remoteEngine?.isRemote ? (remoteLabel ?? "Remote") : "Terminal",
+        icon: "",
+        agentId: "shell",
+      };
+      parkedRef.current.set(tabId, { xterm, wrapper, fitAddon, searchAddon });
+      setTabs((prev) => [...prev, tab]);
+      setActiveTab(tabId);
       return null;
     }
-  }, []);
+  }, [remoteEngine, remoteLabel]);
 
   // ── Mount active terminal ─────────────────────────────────────────────────
   useEffect(() => {
@@ -262,7 +420,14 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
       try {
         parked.fitAddon.fit();
         const dims = parked.fitAddon.proposeDimensions();
-        if (dims) invoke("pty_resize", { id: activeTab, cols: dims.cols, rows: dims.rows }).catch(() => {});
+        if (dims) {
+          const tab = tabsRef.current.find((item) => item.id === activeTab);
+          if (tab?.transport === "remote" && tab.remotePtyId && remoteEngine) {
+            remoteEngine.rpc("xcloud.pty.resize", { id: tab.remotePtyId, cols: dims.cols, rows: dims.rows }).catch(() => {});
+          } else if (tab?.ptyId !== undefined) {
+            invoke("pty_resize", { id: tab.ptyId, cols: dims.cols, rows: dims.rows }).catch(() => {});
+          }
+        }
       } catch {}
       parked.xterm.focus();
     }, 50);
@@ -275,7 +440,7 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
       clearTimeout(timerId);
       if (container.contains(parked.wrapper)) container.removeChild(parked.wrapper);
     };
-  }, [activeTab]);
+  }, [activeTab, remoteEngine]);
 
   // ── Resize observer ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -300,7 +465,12 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
         if (dims && (dims.cols !== lastCols || dims.rows !== lastRows)) {
           lastCols = dims.cols;
           lastRows = dims.rows;
-          invoke("pty_resize", { id: activeTab, cols: dims.cols, rows: dims.rows }).catch(() => {});
+          const tab = tabsRef.current.find((item) => item.id === activeTab);
+          if (tab?.transport === "remote" && tab.remotePtyId && remoteEngine) {
+            remoteEngine.rpc("xcloud.pty.resize", { id: tab.remotePtyId, cols: dims.cols, rows: dims.rows }).catch(() => {});
+          } else if (tab?.ptyId !== undefined) {
+            invoke("pty_resize", { id: tab.ptyId, cols: dims.cols, rows: dims.rows }).catch(() => {});
+          }
         }
 
         if (wasAtBottom && xterm) xterm.scrollToBottom();
@@ -347,7 +517,7 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
       document.removeEventListener("mousedown", onMouseDown);
       document.removeEventListener("mouseup", onMouseUp);
     };
-  }, [activeTab]);
+  }, [activeTab, remoteEngine]);
 
   // ── Init ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -372,7 +542,12 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
 
   // ── Close tab ─────────────────────────────────────────────────────────────
   const closeTab = useCallback(async (tabId: number) => {
-    await invoke("pty_kill", { id: tabId }).catch(() => {});
+    const tab = tabsRef.current.find((item) => item.id === tabId);
+    if (tab?.transport === "remote" && tab.remotePtyId && remoteEngine) {
+      await remoteEngine.rpc("xcloud.pty.kill", { id: tab.remotePtyId }).catch(() => {});
+    } else if (tab?.ptyId !== undefined) {
+      await invoke("pty_kill", { id: tab.ptyId }).catch(() => {});
+    }
     const parked = parkedRef.current.get(tabId);
     if (parked) { parked.xterm.dispose(); parkedRef.current.delete(tabId); }
     const unlisten = unlistenersRef.current.get(tabId);
@@ -383,17 +558,25 @@ function TerminalPanelInner({ className, onClose, initialCommand }: TerminalPane
       if (next.length === 0 && onClose) onClose();
       return next;
     });
-  }, [activeTab, onClose]);
+  }, [activeTab, onClose, remoteEngine]);
 
   // ── Cleanup ───────────────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
-      for (const [id, parked] of parkedRef.current) { parked.xterm.dispose(); invoke("pty_kill", { id }).catch(() => {}); }
+      for (const [id, parked] of parkedRef.current) {
+        parked.xterm.dispose();
+        const tab = tabsRef.current.find((item) => item.id === id);
+        if (tab?.transport === "remote" && tab.remotePtyId && remoteEngine) {
+          remoteEngine.rpc("xcloud.pty.kill", { id: tab.remotePtyId }).catch(() => {});
+        } else if (tab?.ptyId !== undefined) {
+          invoke("pty_kill", { id: tab.ptyId }).catch(() => {});
+        }
+      }
       for (const fn of unlistenersRef.current.values()) fn();
       parkedRef.current.clear();
       unlistenersRef.current.clear();
     };
-  }, []);
+  }, [remoteEngine]);
 
   // ── Search ────────────────────────────────────────────────────────────────
   useEffect(() => { if (showSearch) searchInputRef.current?.focus(); }, [showSearch]);

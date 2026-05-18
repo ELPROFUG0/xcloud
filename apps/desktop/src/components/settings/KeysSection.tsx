@@ -63,7 +63,7 @@ function buildProviderConfig(providerId: string): ProviderKeyConfig {
 
 interface KeysSectionProps {
   engine: BrowserEngine;
-  onOpenTerminal?: (command?: string) => void;
+  onOpenTerminal?: (command?: string, options?: { remote?: boolean }) => void;
 }
 
 interface AuthProfilesStatus {
@@ -71,10 +71,82 @@ interface AuthProfilesStatus {
   githubCopilot: boolean;
 }
 
+interface ModelAuthProviderStatus {
+  provider?: string;
+  status?: string;
+}
+
+interface RemoteAuthDisconnectResult {
+  status?: Partial<AuthProfilesStatus>;
+}
+
 const STATUS_BY_PROVIDER: Record<string, keyof AuthProfilesStatus> = {
   "github-copilot": "githubCopilot",
   "openai-codex": "openaiCodex",
 };
+
+function authStatusForProvider(status: unknown, providerId: string) {
+  const providers = (status as { providers?: ModelAuthProviderStatus[] })?.providers;
+  const provider = Array.isArray(providers)
+    ? providers.find((item) => item.provider === providerId)
+    : undefined;
+  const value = provider?.status;
+  if (value === "ok" || value === "static" || value === "expiring") return "connected";
+  if (value === "expired") return "failed";
+  return "";
+}
+
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function shellCommand(args: string[]) {
+  return args.map(shellQuote).join(" ");
+}
+
+function remoteAuthCommandArgs(_provider: string, args: string[]) {
+  return args;
+}
+
+function remoteBrowserStubCommand() {
+  return [
+    `XCLOUD_BROWSER_STUB="$(mktemp -d "\${TMPDIR:-/tmp}/xcloud-browser.XXXXXX")"`,
+    `printf '%s\\n' '#!/bin/sh' 'exit 0' > "$XCLOUD_BROWSER_STUB/open"`,
+    `printf '%s\\n' '#!/bin/sh' 'exit 0' > "$XCLOUD_BROWSER_STUB/xdg-open"`,
+    `printf '%s\\n' '#!/bin/sh' 'exit 0' > "$XCLOUD_BROWSER_STUB/wslview"`,
+    `chmod +x "$XCLOUD_BROWSER_STUB/open" "$XCLOUD_BROWSER_STUB/xdg-open" "$XCLOUD_BROWSER_STUB/wslview"`,
+    `PATH="$XCLOUD_BROWSER_STUB:$PATH"`,
+  ].join("; ");
+}
+
+async function loadAuthProfilesStatus(engine: BrowserEngine): Promise<AuthProfilesStatus> {
+  try {
+    const status = await engine.rpc("models.authStatus", { refresh: true });
+    return {
+      openaiCodex: authStatusForProvider(status, "openai-codex") === "connected",
+      githubCopilot: authStatusForProvider(status, "github-copilot") === "connected",
+    };
+  } catch {
+    if (engine.isRemote) {
+      return { openaiCodex: false, githubCopilot: false };
+    }
+    return invoke<AuthProfilesStatus>("xcloud_auth_profiles_status");
+  }
+}
+
+async function disconnectAuthProvider(engine: BrowserEngine, provider: string): Promise<AuthProfilesStatus> {
+  if (engine.isRemote) {
+    const result = await engine.rpc("xcloud.auth.disconnect", { provider }) as RemoteAuthDisconnectResult;
+    if (typeof result?.status?.openaiCodex === "boolean" && typeof result?.status?.githubCopilot === "boolean") {
+      return {
+        openaiCodex: result.status.openaiCodex,
+        githubCopilot: result.status.githubCopilot,
+      };
+    }
+    return loadAuthProfilesStatus(engine);
+  }
+  return invoke<AuthProfilesStatus>("xcloud_disconnect_auth_provider", { provider });
+}
 
 export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
   const { providers: modelProviders, loading: loadingProviders } = useModels(engine);
@@ -99,16 +171,34 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
     }));
   }, [onOpenTerminal]);
 
+  const openRemoteAuthTerminal = useCallback((name: string, provider: string, args: string[]) => {
+    const hostLabel = engine.mode === "mac-mini" ? "Mac mini" : engine.mode === "vps" ? "VPS" : "remote host";
+    const authArgs = remoteAuthCommandArgs(provider, args);
+    const authCommand = [
+      "printf '\\033[2J\\033[H'",
+      `printf '%s\\n\\n' ${shellQuote(`Preparing ${name} login on this ${hostLabel}...`)}`,
+      remoteBrowserStubCommand(),
+      `OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH=1 OPENCLAW_HIDE_BANNER=1 openclaw ${shellCommand(authArgs)}`,
+      `rm -rf "$XCLOUD_BROWSER_STUB"`,
+      `printf '\\n%s\\n' ${shellQuote("Login finished. Return to API Keys and click Verify.")}`,
+    ].join("; ");
+    const marker = `# xcloud-auth-${Date.now()}`;
+    const terminalCommand = [
+      authCommand,
+      marker,
+    ].join("; ");
+    if (onOpenTerminal) {
+      onOpenTerminal(terminalCommand, { remote: true });
+      return;
+    }
+    window.dispatchEvent(new CustomEvent("xcloud-open-terminal", {
+      detail: { command: terminalCommand, remote: true },
+    }));
+  }, [engine.mode, onOpenTerminal]);
+
   useEffect(() => {
     let cancelled = false;
-    if (remoteEngine) {
-      setAuthStatus({
-        "codex-login": "",
-        "github-copilot-login": "",
-      });
-      return () => { cancelled = true; };
-    }
-    invoke<AuthProfilesStatus>("xcloud_auth_profiles_status")
+    loadAuthProfilesStatus(engine)
       .then((status) => {
         if (cancelled) return;
         setAuthStatus((prev) => {
@@ -120,7 +210,7 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [remoteEngine]);
+  }, [engine, engine.storageScope]);
 
   // Load saved API keys from gateway config
   useEffect(() => {
@@ -210,8 +300,8 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
           <div className="mb-6">
             <p className="text-xs text-text-muted mb-3 uppercase tracking-wider font-semibold">Subscriptions</p>
             {[
-              { id: "github-copilot-login", name: "GitHub Copilot", provider: "github-copilot", logo: githubLogo, cmdArgs: ["models", "auth", "login-github-copilot"], description: remoteEngine ? "Configure this on the active host" : "Use your Copilot subscription" },
-              { id: "codex-login", name: "OpenAI Codex", provider: "openai-codex", logo: openaiLogo, cmdArgs: ["models", "auth", "login", "--provider", "openai-codex"], description: remoteEngine ? "Configure this on the active host" : "Use your Codex subscription" },
+              { id: "github-copilot-login", name: "GitHub Copilot", provider: "github-copilot", logo: githubLogo, cmdArgs: ["models", "auth", "login-github-copilot"], description: remoteEngine ? "Use Copilot on this engine" : "Use your Copilot subscription" },
+              { id: "codex-login", name: "OpenAI Codex", provider: "openai-codex", logo: openaiLogo, cmdArgs: ["models", "auth", "login", "--provider", "openai-codex"], description: remoteEngine ? "Use Codex on this engine" : "Use your Codex subscription" },
             ].map((item) => (
               <div key={item.id} className="flex items-center justify-between border-b border-border/50 py-3.5 last:border-0">
                 <div className="flex items-center gap-3 min-w-0 mr-4">
@@ -227,7 +317,7 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
                       onClick={async () => {
                         setAuthLoading(p => ({ ...p, [item.id]: true }));
                         try {
-                          const status = await invoke<AuthProfilesStatus>("xcloud_disconnect_auth_provider", { provider: item.provider });
+                          const status = await disconnectAuthProvider(engine, item.provider);
                           const statusKey = STATUS_BY_PROVIDER[item.provider];
                           setAuthStatus(p => ({ ...p, [item.id]: status[statusKey] ? "connected" : "" }));
                         } catch {
@@ -238,15 +328,15 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
                       disabled={authLoading[item.id]}
                       className="rounded-xl px-3 py-1.5 text-sm text-red-400/70 hover:text-red-400 transition-colors disabled:opacity-50"
                     >
-                      Disconnect
+                      {authLoading[item.id] ? "..." : "Disconnect"}
                     </button>
                   ) : authStatus[item.id] === "check-terminal" ? (
                     <button
                       onClick={async () => {
                         setAuthLoading(p => ({ ...p, [item.id]: true }));
                         try {
-                          await invoke<string>("xcloud_run", { args: ["models", "status", "--probe"] });
-                          const status = await invoke<AuthProfilesStatus>("xcloud_auth_profiles_status");
+                          if (!remoteEngine) await invoke<string>("xcloud_run", { args: ["models", "status", "--probe"] });
+                          const status = await loadAuthProfilesStatus(engine);
                           const statusKey = STATUS_BY_PROVIDER[item.provider];
                           setAuthStatus(p => ({ ...p, [item.id]: status[statusKey] ? "connected" : "failed" }));
                         } catch {
@@ -262,21 +352,20 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
                   ) : (
                     <button
                       onClick={async () => {
-                        if (remoteEngine) return;
                         setAuthLoading(p => ({ ...p, [item.id]: true }));
                         try {
-                          await openAuthTerminal(item.cmdArgs);
+                          if (remoteEngine) openRemoteAuthTerminal(item.name, item.provider, item.cmdArgs);
+                          else await openAuthTerminal(item.cmdArgs);
                           setAuthStatus(p => ({ ...p, [item.id]: "check-terminal" }));
                         } catch {
                           setAuthStatus(p => ({ ...p, [item.id]: "failed" }));
                         }
                         setAuthLoading(p => ({ ...p, [item.id]: false }));
                       }}
-                      disabled={authLoading[item.id] || remoteEngine}
+                      disabled={authLoading[item.id]}
                       className="rounded-xl bg-[#262626] px-4 py-1.5 text-sm text-text hover:text-white transition-colors disabled:opacity-50"
                     >
-                      {remoteEngine ? "Host only" :
-                       authLoading[item.id] ? "..." :
+                      {authLoading[item.id] ? "..." :
                        authStatus[item.id] === "failed" ? "Retry" : "Login"}
                     </button>
                   )}

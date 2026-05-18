@@ -25,7 +25,7 @@ interface SettingsPanelProps {
   agents?: AgentInfo[];
   onBack?: () => void;
   onPreviewOnboarding?: () => void;
-  onOpenTerminal?: (command?: string) => void;
+  onOpenTerminal?: (command?: string, options?: { remote?: boolean }) => void;
 }
 
 const SECTIONS: { id: Section; label: string; icon: typeof Cpu }[] = [

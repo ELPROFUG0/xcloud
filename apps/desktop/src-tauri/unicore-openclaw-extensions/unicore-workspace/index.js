@@ -1,5 +1,6 @@
 import { t as definePluginEntry } from "../../plugin-entry-DyZc6JGI.js";
 import { t as agentsAddCommand } from "../../agents.commands.add-D3K-MXUw.js";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -534,11 +535,277 @@ async function executeXCloudUiAction(ctx, args) {
 	};
 }
 
+const remotePtySessions = new Map();
+let ptyModulePromise = null;
+
+async function loadPtyModule() {
+	ptyModulePromise ??= (async () => {
+		let lastError = null;
+		for (const specifier of ["@lydell/node-pty", "@lydell/node-pty/index.js"]) {
+			try {
+				return await import(specifier);
+			} catch (err) {
+				lastError = err;
+			}
+		}
+		throw lastError ?? new Error("Cannot load @lydell/node-pty.");
+	})();
+	const module = await ptyModulePromise;
+	const spawn = module.spawn ?? module.default?.spawn;
+	if (!spawn) throw new Error("PTY support is unavailable on this engine.");
+	return { spawn };
+}
+
+function coerceInt(value, fallback, min, max) {
+	const numeric = Number(value);
+	if (!Number.isFinite(numeric)) return fallback;
+	return Math.max(min, Math.min(max, Math.round(numeric)));
+}
+
+function normalizeCommand(value) {
+	return typeof value === "string" && value.trim() ? value : "";
+}
+
+function resolveAuthProfilesPath() {
+	return path.join(os.homedir(), ".openclaw", "agents", "main", "agent", "auth-profiles.json");
+}
+
+function getAuthProfileProvider(profile) {
+	if (!profile || typeof profile !== "object") return "";
+	if (typeof profile.provider === "string" && profile.provider) return profile.provider;
+	const credential = profile.credential;
+	if (credential && typeof credential === "object" && typeof credential.provider === "string") {
+		return credential.provider;
+	}
+	return "";
+}
+
+function hasAuthProvider(profiles, provider) {
+	if (!profiles || typeof profiles !== "object") return false;
+	return Object.entries(profiles).some(([id, profile]) => (
+		getAuthProfileProvider(profile) === provider ||
+		(typeof id === "string" && id.startsWith(`${provider}:`))
+	));
+}
+
+async function disconnectAuthProvider(providerRaw) {
+	const provider = normalizeCommand(providerRaw).trim();
+	if (!provider) throw new Error("Auth provider is required.");
+	const profilesPath = resolveAuthProfilesPath();
+	let raw = "";
+	try {
+		raw = await fs.readFile(profilesPath, "utf8");
+	} catch (err) {
+		if (err && typeof err === "object" && err.code === "ENOENT") {
+			return {
+				ok: true,
+				provider,
+				removed: 0,
+				status: { openaiCodex: false, githubCopilot: false }
+			};
+		}
+		throw err;
+	}
+
+	const value = JSON.parse(raw || "{}");
+	const profiles = value?.profiles && typeof value.profiles === "object" && !Array.isArray(value.profiles)
+		? value.profiles
+		: null;
+	if (!profiles) {
+		return {
+			ok: true,
+			provider,
+			removed: 0,
+			status: { openaiCodex: false, githubCopilot: false }
+		};
+	}
+
+	let removed = 0;
+	for (const [id, profile] of Object.entries(profiles)) {
+		if (getAuthProfileProvider(profile) === provider || (typeof id === "string" && id.startsWith(`${provider}:`))) {
+			delete profiles[id];
+			removed += 1;
+		}
+	}
+	if (removed > 0) {
+		await fs.writeFile(profilesPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+	}
+
+	return {
+		ok: true,
+		provider,
+		removed,
+		status: {
+			openaiCodex: hasAuthProvider(profiles, "openai-codex"),
+			githubCopilot: hasAuthProvider(profiles, "github-copilot")
+		}
+	};
+}
+
+function resolvePtyShell(command) {
+	if (process.platform === "win32") {
+		const shell = process.env.ComSpec || "cmd.exe";
+		return {
+			shell,
+			args: command ? ["/d", "/s", "/c", command] : []
+		};
+	}
+	const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/bash");
+	return {
+		shell,
+		args: command ? ["-lc", command] : ["-l"]
+	};
+}
+
+function pushPtyChunk(session, data) {
+	session.seq += 1;
+	session.chunks.push({ seq: session.seq, data });
+	if (session.chunks.length > 2_000) {
+		session.chunks.splice(0, session.chunks.length - 2_000);
+	}
+	session.updatedAt = Date.now();
+}
+
+function getPtySession(id) {
+	const normalized = normalizeCommand(id);
+	if (!normalized) throw new Error("PTY id is required.");
+	const session = remotePtySessions.get(normalized);
+	if (!session) throw new Error("Remote terminal session not found.");
+	return session;
+}
+
+function cleanupOldPtySessions() {
+	const now = Date.now();
+	for (const [id, session] of remotePtySessions) {
+		if (!session.exited) continue;
+		if (now - session.updatedAt > 5 * 60_000) remotePtySessions.delete(id);
+	}
+}
+
+function registerXCloudPtyGatewayMethods(api) {
+	const sendError = (respond, err) => {
+		respond(false, void 0, {
+			code: "UNAVAILABLE",
+			message: err instanceof Error ? err.message : String(err)
+		});
+	};
+
+	api.registerGatewayMethod("xcloud.pty.spawn", async ({ params, respond }) => {
+		try {
+			cleanupOldPtySessions();
+			const { spawn } = await loadPtyModule();
+			const command = normalizeCommand(params?.command);
+			const cols = coerceInt(params?.cols, 80, 20, 400);
+			const rows = coerceInt(params?.rows, 24, 8, 120);
+			const cwdRaw = normalizeCommand(params?.cwd);
+			const cwd = cwdRaw ? (cwdRaw.startsWith("~") ? cwdRaw.replace(/^~(?=\/|$)/, os.homedir()) : cwdRaw) : os.homedir();
+			const shellLaunch = resolvePtyShell(command);
+			const env = {
+				...process.env,
+				TERM: process.env.TERM || "xterm-256color"
+			};
+			const pty = spawn(shellLaunch.shell, shellLaunch.args, {
+				name: "xterm-256color",
+				cols,
+				rows,
+				cwd,
+				env
+			});
+			const id = randomUUID();
+			const session = {
+				id,
+				pty,
+				chunks: [],
+				seq: 0,
+				exited: false,
+				exitCode: null,
+				signal: null,
+				updatedAt: Date.now()
+			};
+			pty.onData((data) => pushPtyChunk(session, data));
+			pty.onExit((event) => {
+				session.exited = true;
+				session.exitCode = typeof event.exitCode === "number" ? event.exitCode : null;
+				session.signal = typeof event.signal === "number" || typeof event.signal === "string" ? event.signal : null;
+				session.updatedAt = Date.now();
+			});
+			remotePtySessions.set(id, session);
+			respond(true, { id, pid: pty.pid ?? null, cols, rows });
+		} catch (err) {
+			sendError(respond, err);
+		}
+	}, { scope: "operator.admin" });
+
+	api.registerGatewayMethod("xcloud.pty.read", async ({ params, respond }) => {
+		try {
+			const session = getPtySession(params?.id);
+			const after = coerceInt(params?.after, 0, 0, Number.MAX_SAFE_INTEGER);
+			const chunks = session.chunks.filter((chunk) => chunk.seq > after);
+			respond(true, {
+				id: session.id,
+				chunks,
+				lastSeq: session.seq,
+				exited: session.exited,
+				exitCode: session.exitCode,
+				signal: session.signal
+			});
+		} catch (err) {
+			sendError(respond, err);
+		}
+	}, { scope: "operator.admin" });
+
+	api.registerGatewayMethod("xcloud.pty.write", async ({ params, respond }) => {
+		try {
+			const session = getPtySession(params?.id);
+			const data = typeof params?.data === "string" ? params.data : "";
+			if (data && !session.exited) session.pty.write(data);
+			respond(true, { ok: true });
+		} catch (err) {
+			sendError(respond, err);
+		}
+	}, { scope: "operator.admin" });
+
+	api.registerGatewayMethod("xcloud.pty.resize", async ({ params, respond }) => {
+		try {
+			const session = getPtySession(params?.id);
+			const cols = coerceInt(params?.cols, 80, 20, 400);
+			const rows = coerceInt(params?.rows, 24, 8, 120);
+			if (!session.exited) session.pty.resize(cols, rows);
+			respond(true, { ok: true, cols, rows });
+		} catch (err) {
+			sendError(respond, err);
+		}
+	}, { scope: "operator.admin" });
+
+	api.registerGatewayMethod("xcloud.pty.kill", async ({ params, respond }) => {
+		try {
+			const session = getPtySession(params?.id);
+			try {
+				session.pty.kill();
+			} catch {}
+			remotePtySessions.delete(session.id);
+			respond(true, { ok: true });
+		} catch (err) {
+			sendError(respond, err);
+		}
+	}, { scope: "operator.admin" });
+
+	api.registerGatewayMethod("xcloud.auth.disconnect", async ({ params, respond }) => {
+		try {
+			respond(true, await disconnectAuthProvider(params?.provider));
+		} catch (err) {
+			sendError(respond, err);
+		}
+	}, { scope: "operator.admin" });
+}
+
 var unicore_workspace_default = definePluginEntry({
 	id: "unicore-workspace",
 	name: "Unicore Workspace",
 	description: "Workspace-scoped tools for Unicore.",
 	register(api) {
+		registerXCloudPtyGatewayMethods(api);
+
 		api.registerTool((ctx) => ({
 			name: "xcloud_context",
 			label: "xCloud Context",

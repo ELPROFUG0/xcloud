@@ -263,7 +263,14 @@ export class BrowserEngine {
           if (p) {
             this.pending.delete(frame.id);
             if (frame.ok) p.resolve(frame.payload ?? {});
-            else p.reject(new Error(frame.error?.message ?? "RPC error"));
+            else {
+              const payload = frame.payload as { error?: unknown } | undefined;
+              const payloadError = typeof payload?.error === "string" ? payload.error : "";
+              const details = frame.error?.details as { requestId?: string } | undefined;
+              const requestId = typeof details?.requestId === "string" ? details.requestId.trim() : "";
+              const message = frame.error?.message ?? payloadError ?? "RPC error";
+              p.reject(new Error(requestId && !message.includes(requestId) ? `${message} (requestId: ${requestId})` : message));
+            }
           }
           return;
         }

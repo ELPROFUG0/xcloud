@@ -74,6 +74,7 @@ interface TerminalContextState {
   visible: boolean;
   mounted: boolean;
   command?: string;
+  remote?: boolean;
 }
 
 function markAgentDeleted(agentId: string, engine: BrowserEngine) {
@@ -426,6 +427,7 @@ function TerminalDock({
   height,
   isOpen,
   disableTransition,
+  engine,
   onResizeMouseDown,
   onClose,
 }: {
@@ -434,6 +436,7 @@ function TerminalDock({
   height: number;
   isOpen: boolean;
   disableTransition: boolean;
+  engine: BrowserEngine;
   onResizeMouseDown: (e: React.MouseEvent) => void;
   onClose: (key: string) => void;
 }) {
@@ -458,8 +461,17 @@ function TerminalDock({
       <div style={{ height }}>
         <Suspense fallback={<div className="flex h-full items-center justify-center bg-bg text-text-muted text-xs">Loading terminal...</div>}>
           {entries.map(([key, state]) => (
-            <div key={key} className="h-full" style={{ display: key === activeKey ? undefined : "none" }}>
-              <TerminalPanel initialCommand={state.command} onClose={() => onClose(key)} />
+            <div
+              key={`${key}:${state.remote ? engine.storageScope : "local"}`}
+              className="h-full"
+              style={{ display: key === activeKey ? undefined : "none" }}
+            >
+              <TerminalPanel
+                initialCommand={state.command}
+                remoteEngine={state.remote ? engine : undefined}
+                remoteLabel={engine.mode === "mac-mini" ? "Mac Mini" : engine.mode === "vps" ? "VPS" : "Remote"}
+                onClose={() => onClose(key)}
+              />
             </div>
           ))}
         </Suspense>
@@ -714,7 +726,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     })();
   }, [agents, engine, refreshAgents]);
 
-  const openTerminal = useCallback((command?: string) => {
+  const openTerminal = useCallback((command?: string, options?: { remote?: boolean }) => {
     setTerminalByContext((prev) => {
       const current = prev[activeTerminalKey];
       return {
@@ -724,6 +736,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
           visible: true,
           mounted: true,
           command: command ?? current?.command,
+          remote: options?.remote ?? false,
         },
       };
     });
@@ -786,8 +799,8 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   // Listen for terminal open requests (from agent tools or UI)
   useEffect(() => {
     function handleOpenTerminal(e: Event) {
-      const cmd = (e as CustomEvent).detail?.command;
-      openTerminal(cmd);
+      const detail = (e as CustomEvent).detail;
+      openTerminal(detail?.command, { remote: detail?.remote === true });
     }
     window.addEventListener("xcloud-open-terminal", handleOpenTerminal);
     return () => window.removeEventListener("xcloud-open-terminal", handleOpenTerminal);
@@ -1498,8 +1511,8 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                     agents={agents}
                     section={settingsSection}
                     onPreviewOnboarding={() => setShowOnboardingPreview(true)}
-                    onOpenTerminal={(command) => {
-                      openTerminal(command);
+                    onOpenTerminal={(command, options) => {
+                      openTerminal(command, options);
                     }}
                   />
                 </div>
@@ -1510,11 +1523,12 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                 height={terminalHeight}
                 isOpen={showTerminal && showSettings}
                 disableTransition={isDragging || terminalContextChanged}
+                engine={engine}
                 onResizeMouseDown={onTerminalMouseDown}
                 onClose={(key) => {
                   setTerminalByContext((prev) => ({
                     ...prev,
-                    [key]: { ...prev[key], visible: false, mounted: false, command: undefined },
+                    [key]: { ...prev[key], visible: false, mounted: false, command: undefined, remote: false },
                   }));
                 }}
               />
@@ -1628,11 +1642,12 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
             height={terminalHeight}
             isOpen={showTerminal && !showSettings}
             disableTransition={isDragging || terminalContextChanged}
+            engine={engine}
             onResizeMouseDown={onTerminalMouseDown}
             onClose={(key) => {
               setTerminalByContext((prev) => ({
                 ...prev,
-                [key]: { ...prev[key], visible: false, mounted: false, command: undefined },
+                [key]: { ...prev[key], visible: false, mounted: false, command: undefined, remote: false },
               }));
             }}
           />
