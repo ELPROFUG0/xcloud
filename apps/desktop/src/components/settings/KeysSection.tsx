@@ -82,6 +82,7 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
   const [authLoading, setAuthLoading] = useState<Record<string, boolean>>({});
   const [authStatus, setAuthStatus] = useState<Record<string, string>>({});
   const providerConfigs = modelProviders.map((group) => buildProviderConfig(group.provider));
+  const remoteEngine = engine.isRemote;
 
   const openAuthTerminal = useCallback(async (args: string[]) => {
     const command = await invoke<string>("xcloud_shell_command", { args });
@@ -100,6 +101,13 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
 
   useEffect(() => {
     let cancelled = false;
+    if (remoteEngine) {
+      setAuthStatus({
+        "codex-login": "",
+        "github-copilot-login": "",
+      });
+      return () => { cancelled = true; };
+    }
     invoke<AuthProfilesStatus>("xcloud_auth_profiles_status")
       .then((status) => {
         if (cancelled) return;
@@ -112,10 +120,11 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, []);
+  }, [remoteEngine]);
 
   // Load saved API keys from gateway config
   useEffect(() => {
+    setKeys({});
     engine.rpc("config.get", {}).then((res) => {
       const config = (res as { config?: Record<string, unknown> }).config;
       const env = (config?.env ?? {}) as Record<string, string>;
@@ -125,7 +134,7 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
           loaded[k] = { value: v, saving: false, saved: false, error: null };
         }
       }
-      setKeys((prev) => ({ ...loaded, ...prev }));
+      setKeys(loaded);
     }).catch(() => {});
   }, [engine]);
 
@@ -201,8 +210,8 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
           <div className="mb-6">
             <p className="text-xs text-text-muted mb-3 uppercase tracking-wider font-semibold">Subscriptions</p>
             {[
-              { id: "github-copilot-login", name: "GitHub Copilot", provider: "github-copilot", logo: githubLogo, cmdArgs: ["models", "auth", "login-github-copilot"], description: "Use your Copilot subscription" },
-              { id: "codex-login", name: "OpenAI Codex", provider: "openai-codex", logo: openaiLogo, cmdArgs: ["models", "auth", "login", "--provider", "openai-codex"], description: "Use your Codex subscription" },
+              { id: "github-copilot-login", name: "GitHub Copilot", provider: "github-copilot", logo: githubLogo, cmdArgs: ["models", "auth", "login-github-copilot"], description: remoteEngine ? "Configure this on the active host" : "Use your Copilot subscription" },
+              { id: "codex-login", name: "OpenAI Codex", provider: "openai-codex", logo: openaiLogo, cmdArgs: ["models", "auth", "login", "--provider", "openai-codex"], description: remoteEngine ? "Configure this on the active host" : "Use your Codex subscription" },
             ].map((item) => (
               <div key={item.id} className="flex items-center justify-between border-b border-border/50 py-3.5 last:border-0">
                 <div className="flex items-center gap-3 min-w-0 mr-4">
@@ -253,6 +262,7 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
                   ) : (
                     <button
                       onClick={async () => {
+                        if (remoteEngine) return;
                         setAuthLoading(p => ({ ...p, [item.id]: true }));
                         try {
                           await openAuthTerminal(item.cmdArgs);
@@ -262,10 +272,11 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
                         }
                         setAuthLoading(p => ({ ...p, [item.id]: false }));
                       }}
-                      disabled={authLoading[item.id]}
+                      disabled={authLoading[item.id] || remoteEngine}
                       className="rounded-xl bg-[#262626] px-4 py-1.5 text-sm text-text hover:text-white transition-colors disabled:opacity-50"
                     >
-                      {authLoading[item.id] ? "..." :
+                      {remoteEngine ? "Host only" :
+                       authLoading[item.id] ? "..." :
                        authStatus[item.id] === "failed" ? "Retry" : "Login"}
                     </button>
                   )}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { BrowserEngine } from "@/lib/engine";
 import { BaseDirectory, readDir, readTextFile, stat } from "@tauri-apps/plugin-fs";
+import { engineScopedStorageKey } from "@/lib/engine-storage";
 
 export interface SessionInfo {
   key: string;
@@ -12,9 +13,9 @@ export interface SessionInfo {
 
 const SESSIONS_CACHE_KEY = "xcloudCachedSessionsV2";
 
-function readCachedSessions(): SessionInfo[] {
+function readCachedSessions(storageKey: string): SessionInfo[] {
   try {
-    const parsed = JSON.parse(localStorage.getItem(SESSIONS_CACHE_KEY) ?? "[]") as SessionInfo[];
+    const parsed = JSON.parse(localStorage.getItem(storageKey) ?? "[]") as SessionInfo[];
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter((session) => session && typeof session.key === "string")
@@ -31,9 +32,9 @@ function readCachedSessions(): SessionInfo[] {
   }
 }
 
-function writeCachedSessions(sessions: SessionInfo[]) {
+function writeCachedSessions(storageKey: string, sessions: SessionInfo[]) {
   try {
-    localStorage.setItem(SESSIONS_CACHE_KEY, JSON.stringify(sessions));
+    localStorage.setItem(storageKey, JSON.stringify(sessions));
   } catch {
     // Ignore storage failures; live sessions still work.
   }
@@ -157,7 +158,8 @@ async function readOpenClawDiskSessions(): Promise<SessionInfo[]> {
 }
 
 export function useSessions(engine: BrowserEngine) {
-  const [sessions, setSessions] = useState<SessionInfo[]>(() => readCachedSessions());
+  const storageKey = engineScopedStorageKey(SESSIONS_CACHE_KEY, engine);
+  const [sessions, setSessions] = useState<SessionInfo[]>(() => readCachedSessions(storageKey));
 
   const refresh = useCallback(async () => {
     try {
@@ -165,7 +167,7 @@ export function useSessions(engine: BrowserEngine) {
       const raw = result.sessions as Array<Record<string, unknown>> | Record<string, Record<string, unknown>> | undefined;
 
       const list: SessionInfo[] = [];
-      const cachedByKey = new Map(readCachedSessions().map((session) => [session.key, session]));
+      const cachedByKey = new Map(readCachedSessions(storageKey).map((session) => [session.key, session]));
 
       if (Array.isArray(raw)) {
         for (const s of raw) {
@@ -221,26 +223,31 @@ export function useSessions(engine: BrowserEngine) {
         }
       }
 
-      const merged = mergeSessions(readCachedSessions(), list);
-      writeCachedSessions(merged);
+      const merged = mergeSessions(readCachedSessions(storageKey), list);
+      writeCachedSessions(storageKey, merged);
       setSessions(merged);
     } catch {
       // sessions.list may not be available
     }
-  }, [engine]);
+  }, [engine, storageKey]);
 
   useEffect(() => {
+    setSessions(readCachedSessions(storageKey));
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (engine.isRemote) return;
     let cancelled = false;
     void readOpenClawDiskSessions().then((diskSessions) => {
       if (cancelled || diskSessions.length === 0) return;
-      const merged = mergeSessions(readCachedSessions(), diskSessions);
-      writeCachedSessions(merged);
+      const merged = mergeSessions(readCachedSessions(storageKey), diskSessions);
+      writeCachedSessions(storageKey, merged);
       setSessions(merged);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [engine.isRemote, storageKey]);
 
   useEffect(() => {
     let cancelled = false;

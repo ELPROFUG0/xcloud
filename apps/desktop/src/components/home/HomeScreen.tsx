@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
+import type { BrowserEngine } from "@/lib/engine";
 import type { AgentInfo } from "@/hooks/use-agents";
 import type { SessionInfo } from "@/hooks/use-sessions";
 import type { WorkspaceInfo } from "@/hooks/use-workspaces";
@@ -11,6 +12,7 @@ import { XCloudDotLogo } from "../ui/XCloudDotLogo";
 import { ensureAgentDefaultAvatar, updateAgentEmoji } from "@/lib/update-identity";
 import { resolveAvatarUrl } from "@/lib/avatar";
 import { BaseDirectory, readTextFile } from "@tauri-apps/plugin-fs";
+import { setAgentVisualOverride } from "@/lib/agent-visuals";
 import gmailIcon from "@/assets/setup-icons/gmail.svg";
 import slackIcon from "@/assets/setup-icons/slack.svg";
 import notionIcon from "@/assets/setup-icons/notion.svg";
@@ -51,6 +53,7 @@ function getEmojiPickerAnchor(rect: DOMRect): FloatingAnchor {
 }
 
 interface HomeScreenProps {
+  engine: BrowserEngine;
   agents: AgentInfo[];
   workspaces?: WorkspaceInfo[];
   activeWorkspaceId?: string | null;
@@ -78,6 +81,7 @@ interface HomeScreenProps {
   onOpenSettings?: () => void;
   onSearch?: () => void;
   onNewChat?: () => void;
+  integrationsStorageKey?: string;
 }
 
 function slugifyWorkspaceRef(value: string) {
@@ -172,11 +176,23 @@ function AgentActivityDots({
   );
 }
 
-function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { mainAgent: AgentInfo; agents: AgentInfo[]; onSelectAgent: (id: string) => void; onOpenSettings?: () => void }) {
+function SetupGuide({
+  mainAgent,
+  agents,
+  onSelectAgent,
+  onOpenSettings,
+  integrationsStorageKey = "composioConnected",
+}: {
+  mainAgent: AgentInfo;
+  agents: AgentInfo[];
+  onSelectAgent: (id: string) => void;
+  onOpenSettings?: () => void;
+  integrationsStorageKey?: string;
+}) {
   const [viewIdx, setViewIdx] = useState(0);
 
   const hasName = !!(mainAgent.name && mainAgent.name !== mainAgent.id);
-  const hasIntegrations = (() => { try { return JSON.parse(localStorage.getItem("composioConnected") ?? "[]").length > 0; } catch { return false; } })();
+  const hasIntegrations = (() => { try { return JSON.parse(localStorage.getItem(integrationsStorageKey) ?? "[]").length > 0; } catch { return false; } })();
   const hasSubAgents = agents.length > 1;
 
   const completed = (hasName ? 1 : 0) + (hasIntegrations ? 1 : 0) + (hasSubAgents ? 1 : 0);
@@ -271,6 +287,7 @@ function SetupGuide({ mainAgent, agents, onSelectAgent, onOpenSettings }: { main
 }
 
 export function HomeScreen({
+  engine,
   agents,
   workspaces = [],
   activeWorkspaceId,
@@ -297,6 +314,7 @@ export function HomeScreen({
   onOpenSettings,
   onSearch,
   onNewChat,
+  integrationsStorageKey,
 }: HomeScreenProps) {
   const [relativeNow, setRelativeNow] = useState(() => Date.now());
   const globalAgents = agents.filter((agent) => !isWorkspaceOwnedAgent(agent, workspaces));
@@ -477,9 +495,10 @@ export function HomeScreen({
   const handleEmojiSelect = useCallback(async (agentId: string, emoji: string) => {
     closeEmojiPicker();
     closeAgentMenu();
-    await updateAgentEmoji(agentId, emoji);
+    if (engine.isRemote) setAgentVisualOverride(engine, agentId, { emoji });
+    else await updateAgentEmoji(agentId, emoji);
     onRefresh?.();
-  }, [closeAgentMenu, closeEmojiPicker, onRefresh]);
+  }, [closeAgentMenu, closeEmojiPicker, engine, onRefresh]);
 
   const emojiPickerAgent = showEmojiFor ? agents.find((agent) => agent.id === showEmojiFor) : null;
   const emojiPickerPortal = emojiPickerAgent && emojiPickerAnchor ? createPortal(
@@ -489,6 +508,7 @@ export function HomeScreen({
     >
       <EmojiPicker
         agentId={emojiPickerAgent.id}
+        engine={engine}
         onSelect={(emoji) => handleEmojiSelect(emojiPickerAgent.id, emoji)}
         onSelectImage={() => { closeEmojiPicker(); onRefresh?.(); }}
         onClose={closeEmojiPicker}
@@ -1125,7 +1145,7 @@ export function HomeScreen({
 
       {/* Setup guide — bottom */}
       {mainAgent && (
-        <SetupGuide mainAgent={mainAgent} agents={globalAgents} onSelectAgent={onSelectAgent} onOpenSettings={onOpenSettings} />
+        <SetupGuide mainAgent={mainAgent} agents={globalAgents} onSelectAgent={onSelectAgent} onOpenSettings={onOpenSettings} integrationsStorageKey={integrationsStorageKey} />
       )}
       </div>
       {emojiPickerPortal}

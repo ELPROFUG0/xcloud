@@ -3,6 +3,9 @@ import type { BrowserEngine } from "@/lib/engine";
 import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
 import { resolveAvatarUrl } from "@/lib/avatar";
 import { ensureAgentDefaultAvatar, isAgentAvatarOptedOut } from "@/lib/update-identity";
+import { engineScopedStorageKey } from "@/lib/engine-storage";
+import { getStableDefaultAvatarUrl } from "@/lib/default-avatar";
+import { AGENT_VISUALS_CHANGED_EVENT, getAgentVisualOverride } from "@/lib/agent-visuals";
 
 export interface AgentInfo {
   id: string;
@@ -17,9 +20,9 @@ export interface AgentInfo {
 
 const DELETED_AGENTS_KEY = "xcloudDeletedAgents";
 
-function readDeletedAgentIds() {
+function readDeletedAgentIds(storageKey: string) {
   try {
-    const parsed = JSON.parse(localStorage.getItem(DELETED_AGENTS_KEY) ?? "[]") as string[];
+    const parsed = JSON.parse(localStorage.getItem(storageKey) ?? "[]") as string[];
     return new Set(Array.isArray(parsed) ? parsed : []);
   } catch {
     return new Set<string>();
@@ -115,10 +118,15 @@ function normalizeAgentModel(model: string | { primary?: string } | undefined): 
   return undefined;
 }
 
+function isRenderableRemoteAvatar(avatar?: string) {
+  return Boolean(avatar && /^(data:|blob:|https?:\/\/|\/assets\/|\/api\/)/.test(avatar));
+}
+
 export function useAgents(engine: BrowserEngine): UseAgentsReturn {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [selectedId, setSelectedId] = useState("main");
   const [loading, setLoading] = useState(true);
+  const deletedAgentsKey = engineScopedStorageKey(DELETED_AGENTS_KEY, engine);
 
   const refresh = useCallback(async () => {
     try {
@@ -128,13 +136,15 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
         agents?: Array<{
           id: string;
           name?: string;
+          emoji?: string;
+          avatar?: string;
           workspace?: string;
           model?: string | { primary?: string };
         }>;
       };
 
-      const localAgents = await readLocalConfigAgents();
-      const deletedAgentIds = readDeletedAgentIds();
+      const localAgents = engine.isRemote ? [] : await readLocalConfigAgents();
+      const deletedAgentIds = readDeletedAgentIds(deletedAgentsKey);
       const merged = [...(payload.agents ?? [])];
       const seenIds = new Set(merged.map((agent) => agent.id));
       for (const localAgent of localAgents) {
@@ -147,13 +157,24 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
       const list: AgentInfo[] = merged.filter((a) => !deletedAgentIds.has(a.id)).map((a) => ({
         id: a.id,
         name: a.name,
+        emoji: a.emoji,
+        avatar: a.avatar,
         workspace: a.workspace ?? "",
         model: normalizeAgentModel(a.model),
         isDefault: a.id === defaultId,
         status: "active" as const,
       }));
 
-      const enriched = await Promise.all(list.map(async (agent) => {
+      const enriched = engine.isRemote ? list.map((agent) => {
+        const visualOverride = getAgentVisualOverride(engine, agent.id);
+        const emoji = visualOverride?.emoji ?? agent.emoji;
+        const avatar = visualOverride?.avatar ?? (isRenderableRemoteAvatar(agent.avatar)
+          ? agent.avatar
+          : !emoji
+            ? getStableDefaultAvatarUrl(`${engine.storageScope}:${agent.id}`)
+            : undefined);
+        return { ...agent, emoji, avatar };
+      }) : await Promise.all(list.map(async (agent) => {
         const wsPath = agent.isDefault
           ? ".openclaw/workspace/IDENTITY.md"
           : `.openclaw/workspace/${agent.id}/IDENTITY.md`;
@@ -185,19 +206,27 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
     } finally {
       setLoading(false);
     }
-  }, [engine, selectedId]);
+  }, [deletedAgentsKey, engine, selectedId]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
 
   useEffect(() => {
+    setAgents([]);
+    setSelectedId("main");
+    setLoading(true);
+  }, [engine.storageScope]);
+
+  useEffect(() => {
     const handleDeletedAgentsChanged = () => void refresh();
     window.addEventListener("xcloud-deleted-agents-changed", handleDeletedAgentsChanged);
     window.addEventListener("xcloud-agents-local-config-changed", handleDeletedAgentsChanged);
+    window.addEventListener(AGENT_VISUALS_CHANGED_EVENT, handleDeletedAgentsChanged);
     return () => {
       window.removeEventListener("xcloud-deleted-agents-changed", handleDeletedAgentsChanged);
       window.removeEventListener("xcloud-agents-local-config-changed", handleDeletedAgentsChanged);
+      window.removeEventListener(AGENT_VISUALS_CHANGED_EVENT, handleDeletedAgentsChanged);
     };
   }, [refresh]);
 

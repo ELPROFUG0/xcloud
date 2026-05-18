@@ -18,6 +18,7 @@ import { SettingsPanel } from "./SettingsPanel";
 import { DevPreview } from "./DevPreview";
 import { OnboardingScreen } from "./OnboardingScreen";
 import { getCanvasPanelOpen, setCanvasPanelOpen } from "@/lib/canvas-preferences";
+import { engineScopedStorageKey } from "@/lib/engine-storage";
 const TerminalPanel = lazy(() => import("./terminal/TerminalPanel").then(m => ({ default: m.TerminalPanel })));
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { homeDir } from "@tauri-apps/api/path";
@@ -75,14 +76,15 @@ interface TerminalContextState {
   command?: string;
 }
 
-function markAgentDeleted(agentId: string) {
+function markAgentDeleted(agentId: string, engine: BrowserEngine) {
+  const storageKey = engineScopedStorageKey(DELETED_AGENTS_KEY, engine);
   try {
-    const parsed = JSON.parse(localStorage.getItem(DELETED_AGENTS_KEY) ?? "[]") as string[];
+    const parsed = JSON.parse(localStorage.getItem(storageKey) ?? "[]") as string[];
     const ids = new Set(Array.isArray(parsed) ? parsed : []);
     ids.add(agentId);
-    localStorage.setItem(DELETED_AGENTS_KEY, JSON.stringify([...ids]));
+    localStorage.setItem(storageKey, JSON.stringify([...ids]));
   } catch {
-    localStorage.setItem(DELETED_AGENTS_KEY, JSON.stringify([agentId]));
+    localStorage.setItem(storageKey, JSON.stringify([agentId]));
   }
   window.dispatchEvent(new CustomEvent("xcloud-deleted-agents-changed"));
 }
@@ -266,7 +268,7 @@ async function ensureActiveRunSteeringInLocalConfig() {
 }
 
 async function ensureUnicoreWorkspaceSupport(engine: BrowserEngine) {
-  await ensureUnicoreWorkspaceSupportInLocalConfig().catch(() => false);
+  if (!engine.isRemote) await ensureUnicoreWorkspaceSupportInLocalConfig().catch(() => false);
   if (!engine.connected) return;
 
   const configResult = await withTimeout(engine.rpc("config.get", {}), 5_000, "config.get").catch(() => null);
@@ -285,7 +287,7 @@ async function ensureUnicoreWorkspaceSupport(engine: BrowserEngine) {
 }
 
 async function ensureActiveRunSteering(engine: BrowserEngine) {
-  await ensureActiveRunSteeringInLocalConfig().catch(() => false);
+  if (!engine.isRemote) await ensureActiveRunSteeringInLocalConfig().catch(() => false);
   if (!engine.connected) return;
 
   const configResult = await withTimeout(engine.rpc("config.get", {}), 5_000, "config.get").catch(() => null);
@@ -469,15 +471,17 @@ function TerminalDock({
 export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   useTheme(); // Initialize theme CSS variables
   const { agents, refresh: refreshAgents } = useAgents(engine);
-  const { workspaces, createWorkspace, linkAgent, unlinkAgent, removeAgentFromWorkspaces, deleteWorkspace, getWorkspaceAgents } = useWorkspaces(agents);
+  const { workspaces, createWorkspace, linkAgent, unlinkAgent, removeAgentFromWorkspaces, deleteWorkspace, getWorkspaceAgents } = useWorkspaces(agents, engine);
   const { getAgentSessions, refresh: refreshSessions } = useSessions(engine);
+  const engineStorageScope = engine.storageScope;
+  const canvasSurfaceId = (agentId: string) => `${engineStorageScope}:${agentId}`;
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [activeSessionKey, setActiveSessionKey] = useState<string | null>(null);
   const [showNewChat, setShowNewChat] = useState(false);
   const [initialChatPrompt, setInitialChatPrompt] = useState<string | undefined>(undefined);
   const [initialChatPromptHidden, setInitialChatPromptHidden] = useState(false);
-  const [showCanvas, setShowCanvas] = useState(() => getCanvasPanelOpen(MAIN_AGENT_ID));
+  const [showCanvas, setShowCanvas] = useState(() => getCanvasPanelOpen(canvasSurfaceId(MAIN_AGENT_ID)));
   const [showSettings, setShowSettings] = useState(false);
   const [sidebarAnimationKey, setSidebarAnimationKey] = useState(0);
   const [settingsSection, setSettingsSection] = useState<"models" | "keys" | "channels" | "skills" | "integrations" | "memory" | "appearance" | "engine" | "general">("models");
@@ -535,15 +539,16 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const activeTerminalKey = showSettings ? "settings" : activeAgentId ? `agent:${currentAgentId}` : hasWorkspaceChat ? `workspace:${activeWorkspace.id}` : showNewChat ? "new-chat" : "workspace";
   const activeTerminal = terminalByContext[activeTerminalKey];
   const showTerminal = activeTerminal?.visible ?? false;
+  const composioConnectedStorageKey = engineScopedStorageKey("composioConnected", engine);
 
   useEffect(() => {
     if (!hasCanvasSurface) {
       setCanvasExpanded(false);
       return;
     }
-    setShowCanvas(getCanvasPanelOpen(currentAgentId));
+    setShowCanvas(getCanvasPanelOpen(canvasSurfaceId(currentAgentId)));
     setCanvasExpanded(false);
-  }, [currentAgentId, hasCanvasSurface]);
+  }, [currentAgentId, engineStorageScope, hasCanvasSurface]);
 
   useEffect(() => {
     if (!hasCanvasSurface) return;
@@ -656,33 +661,39 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     let nextAgent: Record<string, unknown> | null = null;
     let isCurrent = true;
     try {
-      await ensureUnicoreWorkspaceSupportInLocalConfig().catch(() => false);
       const agentId = getWorkspaceAgentId(workspace.id);
-      const home = (await homeDir()).replace(/\/$/, "");
-      const workspacePath = `${home}/${getWorkspaceDir(workspace.id)}`;
-      const localConfigRaw = await readTextFile(".openclaw/openclaw.json", { baseDir: BaseDirectory.Home }).catch(() => "{}");
-      const config = JSON.parse(localConfigRaw || "{}") as Record<string, unknown>;
-      const agentsConfig = (config.agents as Record<string, unknown> | undefined) ?? {};
-      const defaults = (agentsConfig.defaults as Record<string, unknown> | undefined) ?? {};
-      const defaultModel = (defaults.model as Record<string, unknown> | undefined)?.primary as string | undefined;
-      const list = Array.isArray(agentsConfig.list)
-        ? agentsConfig.list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
-        : [];
-      const index = list.findIndex((item) => item.id === agentId);
-      const current = index >= 0 ? list[index]! : null;
-      nextAgent = {
-        id: agentId,
-        name: workspace.name,
-        workspace: workspacePath,
-        ...(defaultModel ? { model: { primary: defaultModel } } : {}),
-      };
-      isCurrent = Boolean(current)
-        && current?.name === nextAgent.name
-        && current?.workspace === nextAgent.workspace;
-      if (!isCurrent) {
-        await upsertAgentInLocalConfig(nextAgent).catch(() => {});
-        window.dispatchEvent(new CustomEvent("xcloud-agents-local-config-changed"));
-        void refreshAgents();
+      if (engine.isRemote) {
+        const current = agents.find((agent) => agent.id === agentId);
+        nextAgent = { id: agentId, name: workspace.name };
+        isCurrent = Boolean(current) && current?.name === nextAgent.name;
+      } else {
+        await ensureUnicoreWorkspaceSupportInLocalConfig().catch(() => false);
+        const home = (await homeDir()).replace(/\/$/, "");
+        const workspacePath = `${home}/${getWorkspaceDir(workspace.id)}`;
+        const localConfigRaw = await readTextFile(".openclaw/openclaw.json", { baseDir: BaseDirectory.Home }).catch(() => "{}");
+        const config = JSON.parse(localConfigRaw || "{}") as Record<string, unknown>;
+        const agentsConfig = (config.agents as Record<string, unknown> | undefined) ?? {};
+        const defaults = (agentsConfig.defaults as Record<string, unknown> | undefined) ?? {};
+        const defaultModel = (defaults.model as Record<string, unknown> | undefined)?.primary as string | undefined;
+        const list = Array.isArray(agentsConfig.list)
+          ? agentsConfig.list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+          : [];
+        const index = list.findIndex((item) => item.id === agentId);
+        const current = index >= 0 ? list[index]! : null;
+        nextAgent = {
+          id: agentId,
+          name: workspace.name,
+          workspace: workspacePath,
+          ...(defaultModel ? { model: { primary: defaultModel } } : {}),
+        };
+        isCurrent = Boolean(current)
+          && current?.name === nextAgent.name
+          && current?.workspace === nextAgent.workspace;
+        if (!isCurrent) {
+          await upsertAgentInLocalConfig(nextAgent).catch(() => {});
+          window.dispatchEvent(new CustomEvent("xcloud-agents-local-config-changed"));
+          void refreshAgents();
+        }
       }
     } catch {
       ensuringWorkspaceIdsRef.current.delete(workspace.id);
@@ -701,7 +712,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
         ensuringWorkspaceIdsRef.current.delete(workspace.id);
       }
     })();
-  }, [engine, refreshAgents]);
+  }, [agents, engine, refreshAgents]);
 
   const openTerminal = useCallback((command?: string) => {
     setTerminalByContext((prev) => {
@@ -903,8 +914,8 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setInitialChatPromptHidden(false);
     setShowSettings(false);
     setShowPreview(false);
-    setShowCanvas(getCanvasPanelOpen(id));
-  }, [clearUnreadForAgent, getPreferredAgentSession]);
+    setShowCanvas(getCanvasPanelOpen(canvasSurfaceId(id)));
+  }, [clearUnreadForAgent, engineStorageScope, getPreferredAgentSession]);
 
   const handleSelectWorkspace = useCallback((id: string) => {
     const coordinatorId = getWorkspaceAgentId(id);
@@ -918,9 +929,9 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setInitialChatPromptHidden(false);
     setShowSettings(false);
     setShowPreview(false);
-    setShowCanvas(getCanvasPanelOpen(coordinatorId));
+    setShowCanvas(getCanvasPanelOpen(canvasSurfaceId(coordinatorId)));
     setCanvasExpanded(false);
-  }, [clearUnreadForAgent, getPreferredAgentSession, triggerSidebarAnimation]);
+  }, [clearUnreadForAgent, engineStorageScope, getPreferredAgentSession, triggerSidebarAnimation]);
 
   const handleSelectWorkspaceOverview = useCallback((id: string) => {
     const coordinatorId = getWorkspaceAgentId(id);
@@ -933,9 +944,9 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setInitialChatPromptHidden(false);
     setShowSettings(false);
     setShowPreview(false);
-    setShowCanvas(getCanvasPanelOpen(coordinatorId));
+    setShowCanvas(getCanvasPanelOpen(canvasSurfaceId(coordinatorId)));
     setCanvasExpanded(false);
-  }, [clearUnreadForAgent, getPreferredAgentSession]);
+  }, [clearUnreadForAgent, engineStorageScope, getPreferredAgentSession]);
 
   const handleLeaveWorkspace = useCallback(() => {
     triggerSidebarAnimation();
@@ -969,8 +980,8 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const handleDeleteWorkspace = useCallback((workspaceId: string) => {
     const deletedWorkspace = workspaces.find((workspace) => workspace.id === workspaceId);
     const coordinatorId = getWorkspaceAgentId(workspaceId);
-    markAgentDeleted(coordinatorId);
-    void removeAgentFromLocalConfig(coordinatorId).catch(() => {});
+    markAgentDeleted(coordinatorId, engine);
+    if (!engine.isRemote) void removeAgentFromLocalConfig(coordinatorId).catch(() => {});
     deleteWorkspace(workspaceId);
     if (activeWorkspaceId === workspaceId) {
       setActiveWorkspaceId(null);
@@ -982,7 +993,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     if (deletedWorkspace && nodeDetail?.title.includes(deletedWorkspace.name)) {
       setNodeDetail(null);
     }
-  }, [activeWorkspaceId, deleteWorkspace, nodeDetail?.title, workspaces]);
+  }, [activeWorkspaceId, deleteWorkspace, engine, nodeDetail?.title, workspaces]);
 
   const handleAppTool: AppToolHandler = useCallback(async (request) => {
     if (request.name === "create_workspace") {
@@ -1095,7 +1106,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     const agent = agents.find((item) => item.id === agentId);
     if (!agent || agent.isDefault || agent.id === MAIN_AGENT_ID) return;
 
-    markAgentDeleted(agentId);
+    markAgentDeleted(agentId, engine);
     removeAgentFromWorkspaces(agentId);
     setTerminalByContext((prev) => {
       const next = { ...prev };
@@ -1125,12 +1136,13 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
       // The gateway may restart or be temporarily unavailable while config changes apply.
     }
 
-    await removeAgentFromLocalConfig(agentId).catch(() => {});
-
-    await Promise.all([
-      remove(`.openclaw/workspace/${agentId}`, { baseDir: BaseDirectory.Home, recursive: true }).catch(() => {}),
-      remove(`.openclaw/agents/${agentId}`, { baseDir: BaseDirectory.Home, recursive: true }).catch(() => {}),
-    ]);
+    if (!engine.isRemote) {
+      await removeAgentFromLocalConfig(agentId).catch(() => {});
+      await Promise.all([
+        remove(`.openclaw/workspace/${agentId}`, { baseDir: BaseDirectory.Home, recursive: true }).catch(() => {}),
+        remove(`.openclaw/agents/${agentId}`, { baseDir: BaseDirectory.Home, recursive: true }).catch(() => {}),
+      ]);
+    }
 
     if (activeAgentId === agentId) {
       setActiveAgentId(null);
@@ -1166,13 +1178,13 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
       setShowNewChat(false);
       setShowSettings(false);
       setShowPreview(false);
-      setShowCanvas(getCanvasPanelOpen(imported.id));
+      setShowCanvas(getCanvasPanelOpen(canvasSurfaceId(imported.id)));
       window.alert(`Agent imported: ${imported.name}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       window.alert(`Could not import agent package:\n${message}`);
     }
-  }, [engine, getPreferredAgentSession, refreshAgents]);
+  }, [engine, engineStorageScope, getPreferredAgentSession, refreshAgents]);
 
   const handleSelectSession = useCallback((agentId: string, sessionKey: string) => {
     clearUnreadForSession(sessionKey);
@@ -1184,8 +1196,8 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setInitialChatPromptHidden(false);
     setShowSettings(false);
     setShowPreview(false);
-    setShowCanvas(getCanvasPanelOpen(agentId));
-  }, [clearUnreadForSession]);
+    setShowCanvas(getCanvasPanelOpen(canvasSurfaceId(agentId)));
+  }, [clearUnreadForSession, engineStorageScope]);
 
   const handleNewChat = useCallback(() => {
     setShowNewChat(true);
@@ -1210,9 +1222,9 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setShowNewChat(false);
     setShowSettings(false);
     setShowPreview(false);
-    setShowCanvas(getCanvasPanelOpen(agentId));
+    setShowCanvas(getCanvasPanelOpen(canvasSurfaceId(agentId)));
     setCanvasExpanded(false);
-  }, []);
+  }, [engineStorageScope]);
 
   useEffect(() => {
     function handleWorkspaceRequest(e: Event) {
@@ -1386,6 +1398,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
             </div>
           ) : (
             <HomeScreen
+              engine={engine}
               agents={agents}
               workspaces={workspaces}
               activeWorkspaceId={activeWorkspaceId}
@@ -1417,6 +1430,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
               }}
               onSearch={() => setShowCommandPalette(true)}
               onNewChat={handleNewChat}
+              integrationsStorageKey={composioConnectedStorageKey}
             />
           )}
         </div>
@@ -1517,6 +1531,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
               {hasWorkspaceChat && activeWorkspace ? (
                 <WorkspaceCanvas
                   key={`workspace-overview:${activeWorkspace.id}`}
+                  engine={engine}
                   workspace={activeWorkspace}
                   agents={workspaceAgents}
                   onNodeDetail={setNodeDetail}
@@ -1592,6 +1607,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                         engine={engine}
                         agentId={canvasAgentId}
                         agentAvatar={agents.find((agent) => agent.id === canvasAgentId)?.avatar}
+                        integrationsStorageKey={composioConnectedStorageKey}
                         savedViewport={canvasViewportRef.current[canvasAgentId]}
                         onViewportChange={(vp) => { canvasViewportRef.current[canvasAgentId] = vp; }}
                         onNodeDetail={setNodeDetail}
@@ -1659,7 +1675,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
             onClick={() => {
               const nextOpen = !showCanvas;
               setShowCanvas(nextOpen);
-              setCanvasPanelOpen(currentAgentId, nextOpen);
+              setCanvasPanelOpen(canvasSurfaceId(currentAgentId), nextOpen);
               if (!nextOpen && canvasExpanded) setCanvasExpanded(false);
             }}
             className="flex h-6 w-6 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-white/8 hover:text-text"

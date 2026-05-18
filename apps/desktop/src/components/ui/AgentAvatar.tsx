@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Bot, Sparkles } from "lucide-react";
 import { cn } from "@/lib/cn";
 
@@ -20,6 +20,10 @@ const SIZES = {
 export function AgentAvatar({ emoji, avatar, isMain, size = "md", className }: AgentAvatarProps) {
   const s = SIZES[size];
   const [imgError, setImgError] = useState(false);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [avatar]);
 
   if (avatar && avatar.length > 0 && !imgError) {
     return (

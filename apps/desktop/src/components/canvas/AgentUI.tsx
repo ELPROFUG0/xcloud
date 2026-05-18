@@ -6,6 +6,8 @@ import { homeDir } from "@tauri-apps/api/path";
 import { FolderOpen, Plus, RefreshCw, ExternalLink, ArrowLeft, ArrowRight, X, ChevronDown, MoreHorizontal, Share2, Copy, Check } from "lucide-react";
 import { XCLOUD_AG_UI_EVENT, xcloudCapabilities } from "@/lib/ag-ui-bridge";
 import { setRegisteredUiTools, type XCloudUiToolDefinition, type XCloudUiActionResult } from "@/lib/ui-action-registry";
+import type { BrowserEngine } from "@/lib/engine";
+import { agentUiConfigStorageKey } from "@/lib/agent-ui-config";
 import xcloudLogo from "@/assets/xcloud-logo.svg?url";
 
 import cursorLogo from "@/assets/editors/cursor.svg";
@@ -21,6 +23,10 @@ import antigravityLogo from "@/assets/editors/antigravity.png";
 
 function shellQuote(value: string) {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function safePathSegment(value: string) {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "engine";
 }
 
 type ShareTunnelState = {
@@ -803,7 +809,7 @@ RULES:
   return uiPath;
 }
 
-export function useAgentUI(_agentId: string, wsPath: string) {
+export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngine) {
   const [repoPath, setRepoPath] = useState<string | null>(null);
   const [devServerUrl, setDevServerUrl] = useState<string | null>(null);
   const [devServerLoading, setDevServerLoading] = useState(false);
@@ -813,8 +819,13 @@ export function useAgentUI(_agentId: string, wsPath: string) {
   const [home, setHome] = useState<string>("");
   const lastConfigSignatureRef = useRef("");
 
+  const uiWsPath = engine.isRemote
+    ? `.xcloud/remote-engines/${safePathSegment(engine.storageScope)}/${safePathSegment(_agentId)}`
+    : wsPath;
   const configPath = `${wsPath}/ui-config.json`;
-  const fullConfigPath = home ? `${home.replace(/\/$/, "")}/${configPath}` : "";
+  const fullConfigPath = !engine.isRemote && home ? `${home.replace(/\/$/, "")}/${configPath}` : "";
+  const remoteConfigStorageKey = agentUiConfigStorageKey(_agentId, engine);
+  const configIdentity = engine.isRemote ? remoteConfigStorageKey : fullConfigPath;
 
   useEffect(() => {
     homeDir()
@@ -824,6 +835,18 @@ export function useAgentUI(_agentId: string, wsPath: string) {
 
   // Save config
   const saveConfig = useCallback(async (path: string, port?: number) => {
+    if (engine.isRemote) {
+      let existing: AgentUiConfig = {};
+      try {
+        existing = JSON.parse(localStorage.getItem(remoteConfigStorageKey) ?? "{}") as AgentUiConfig;
+      } catch {
+        existing = {};
+      }
+      const config: AgentUiConfig = { ...existing, repoPath: path, ...(port ? { port } : {}), updatedAt: String(Date.now()) };
+      delete config.openInPreview;
+      localStorage.setItem(remoteConfigStorageKey, JSON.stringify(config));
+      return;
+    }
     if (!fullConfigPath) return;
     const existingRaw = await invoke<string>("run_shell", { cmd: `cat "${fullConfigPath}" 2>/dev/null || echo "{}"` }).catch(() => "{}");
     let existing: AgentUiConfig = {};
@@ -835,7 +858,7 @@ export function useAgentUI(_agentId: string, wsPath: string) {
     const config: AgentUiConfig = { ...existing, repoPath: path, ...(port ? { port } : {}) };
     delete config.openInPreview;
     await invoke("run_shell", { cmd: `echo '${JSON.stringify(config)}' > "${fullConfigPath}"` }).catch(() => {});
-  }, [fullConfigPath]);
+  }, [engine.isRemote, fullConfigPath, remoteConfigStorageKey]);
 
   // Start dev server
   const startDevServer = useCallback(async (path: string, savedPort?: number) => {
@@ -915,8 +938,10 @@ export function useAgentUI(_agentId: string, wsPath: string) {
   }, [saveConfig]);
 
   const loadSavedConfig = useCallback(async (initial = false) => {
-    if (!fullConfigPath) return;
-    const content = await invoke<string>("run_shell", { cmd: `cat "${fullConfigPath}" 2>/dev/null || echo "{}"` }).catch(() => "{}");
+    if (!configIdentity) return;
+    const content = engine.isRemote
+      ? localStorage.getItem(remoteConfigStorageKey) ?? "{}"
+      : await invoke<string>("run_shell", { cmd: `cat "${fullConfigPath}" 2>/dev/null || echo "{}"` }).catch(() => "{}");
     let config: AgentUiConfig = {};
     try {
       config = JSON.parse(content) as AgentUiConfig;
@@ -955,7 +980,7 @@ export function useAgentUI(_agentId: string, wsPath: string) {
       if (running) setDevServerUrl(`http://localhost:${nextPort}`);
     }
 
-    const autoOpenKey = `xcloud-ui-auto-open:${fullConfigPath}:${config.updatedAt ?? signature}`;
+    const autoOpenKey = `xcloud-ui-auto-open:${configIdentity}:${config.updatedAt ?? signature}`;
     const requestedAutoOpen = config.openInPreview === true && !sessionStorage.getItem(autoOpenKey);
     const shouldOpen = requestedAutoOpen || (!initial && changed);
     if (shouldOpen) {
@@ -967,17 +992,17 @@ export function useAgentUI(_agentId: string, wsPath: string) {
         void startDevServer(nextRepoPath, nextPort);
       }
     }
-  }, [devServerLoading, devServerUrl, fullConfigPath, startDevServer]);
+  }, [configIdentity, devServerLoading, devServerUrl, engine.isRemote, fullConfigPath, remoteConfigStorageKey, startDevServer]);
 
   useEffect(() => {
-    if (!fullConfigPath) return;
+    if (!configIdentity) return;
     lastConfigSignatureRef.current = "";
     void loadSavedConfig(true);
     const timer = window.setInterval(() => {
       void loadSavedConfig(false);
     }, 1500);
     return () => window.clearInterval(timer);
-  }, [fullConfigPath, loadSavedConfig]);
+  }, [configIdentity, loadSavedConfig]);
 
   useEffect(() => {
     if (uiView !== "preview" || !repoPath || devServerUrl || devServerLoading) return;
@@ -1006,9 +1031,13 @@ export function useAgentUI(_agentId: string, wsPath: string) {
     setRepoPath(null);
     setDevServerUrl(null);
     setUiView("menu");
+    if (engine.isRemote) {
+      localStorage.removeItem(remoteConfigStorageKey);
+      return;
+    }
     if (!fullConfigPath) return;
     await invoke("run_shell", { cmd: `rm -f "${fullConfigPath}"` }).catch(() => {});
-  }, [fullConfigPath]);
+  }, [engine.isRemote, fullConfigPath, remoteConfigStorageKey]);
 
   // Launch preview (from menu or tab switch)
   const launchPreview = useCallback(() => {
@@ -1025,7 +1054,7 @@ export function useAgentUI(_agentId: string, wsPath: string) {
   // Create UI — scaffold and open editor
   const createUI = useCallback(async (editor: string) => {
     if (!home) return;
-    const uiPath = await scaffoldUI(_agentId, wsPath, home);
+    const uiPath = await scaffoldUI(_agentId, uiWsPath, home);
     setRepoPath(uiPath);
     await saveConfig(uiPath);
     await ensureRealtimeBridge(uiPath);
@@ -1045,7 +1074,7 @@ export function useAgentUI(_agentId: string, wsPath: string) {
 
     const cmd = cmds[editor];
     if (cmd) await invoke("run_shell", { cmd }).catch(() => {});
-  }, [_agentId, wsPath, home, saveConfig]);
+  }, [_agentId, uiWsPath, home, saveConfig]);
 
   return {
     agentId: _agentId,

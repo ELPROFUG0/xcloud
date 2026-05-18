@@ -185,7 +185,12 @@ export default function App() {
         if (!identity) throw new Error("Waiting for identity — the gateway may still be starting. Try again in a few seconds.");
         setAppState({ kind: "connecting" });
 
-        const client = new BrowserEngine({ url: wsUrl, ...identity });
+        const client = new BrowserEngine({
+          url: wsUrl,
+          ...identity,
+          mode: remoteMode ?? "local",
+          scopeKey: remoteMode ? `${remoteMode}:${wsUrl}` : "local",
+        });
         engineRef.current = client;
 
         // Wire auto-reconnect state changes
@@ -396,10 +401,10 @@ export default function App() {
       return <OnboardingScreen onComplete={handleOnboardingComplete} />;
 
     case "connected":
-      return <AppLayout engine={appState.engine} />;
+      return <AppLayout key={appState.engine.storageScope} engine={appState.engine} />;
 
     case "reconnecting":
-      return <AppLayout engine={appState.engine} reconnecting />;
+      return <AppLayout key={appState.engine.storageScope} engine={appState.engine} reconnecting />;
 
     case "error":
       return (

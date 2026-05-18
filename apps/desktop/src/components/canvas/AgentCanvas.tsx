@@ -21,6 +21,7 @@ interface AgentCanvasProps {
   engine: BrowserEngine;
   agentId: string;
   agentAvatar?: string;
+  integrationsStorageKey?: string;
   savedViewport?: { x: number; y: number; zoom: number };
   onViewportChange?: (vp: { x: number; y: number; zoom: number }) => void;
   onNodeDetail?: (detail: DetailPanel | null) => void;
@@ -62,6 +63,18 @@ const NODE_COLORS: Record<string, string> = {
   "ui-repo": "#3b82f6",
 };
 
+function readConnectedIntegrations(storageKey: string): Array<{ slug: string; logo: string }> {
+  try {
+    const items = JSON.parse(localStorage.getItem(storageKey) ?? "[]") as Array<string | { slug: string; logo?: string }>;
+    if (!Array.isArray(items)) return [];
+    return items
+      .map((item) => typeof item === "string" ? { slug: item, logo: "" } : { slug: item.slug, logo: item.logo ?? "" })
+      .filter((item) => item.slug);
+  } catch {
+    return [];
+  }
+}
+
 function isPlaceholder(v: string): boolean {
   if (!v) return true;
   if (v.startsWith("_(")) return true;
@@ -94,11 +107,12 @@ function parseSoul(content: string): string[] {
   return traits.slice(0, 6);
 }
 
-export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanvasSettings }: AgentCanvasProps) {
+export function AgentCanvas({ engine, agentId, agentAvatar, integrationsStorageKey = "composioConnected", onNodeDetail, onCanvasSettings }: AgentCanvasProps) {
   const wsPath = agentId === "main" ? ".openclaw/workspace" : `.openclaw/workspace/${agentId}`;
+  const surfaceId = `${engine.storageScope}:${agentId}`;
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<any>(null);
-  const restoreUiPreviewRef = useRef(getCanvasSurfaceTab(agentId) === "ui");
+  const restoreUiPreviewRef = useRef(getCanvasSurfaceTab(surfaceId) === "ui");
 
   const [agentData, setAgentData] = useState<AgentData>({
     identity: { name: "", emoji: "", creature: "", vibe: "" },
@@ -106,9 +120,9 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
     model: { provider: "", model: "", contextWindow: 0 },
     skills: [],
     memoryFiles: [],
-    integrations: (() => { try { const d = JSON.parse(localStorage.getItem("composioConnected") ?? "[]"); return d.map((i: unknown) => typeof i === "string" ? { slug: i, logo: "" } : i); } catch { return []; } })(),
+    integrations: readConnectedIntegrations(integrationsStorageKey),
   });
-  const [tab, setTab] = useState<CanvasSurfaceTab>(() => getCanvasSurfaceTab(agentId));
+  const [tab, setTab] = useState<CanvasSurfaceTab>(() => getCanvasSurfaceTab(surfaceId));
   const [showLabels, setShowLabels] = useState(() => localStorage.getItem("canvasShowLabels") !== "false");
   const [useOrbs, setUseOrbs] = useState(() => localStorage.getItem("canvasUseOrbs") === "true");
   const [dataLoaded, setDataLoaded] = useState(false);
@@ -178,17 +192,17 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
   }, [activeNode]);
 
   // Agent UI state
-  const agentUI = useAgentUI(agentId, wsPath);
+  const agentUI = useAgentUI(agentId, wsPath, engine);
   const setPersistentTab = useCallback((nextTab: CanvasSurfaceTab) => {
     setTab(nextTab);
-    setCanvasSurfaceTab(agentId, nextTab);
-  }, [agentId]);
+    setCanvasSurfaceTab(surfaceId, nextTab);
+  }, [surfaceId]);
 
   useEffect(() => {
-    const savedTab = getCanvasSurfaceTab(agentId);
+    const savedTab = getCanvasSurfaceTab(surfaceId);
     restoreUiPreviewRef.current = savedTab === "ui";
     setTab(savedTab);
-  }, [agentId]);
+  }, [surfaceId]);
 
   useEffect(() => {
     if (agentUI.autoOpenRevision <= 0 || !agentUI.repoPath) return;
@@ -234,11 +248,13 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
       model: { provider: "", model: "", contextWindow: 0 },
       skills: [],
       memoryFiles: [],
-      integrations: (() => { try { const d = JSON.parse(localStorage.getItem("composioConnected") ?? "[]"); return d.map((i: unknown) => typeof i === "string" ? { slug: i, logo: "" } : i); } catch { return []; } })(),
+      integrations: readConnectedIntegrations(integrationsStorageKey),
     };
 
-    try { data.identity = parseIdentity(await readTextFile(`${wsPath}/IDENTITY.md`, { baseDir: BaseDirectory.Home })); } catch { /* */ }
-    try { data.soul.traits = parseSoul(await readTextFile(`${wsPath}/SOUL.md`, { baseDir: BaseDirectory.Home })); } catch { /* */ }
+    if (!engine.isRemote) {
+      try { data.identity = parseIdentity(await readTextFile(`${wsPath}/IDENTITY.md`, { baseDir: BaseDirectory.Home })); } catch { /* */ }
+      try { data.soul.traits = parseSoul(await readTextFile(`${wsPath}/SOUL.md`, { baseDir: BaseDirectory.Home })); } catch { /* */ }
+    }
 
     try {
       const result = await engine.rpc("config.get", {});
@@ -256,13 +272,15 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
 
     try { data.skills = (await engine.listCommands()).slice(0, 20).map((c) => ({ name: c.name, description: c.description ?? "" })); } catch { /* */ }
 
-    for (const file of ["MEMORY.md", "HEARTBEAT.md", "USER.md", "TOOLS.md", "AGENTS.md"]) {
-      try { if ((await readTextFile(`${wsPath}/${file}`, { baseDir: BaseDirectory.Home })).trim()) data.memoryFiles.push(file); } catch { /* */ }
+    if (!engine.isRemote) {
+      for (const file of ["MEMORY.md", "HEARTBEAT.md", "USER.md", "TOOLS.md", "AGENTS.md"]) {
+        try { if ((await readTextFile(`${wsPath}/${file}`, { baseDir: BaseDirectory.Home })).trim()) data.memoryFiles.push(file); } catch { /* */ }
+      }
     }
 
     setAgentData(data);
     setDataLoaded(true);
-  }, [engine, agentId, wsPath]);
+  }, [engine, agentId, integrationsStorageKey, wsPath]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -298,7 +316,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
     const onIntegrationChanged = () => {
       setAgentData((prev) => ({
         ...prev,
-        integrations: (() => { try { const d = JSON.parse(localStorage.getItem("composioConnected") ?? "[]"); return d.map((i: unknown) => typeof i === "string" ? { slug: i, logo: "" } : i); } catch { return []; } })(),
+        integrations: readConnectedIntegrations(integrationsStorageKey),
       }));
     };
     const onCanvasSettingsChanged = () => {
@@ -318,7 +336,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, onNodeDetail, onCanv
       window.removeEventListener("xcloud-integration-changed", onIntegrationChanged);
       window.removeEventListener("xcloud-canvas-settings", onCanvasSettingsChanged);
     };
-  }, [engine, loadData]);
+  }, [engine, integrationsStorageKey, loadData]);
 
   // Node click handler — sends detail to sidebar via callback
   const onNodeClick = useCallback(async (node: GraphNode) => {

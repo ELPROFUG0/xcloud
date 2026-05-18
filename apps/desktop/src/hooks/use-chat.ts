@@ -5,6 +5,7 @@ import type { BrowserEngine, EngineAttachment } from "@/lib/engine";
 import type { ChatAttachment, ChatMessage, CodeChangeInfo, ToolCallInfo } from "@/types/chat";
 import { emitAgUiEvents, openClawFrameToAgUiEvents, userMessageToAgUiEvents } from "@/lib/ag-ui-bridge";
 import { executeRegisteredUiAction } from "@/lib/ui-action-registry";
+import { agentUiConfigStorageKey } from "@/lib/agent-ui-config";
 import { BaseDirectory, readTextFile } from "@tauri-apps/plugin-fs";
 
 interface UseChatOptions {
@@ -435,7 +436,7 @@ function parseChatTimestamp(value: unknown, fallback = Date.now()) {
 }
 
 function codeChangeCacheKey(sessionKey: string, toolCallId: string) {
-  return `${sessionKey}::${toolCallId}`;
+  return `${scopedChatCacheKey(sessionKey)}::${toolCallId}`;
 }
 
 function readCodeChangeCache(): CodeChangeCache {
@@ -508,12 +509,13 @@ function writeUiActionToolCache(cache: UiActionToolCache) {
 }
 
 function readCachedUiActionTools(sessionKey: string) {
-  return readUiActionToolCache()[sessionKey]?.tools ?? [];
+  return readUiActionToolCache()[scopedChatCacheKey(sessionKey)]?.tools ?? [];
 }
 
 function cacheUiActionTool(sessionKey: string, tool: ToolCallInfo) {
   const cache = readUiActionToolCache();
-  const current = cache[sessionKey]?.tools ?? [];
+  const key = scopedChatCacheKey(sessionKey);
+  const current = cache[key]?.tools ?? [];
   const nextSignature = uiActionToolSignature(tool);
   const nextTools = [
     tool,
@@ -523,7 +525,7 @@ function cacheUiActionTool(sessionKey: string, tool: ToolCallInfo) {
       return Math.abs(item.timestamp - tool.timestamp) > UI_ACTION_DUPLICATE_WINDOW_MS;
     }),
   ];
-  cache[sessionKey] = {
+  cache[key] = {
     updatedAt: Date.now(),
     tools: nextTools,
   };
@@ -624,17 +626,17 @@ function mergeCachedUiActionTools(sessionKey: string, messages: ChatMessage[]) {
   return normalizeMessageTimeline(dedupeUiActionToolMessages([...messages, ...cachedMessages]));
 }
 
-async function startCodeChangeSnapshot(sessionKey: string, toolCallId: string, args?: Record<string, unknown>) {
+async function startCodeChangeSnapshot(engine: BrowserEngine, sessionKey: string, toolCallId: string, args?: Record<string, unknown>) {
   const inferred = inferCommandCwd(args);
-  const uiRepoPath = await readUiRepoPath(extractAgentIdFromSessionKey(sessionKey));
+  const uiRepoPath = await readUiRepoPath(engine, extractAgentIdFromSessionKey(sessionKey));
   const targetDir = inferred ?? uiRepoPath ?? undefined;
   toolFileSnapshots.set(toolCallId, !inferred && sessionFileSnapshots.has(sessionKey)
     ? sessionFileSnapshots.get(sessionKey)!
     : fileSnapshotForDir(targetDir));
 }
 
-async function startSessionChangeSnapshots(sessionKey: string) {
-  const uiRepoPath = await readUiRepoPath(extractAgentIdFromSessionKey(sessionKey));
+async function startSessionChangeSnapshots(engine: BrowserEngine, sessionKey: string) {
+  const uiRepoPath = await readUiRepoPath(engine, extractAgentIdFromSessionKey(sessionKey));
   if (!uiRepoPath) return;
 
   const fileSnapshot = fileSnapshotForDir(uiRepoPath);
@@ -996,7 +998,15 @@ function coalesceAssistantMediaMessages(messages: ChatMessage[]) {
   return coalesced;
 }
 
-async function readUiRepoPath(agentId: string) {
+async function readUiRepoPath(engine: BrowserEngine, agentId: string) {
+  if (engine.isRemote) {
+    try {
+      const config = JSON.parse(localStorage.getItem(agentUiConfigStorageKey(agentId, engine)) ?? "{}") as { repoPath?: string };
+      return config.repoPath?.trim() || null;
+    } catch {
+      return null;
+    }
+  }
   const configPath = `${agentWorkspacePath(agentId)}/ui-config.json`;
   const content = await readTextFile(configPath, { baseDir: BaseDirectory.Home }).catch(() => "");
   if (!content.trim()) return null;
@@ -1235,6 +1245,7 @@ interface ChatSessionState {
   isStreaming: boolean;
   loading: boolean;
   historyLoaded: boolean;
+  engineScope?: string;
   historyPromise?: Promise<void>;
 }
 
@@ -1248,6 +1259,12 @@ const stoppedSessionUntil = new Map<string, number>();
 const STOP_EVENT_SUPPRESSION_MS = 60 * 60_000;
 const STOPPED_HISTORY_KEY = "xcloudStoppedChatHistory";
 const sessionHistoryRefreshTimers = new Map<string, number[]>();
+const CHAT_CACHE_SCOPE_SEPARATOR = "\u001f";
+
+function scopedChatCacheKey(sessionKey: string) {
+  const scope = chatSessions.get(sessionKey)?.engineScope;
+  return scope ? `${scope}${CHAT_CACHE_SCOPE_SEPARATOR}${sessionKey}` : sessionKey;
+}
 
 function isStopSuppressed(sessionKey: string) {
   const until = stoppedSessionUntil.get(sessionKey);
@@ -1293,31 +1310,33 @@ function writeStoppedHistoryMarkers(markers: Record<string, { stoppedAt: number;
 
 function markSessionStoppedInHistory(sessionKey: string, runIds: string[]) {
   const markers = readStoppedHistoryMarkers();
-  markers[sessionKey] = { stoppedAt: Date.now(), runIds };
+  markers[scopedChatCacheKey(sessionKey)] = { stoppedAt: Date.now(), runIds };
   writeStoppedHistoryMarkers(markers);
 }
 
 function clearSessionStoppedHistory(sessionKey: string) {
   const markers = readStoppedHistoryMarkers();
-  if (!markers[sessionKey]) return;
-  delete markers[sessionKey];
+  const key = scopedChatCacheKey(sessionKey);
+  if (!markers[key]) return;
+  delete markers[key];
   writeStoppedHistoryMarkers(markers);
 }
 
 function shouldHideStoppedHistoryAssistant(sessionKey: string, timestamp?: unknown, runId?: string) {
-  const marker = readStoppedHistoryMarkers()[sessionKey];
+  const marker = readStoppedHistoryMarkers()[scopedChatCacheKey(sessionKey)];
   if (!marker?.stoppedAt) return false;
   if (runId && marker.runIds?.includes(runId)) return true;
   const messageTime = parseChatTimestamp(timestamp);
   return messageTime >= marker.stoppedAt - 2_000 && messageTime <= marker.stoppedAt + 30_000;
 }
 
-function createEmptySessionState(): ChatSessionState {
+function createEmptySessionState(engineScope?: string): ChatSessionState {
   return {
     messages: [],
     isStreaming: false,
     loading: true,
     historyLoaded: false,
+    engineScope,
   };
 }
 
@@ -1328,6 +1347,39 @@ function getChatSessionState(sessionKey: string): ChatSessionState {
     chatSessions.set(sessionKey, state);
   }
   return state;
+}
+
+function clearSessionHistoryTimers(sessionKey: string) {
+  const timers = sessionHistoryRefreshTimers.get(sessionKey);
+  if (timers) {
+    for (const timer of timers) window.clearTimeout(timer);
+    sessionHistoryRefreshTimers.delete(sessionKey);
+  }
+}
+
+function clearSessionTransientState(sessionKey: string) {
+  clearSessionHistoryTimers(sessionKey);
+  activeRunIdsBySession.delete(sessionKey);
+  stoppedSessionUntil.delete(sessionKey);
+  sessionFileSnapshots.delete(sessionKey);
+  for (const [runId, key] of runSessionKeys.entries()) {
+    if (key === sessionKey) runSessionKeys.delete(runId);
+  }
+  const prefix = `${sessionKey}:`;
+  for (const key of streamingUiDirectiveBuffers.keys()) {
+    if (key.startsWith(prefix)) streamingUiDirectiveBuffers.delete(key);
+  }
+  for (const key of streamingAssistantTextByRun.keys()) {
+    if (key.startsWith(prefix)) streamingAssistantTextByRun.delete(key);
+  }
+}
+
+function ensureChatSessionEngineScope(sessionKey: string, engineScope: string) {
+  const current = chatSessions.get(sessionKey);
+  if (current?.engineScope === engineScope) return;
+  clearSessionTransientState(sessionKey);
+  chatSessions.set(sessionKey, createEmptySessionState(engineScope));
+  notifyChatSession(sessionKey);
 }
 
 function notifyChatSession(sessionKey: string) {
@@ -1880,6 +1932,10 @@ function parseHistoryMessages(sessionKey: string, history: HistoryMessage[]): Ch
 }
 
 function processChatEvent(engine: BrowserEngine, sessionKey: string, event: string, payload: Record<string, unknown>) {
+  const existing = chatSessions.get(sessionKey);
+  if (existing?.engineScope && existing.engineScope !== engine.storageScope) return;
+  if (!existing) chatSessions.set(sessionKey, createEmptySessionState(engine.storageScope));
+
   const runId = typeof payload.runId === "string" ? payload.runId : undefined;
 
   if (isStopSuppressed(sessionKey)) {
@@ -1960,7 +2016,7 @@ function processChatEvent(engine: BrowserEngine, sessionKey: string, event: stri
       if (phase === "start") {
         const toolInfo: ToolCallInfo = { id: toolCallId, name, title, args, status: "running", timestamp: Date.now() };
         if (isCodeChangeTool(name)) {
-          void startCodeChangeSnapshot(sessionKey, toolCallId, args);
+          void startCodeChangeSnapshot(engine, sessionKey, toolCallId, args);
         }
         updateChatMessages(sessionKey, (messages) => {
           if (messages.some((message) => message.role === "tool" && message.tool?.id === toolCallId)) return messages;
@@ -2008,7 +2064,7 @@ function processChatEvent(engine: BrowserEngine, sessionKey: string, event: stri
         const title = buildToolTitle(name, args);
         const toolInfo: ToolCallInfo = { id: toolCallId, name, title, args, status: "running", timestamp: Date.now() };
         if (isCodeChangeTool(name)) {
-          void startCodeChangeSnapshot(sessionKey, toolCallId, args);
+          void startCodeChangeSnapshot(engine, sessionKey, toolCallId, args);
         }
         updateChatMessages(sessionKey, (messages) => {
           if (messages.some((message) => message.role === "tool" && message.tool?.id === toolCallId)) return messages;
@@ -2139,19 +2195,23 @@ function ensureEngineSessionSubscription(engine: BrowserEngine, sessionKey: stri
 }
 
 async function refreshSessionHistory(engine: BrowserEngine, sessionKey: string, options?: { dropStreaming?: boolean }) {
+  const engineScope = engine.storageScope;
   const result = await engine.rpc("chat.history", { sessionKey }).catch(() => null);
   const history = (result as { messages?: HistoryMessage[] } | null)?.messages;
   if (!history) return;
 
   const loaded = parseHistoryMessages(sessionKey, history);
-  updateChatSession(sessionKey, (current) => ({
-    ...current,
-    messages: mergeHistoryWithLive(loaded, options?.dropStreaming ? dropStreamingAssistant(current.messages) : current.messages),
-    isStreaming: options?.dropStreaming ? false : current.isStreaming,
-    loading: false,
-    historyLoaded: true,
-    historyPromise: undefined,
-  }));
+  updateChatSession(sessionKey, (current) => {
+    if (current.engineScope !== engineScope) return current;
+    return {
+      ...current,
+      messages: mergeHistoryWithLive(loaded, options?.dropStreaming ? dropStreamingAssistant(current.messages) : current.messages),
+      isStreaming: options?.dropStreaming ? false : current.isStreaming,
+      loading: false,
+      historyLoaded: true,
+      historyPromise: undefined,
+    };
+  });
 }
 
 function scheduleSessionHistoryRefreshes(engine: BrowserEngine, sessionKey: string, delays: number[], options?: { dropStreaming?: boolean }) {
@@ -2175,6 +2235,8 @@ function scheduleSessionHistoryRefreshes(engine: BrowserEngine, sessionKey: stri
 }
 
 function ensureSessionHistory(engine: BrowserEngine, sessionKey: string) {
+  const engineScope = engine.storageScope;
+  ensureChatSessionEngineScope(sessionKey, engineScope);
   const state = getChatSessionState(sessionKey);
   if (state.historyLoaded || state.historyPromise) return;
 
@@ -2187,9 +2249,11 @@ function ensureSessionHistory(engine: BrowserEngine, sessionKey: string) {
       const history = (result as { messages?: HistoryMessage[] }).messages ?? [];
       const loaded = parseHistoryMessages(sessionKey, history);
       updateChatSession(sessionKey, (current) => {
+        if (current.engineScope !== engineScope) return current;
         const hasLiveMessages = current.isStreaming || current.messages.some((message) => message.isStreaming || message.id.startsWith("user-") || message.id.startsWith("assistant-"));
         return {
           ...current,
+          engineScope,
           messages: hasLiveMessages ? mergeHistoryWithLive(loaded, current.messages) : loaded,
           loading: false,
           historyLoaded: true,
@@ -2199,17 +2263,18 @@ function ensureSessionHistory(engine: BrowserEngine, sessionKey: string) {
       scheduleSessionHistoryRefreshes(engine, sessionKey, INITIAL_HISTORY_SETTLE_REFRESH_DELAYS_MS);
     })
     .catch(() => {
-      updateChatSession(sessionKey, (current) => ({
+      updateChatSession(sessionKey, (current) => current.engineScope === engineScope ? ({
         ...current,
         loading: false,
         historyLoaded: false,
         historyPromise: undefined,
-      }));
+      }) : current);
       scheduleSessionHistoryRefreshes(engine, sessionKey, INITIAL_HISTORY_SETTLE_REFRESH_DELAYS_MS);
     });
 
   chatSessions.set(sessionKey, {
     ...state,
+    engineScope,
     loading: true,
     historyPromise,
   });
@@ -2232,6 +2297,7 @@ export function useChat({ engine, sessionKey = "main", appTools }: UseChatOption
 
   const send = useCallback(
     async (content: string, options?: { hidden?: boolean; silent?: boolean; attachments?: ChatAttachment[] }) => {
+      ensureChatSessionEngineScope(sessionKey, engine.storageScope);
       const trimmed = content.trim();
       const outgoingAttachments = options?.attachments?.length ? dedupeAttachments(options.attachments) : undefined;
       if (!trimmed && !outgoingAttachments?.length) return;
@@ -2330,7 +2396,7 @@ export function useChat({ engine, sessionKey = "main", appTools }: UseChatOption
           }));
         }
         if (!options?.hidden && !isSteeringActiveRun) {
-          await startSessionChangeSnapshots(sessionKey);
+          await startSessionChangeSnapshots(engine, sessionKey);
         }
         const result = await engine.sendMessage(sessionKey, engineContent, toEngineAttachments(outgoingAttachments));
         if (result.runId) {
@@ -2377,6 +2443,7 @@ export function useChat({ engine, sessionKey = "main", appTools }: UseChatOption
   );
 
   const stop = useCallback(async () => {
+    ensureChatSessionEngineScope(sessionKey, engine.storageScope);
     const current = getChatSessionState(sessionKey);
     if (!current.isStreaming) return;
     const activeRunIds = getActiveRunIds(sessionKey);

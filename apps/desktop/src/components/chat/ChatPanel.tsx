@@ -8,6 +8,7 @@ import { AgentAvatar } from "../ui/AgentAvatar";
 import type { AgentInfo } from "@/hooks/use-agents";
 import { EmojiPicker } from "../ui/EmojiPicker";
 import { updateAgentEmoji } from "@/lib/update-identity";
+import { setAgentVisualOverride } from "@/lib/agent-visuals";
 import { ChatMessages } from "./ChatMessages";
 import { paginate } from "./chat-message-utils";
 import type { ImagePreviewState } from "./MessageAttachments";
@@ -254,9 +255,10 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
 
   const handleEmojiSelect = useCallback(async (emoji: string) => {
     setShowEmojiPicker(false);
-    await updateAgentEmoji(agentId, emoji);
+    if (engine.isRemote) setAgentVisualOverride(engine, agentId, { emoji });
+    else await updateAgentEmoji(agentId, emoji);
     onRefresh?.();
-  }, [agentId, onRefresh]);
+  }, [agentId, engine, onRefresh]);
 
   useEffect(() => {
     if (loading || !initialPrompt || sentInitialPromptRef.current === initialPrompt) return;
@@ -290,6 +292,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
             <div className="absolute left-0 top-full mt-2 z-30">
               <EmojiPicker
                 agentId={agentId}
+                engine={engine}
                 onSelect={handleEmojiSelect}
                 onSelectImage={() => { setShowEmojiPicker(false); onRefresh?.(); }}
                 onClose={() => setShowEmojiPicker(false)}

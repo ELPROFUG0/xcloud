@@ -5,11 +5,13 @@ import { getWorkspaceAgentId, getWorkspaceDir, type WorkspaceInfo } from "@/hook
 import { BaseDirectory, readTextFile } from "@tauri-apps/plugin-fs";
 import { AgentUIContent, useAgentUI } from "./AgentUI";
 import type { DetailPanel } from "./AgentCanvas";
+import type { BrowserEngine } from "@/lib/engine";
 import { ContinuousTabs } from "./ContinuousTabs";
 import { CanvasSearchControl } from "./CanvasSearchControl";
 import { getCanvasSurfaceTab, setCanvasSurfaceTab, type CanvasSurfaceTab } from "@/lib/canvas-preferences";
 
 interface WorkspaceCanvasProps {
+  engine: BrowserEngine;
   workspace: WorkspaceInfo;
   agents: AgentInfo[];
   onNodeDetail?: (detail: DetailPanel | null) => void;
@@ -27,12 +29,13 @@ interface WorkspaceLink {
   target: string;
 }
 
-export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCanvasProps) {
+export function WorkspaceCanvas({ engine, workspace, agents, onNodeDetail }: WorkspaceCanvasProps) {
   const workspaceAgentId = getWorkspaceAgentId(workspace.id);
-  const [tab, setTab] = useState<CanvasSurfaceTab>(() => getCanvasSurfaceTab(workspaceAgentId));
+  const surfaceId = `${engine.storageScope}:${workspaceAgentId}`;
+  const [tab, setTab] = useState<CanvasSurfaceTab>(() => getCanvasSurfaceTab(surfaceId));
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<any>(null);
-  const restoreUiPreviewRef = useRef(getCanvasSurfaceTab(workspaceAgentId) === "ui");
+  const restoreUiPreviewRef = useRef(getCanvasSurfaceTab(surfaceId) === "ui");
   const [dimensions, setDimensions] = useState({ width: 400, height: 400 });
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -42,11 +45,11 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
   const labelOffsets = useRef<Record<string, number>>({});
   const animFrameRef = useRef<number>(0);
   const [, forceRender] = useState(0);
-  const workspaceUI = useAgentUI(workspaceAgentId, getWorkspaceDir(workspace.id));
+  const workspaceUI = useAgentUI(workspaceAgentId, getWorkspaceDir(workspace.id), engine);
   const setPersistentTab = useCallback((nextTab: CanvasSurfaceTab) => {
     setTab(nextTab);
-    setCanvasSurfaceTab(workspaceAgentId, nextTab);
-  }, [workspaceAgentId]);
+    setCanvasSurfaceTab(surfaceId, nextTab);
+  }, [surfaceId]);
   const canvasTabs = useMemo(() => [
     { id: "canvas" as const, label: "Canvas" },
     { id: "ui" as const, label: "UI" },
@@ -167,10 +170,10 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
   }, [workspaceUI.autoOpenRevision, workspaceUI.repoPath, setPersistentTab]);
 
   useEffect(() => {
-    const savedTab = getCanvasSurfaceTab(workspaceAgentId);
+    const savedTab = getCanvasSurfaceTab(surfaceId);
     restoreUiPreviewRef.current = savedTab === "ui";
     setTab(savedTab);
-  }, [workspaceAgentId]);
+  }, [surfaceId]);
 
   useEffect(() => {
     if (!restoreUiPreviewRef.current || tab !== "ui" || !workspaceUI.repoPath) return;
@@ -191,13 +194,15 @@ export function WorkspaceCanvas({ workspace, agents, onNodeDetail }: WorkspaceCa
   }, [graphData.links, activeNode]);
 
   const readWorkspaceFile = useCallback(async (file: string) => {
+    if (engine.isRemote) return `Remote workspace files are not mounted in this local app.`;
     const dir = getWorkspaceDir(workspace.id);
     return readTextFile(`${dir}/${file}`, { baseDir: BaseDirectory.Home }).catch(() => `No ${file}`);
-  }, [workspace.id]);
+  }, [engine.isRemote, workspace.id]);
 
   const readAgentFile = useCallback(async (agentId: string, file: string) => {
+    if (engine.isRemote) return "";
     return readTextFile(`.openclaw/workspace/${agentId}/${file}`, { baseDir: BaseDirectory.Home }).catch(() => "");
-  }, []);
+  }, [engine.isRemote]);
 
   const showNodeDetail = useCallback(async (node: WorkspaceNode) => {
     if (!onNodeDetail) return;

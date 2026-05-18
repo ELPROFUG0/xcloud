@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import composioAppsData from "@/data/composio-apps.json";
 import type { BrowserEngine } from "@/lib/engine";
+import { engineScopedStorageKey } from "@/lib/engine-storage";
 import type { ComposioApp } from "./types";
 
 interface IntegrationsSectionProps {
@@ -12,6 +13,8 @@ interface IntegrationsSectionProps {
 
 const LOGO_CACHE_KEY = "xcloudComposioLogoCache:v1";
 const CONNECTED_CACHE_KEY = "xcloudComposioConnectedCache:v1";
+const API_KEY_STORAGE_KEY = "composioApiKey";
+const CONNECTED_STORAGE_KEY = "composioConnected";
 const LOGO_CACHE_LIMIT = 180;
 
 type LogoCache = Record<string, { dataUrl: string; updatedAt: number }>;
@@ -90,12 +93,65 @@ function CachedComposioLogo({ app }: { app: ComposioApp }) {
   );
 }
 
-export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProps) {
-  const [composioKey, setComposioKey] = useState(() => localStorage.getItem("composioApiKey") ?? "");
+function readConnectedIntegrations(storageKey: string): Array<{ slug: string; logo: string }> {
+  try {
+    const items = JSON.parse(localStorage.getItem(storageKey) ?? "[]") as Array<string | { slug: string; logo?: string }>;
+    if (!Array.isArray(items)) return [];
+    return items
+      .map((item) => typeof item === "string" ? { slug: item, logo: "" } : { slug: item.slug, logo: item.logo ?? "" })
+      .filter((item) => item.slug);
+  } catch {
+    return [];
+  }
+}
+
+function writeConnectedIntegrations(storageKey: string, items: Array<{ slug: string; logo: string }>) {
+  localStorage.setItem(storageKey, JSON.stringify(items));
+}
+
+function getConfigComposioKey(config: Record<string, unknown>) {
+  const mcp = config.mcp && typeof config.mcp === "object" && !Array.isArray(config.mcp)
+    ? config.mcp as Record<string, unknown>
+    : {};
+  const servers = mcp.servers && typeof mcp.servers === "object" && !Array.isArray(mcp.servers)
+    ? mcp.servers as Record<string, unknown>
+    : {};
+  const composio = servers.composio && typeof servers.composio === "object" && !Array.isArray(servers.composio)
+    ? servers.composio as Record<string, unknown>
+    : {};
+  const headers = composio.headers && typeof composio.headers === "object" && !Array.isArray(composio.headers)
+    ? composio.headers as Record<string, unknown>
+    : {};
+  return typeof headers["x-consumer-api-key"] === "string" ? headers["x-consumer-api-key"] : "";
+}
+
+export function IntegrationsSection({ engine }: IntegrationsSectionProps) {
+  const apiKeyStorageKey = engineScopedStorageKey(API_KEY_STORAGE_KEY, engine);
+  const connectedCacheKey = engineScopedStorageKey(CONNECTED_CACHE_KEY, engine);
+  const connectedStorageKey = engineScopedStorageKey(CONNECTED_STORAGE_KEY, engine);
+  const [composioKey, setComposioKey] = useState(() => localStorage.getItem(apiKeyStorageKey) ?? "");
   const [composioApps, setComposioApps] = useState<ComposioApp[]>([]);
   const [composioLoading] = useState(false);
   const [composioError, setComposioError] = useState<string | null>(null);
   const [composioSearch, setComposioSearch] = useState("");
+  const [composioConfigDirty, setComposioConfigDirty] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setComposioKey(localStorage.getItem(apiKeyStorageKey) ?? "");
+    setComposioApps([]);
+    setComposioError(null);
+    setComposioConfigDirty(false);
+    engine.rpc("config.get", {}).then((res) => {
+      if (cancelled) return;
+      const config = (res as { config?: Record<string, unknown> }).config ?? {};
+      const key = getConfigComposioKey(config);
+      if (!key) return;
+      localStorage.setItem(apiKeyStorageKey, key);
+      setComposioKey(key);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [apiKeyStorageKey, engine]);
 
   // Popular apps shown first
   const POPULAR_SLUGS = new Set([
@@ -136,7 +192,7 @@ export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProp
     }
     const cachedConnected = (() => {
       try {
-        const cached = JSON.parse(localStorage.getItem(CONNECTED_CACHE_KEY) ?? "{}") as { slugs?: string[] };
+        const cached = JSON.parse(localStorage.getItem(connectedCacheKey) ?? "{}") as { slugs?: string[] };
         return new Set(cached.slugs ?? []);
       } catch {
         return new Set<string>();
@@ -175,7 +231,7 @@ export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProp
         }
 
         if (connectedSlugs.size > 0) {
-          localStorage.setItem(CONNECTED_CACHE_KEY, JSON.stringify({
+          localStorage.setItem(connectedCacheKey, JSON.stringify({
             slugs: [...connectedSlugs],
             updatedAt: Date.now(),
           }));
@@ -183,7 +239,7 @@ export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProp
             prev.map((a) => connectedSlugs.has(a.slug) ? { ...a, connected: true } : a)
           );
           // Save slugs + download logos as base64 for canvas
-          const existing: Array<{slug: string; logo: string}> = JSON.parse(localStorage.getItem("composioConnected") ?? "[]");
+          const existing = readConnectedIntegrations(connectedStorageKey);
           const existingSlugs = new Set(existing.map(e => typeof e === "string" ? e : e.slug));
           for (const slug of connectedSlugs) {
             if (!existingSlugs.has(slug)) {
@@ -192,15 +248,15 @@ export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProp
                 cmd: `curl -s "https://logos.composio.dev/api/${slug}" | base64`,
               }).then((b64) => {
                 if (!b64.trim()) return;
-                const items: Array<{slug: string; logo: string}> = JSON.parse(localStorage.getItem("composioConnected") ?? "[]");
+                const items = readConnectedIntegrations(connectedStorageKey);
                 items.push({ slug, logo: `data:image/svg+xml;base64,${b64.trim()}` });
-                localStorage.setItem("composioConnected", JSON.stringify(items));
+                writeConnectedIntegrations(connectedStorageKey, items);
               }).catch(() => {
                 // Save without logo
-                const items: Array<{slug: string; logo: string}> = JSON.parse(localStorage.getItem("composioConnected") ?? "[]");
+                const items = readConnectedIntegrations(connectedStorageKey);
                 if (!items.find(i => i.slug === slug)) {
                   items.push({ slug, logo: "" });
-                  localStorage.setItem("composioConnected", JSON.stringify(items));
+                  writeConnectedIntegrations(connectedStorageKey, items);
                 }
               });
             }
@@ -208,18 +264,48 @@ export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProp
         }
       } catch { /* ignore — just won't show connected status */ }
     })();
-  }, [composioKey, COMPOSIO_CATALOG]);
+  }, [composioKey, COMPOSIO_CATALOG, connectedCacheKey, connectedStorageKey]);
 
-  const saveComposioKey = useCallback(async (key: string) => {
+  const saveComposioKey = useCallback((key: string) => {
+    const previous = localStorage.getItem(apiKeyStorageKey) ?? "";
     setComposioKey(key);
-    localStorage.setItem("composioApiKey", key);
-    // Configure Composio MCP server in OpenClaw so agents can use connected apps
-    if (key.trim()) {
-      await invoke<string>("run_shell", {
-        cmd: `sh -lc 'openclaw mcp set composio "{\\"transport\\":\\"streamable-http\\",\\"url\\":\\"https://connect.composio.dev/mcp\\",\\"headers\\":{\\"x-consumer-api-key\\":\\"${key.trim()}\\"}}"'`,
-      }).catch(() => {});
+    localStorage.setItem(apiKeyStorageKey, key);
+    setComposioConfigDirty(true);
+    if (previous.trim() !== key.trim()) {
+      localStorage.removeItem(connectedCacheKey);
+      writeConnectedIntegrations(connectedStorageKey, []);
+      window.dispatchEvent(new CustomEvent("xcloud-integration-changed"));
     }
-  }, []);
+  }, [apiKeyStorageKey, connectedCacheKey, connectedStorageKey]);
+
+  useEffect(() => {
+    if (!composioConfigDirty) return;
+    const key = composioKey.trim();
+    const timer = window.setTimeout(async () => {
+      try {
+        const cfgRes = await engine.rpc("config.get", {});
+        const hash = (cfgRes as { hash?: string }).hash ?? "";
+        await engine.patchConfig(JSON.stringify({
+          mcp: {
+            servers: {
+              composio: key
+                ? {
+                    transport: "streamable-http",
+                    url: "https://connect.composio.dev/mcp",
+                    headers: { "x-consumer-api-key": key },
+                  }
+                : null,
+            },
+          },
+        }), hash);
+      } catch {
+        // Gateway restarts after config patch, so a transient close is expected.
+      } finally {
+        setComposioConfigDirty(false);
+      }
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [composioConfigDirty, composioKey, engine]);
 
   const filteredComposioApps = useMemo(() => {
     if (!composioSearch.trim()) return composioApps;
@@ -268,17 +354,17 @@ export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProp
                 invoke<string>("run_shell", {
                   cmd: `curl -s "https://logos.composio.dev/api/${slug}" | base64`,
                 }).then((b64) => {
-                  const items: Array<{slug: string; logo: string}> = JSON.parse(localStorage.getItem("composioConnected") ?? "[]");
+                  const items = readConnectedIntegrations(connectedStorageKey);
                   if (!items.find(i => i.slug === slug)) {
                     items.push({ slug, logo: b64.trim() ? `data:image/svg+xml;base64,${b64.trim()}` : "" });
-                    localStorage.setItem("composioConnected", JSON.stringify(items));
+                    writeConnectedIntegrations(connectedStorageKey, items);
                   }
                   window.dispatchEvent(new CustomEvent("xcloud-integration-changed"));
                 }).catch(() => {
-                  const items: Array<{slug: string; logo: string}> = JSON.parse(localStorage.getItem("composioConnected") ?? "[]");
+                  const items = readConnectedIntegrations(connectedStorageKey);
                   if (!items.find(i => i.slug === slug)) {
                     items.push({ slug, logo: "" });
-                    localStorage.setItem("composioConnected", JSON.stringify(items));
+                    writeConnectedIntegrations(connectedStorageKey, items);
                   }
                   window.dispatchEvent(new CustomEvent("xcloud-integration-changed"));
                 });
@@ -300,7 +386,7 @@ export function IntegrationsSection({ engine: _engine }: IntegrationsSectionProp
       );
       setComposioError(err instanceof Error ? err.message : "Failed to connect");
     }
-  }, [composioKey]);
+  }, [composioKey, connectedStorageKey]);
 
   return (
     <div className="flex-1 min-w-0 flex flex-col">

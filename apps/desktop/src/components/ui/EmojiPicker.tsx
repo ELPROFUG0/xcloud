@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { copyFile, BaseDirectory } from "@tauri-apps/plugin-fs";
+import { copyFile, readFile, BaseDirectory } from "@tauri-apps/plugin-fs";
 
 
 import { updateAgentAvatar } from "@/lib/update-identity";
+import type { BrowserEngine } from "@/lib/engine";
+import { setAgentVisualOverride } from "@/lib/agent-visuals";
 
 // Gradient avatars
 const avatarModules = import.meta.glob("@/assets/avatars/avatar-*.jpg", { eager: true, query: "?url", import: "default" }) as Record<string, string>;
@@ -13,6 +15,7 @@ interface EmojiPickerProps {
   onSelect: (emoji: string) => void;
   onSelectImage?: (path: string) => void;
   agentId?: string;
+  engine?: BrowserEngine;
   onClose: () => void;
 }
 
@@ -170,7 +173,24 @@ const EMOJI_CATEGORIES: { label: string; emojis: string[] }[] = [
 
 const ALL_EMOJIS = EMOJI_CATEGORIES.flatMap(c => c.emojis);
 
-export function EmojiPicker({ onSelect, onSelectImage, agentId, onClose }: EmojiPickerProps) {
+const MIME_TYPES: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+};
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = "";
+  const chunk = 8192;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+export function EmojiPicker({ onSelect, onSelectImage, agentId, engine, onClose }: EmojiPickerProps) {
   const [search, setSearch] = useState("");
   const ref = useRef<HTMLDivElement>(null);
 
@@ -204,6 +224,21 @@ export function EmojiPicker({ onSelect, onSelectImage, agentId, onClose }: Emoji
     if (!filePath) return;
 
     const ext = filePath.split(".").pop() ?? "png";
+
+    if (agentId && engine?.isRemote) {
+      try {
+        const bytes = await readFile(filePath);
+        const mime = MIME_TYPES[ext.toLowerCase()] ?? "image/png";
+        const dataUrl = `data:${mime};base64,${bytesToBase64(bytes)}`;
+        setAgentVisualOverride(engine, agentId, { avatar: dataUrl });
+        onSelectImage?.(dataUrl);
+      } catch {
+        onSelectImage?.(filePath);
+      }
+      onClose();
+      return;
+    }
+
     const destDir = agentId && agentId !== "main"
       ? `.openclaw/workspace/${agentId}`
       : ".openclaw/workspace";
@@ -251,6 +286,13 @@ export function EmojiPicker({ onSelect, onSelectImage, agentId, onClose }: Emoji
                   key={`avatar-${i}`}
                   onClick={async () => {
                     if (agentId) {
+                      if (engine?.isRemote) {
+                        setAgentVisualOverride(engine, agentId, { avatar: src });
+                        onSelectImage?.(src);
+                        onClose();
+                        return;
+                      }
+
                       try {
                         const destDir = agentId !== "main" ? `.openclaw/workspace/${agentId}` : ".openclaw/workspace";
                         const destPath = `${destDir}/avatar.jpg`;

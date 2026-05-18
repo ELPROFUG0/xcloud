@@ -39,6 +39,8 @@ export interface EngineConfig {
   deviceId: string;
   publicKeyBase64Url: string;
   privateKeyPkcs8Base64: string;
+  mode?: "local" | "mac-mini" | "vps";
+  scopeKey?: string;
 }
 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
@@ -82,6 +84,10 @@ export class BrowserEngine {
   get connected(): boolean { return this._connected; }
   get state(): ConnectionState { return this._state; }
   get authToken(): string { return this.config.token; }
+  get mode(): EngineConfig["mode"] { return this.config.mode ?? "local"; }
+  get isRemote(): boolean { return this.mode !== "local"; }
+  get storageScope(): string { return this.config.scopeKey ?? (this.isRemote ? `${this.mode}:${this.config.url}` : "local"); }
+  get wsUrl(): string { return this.config.url; }
   get httpBaseUrl(): string {
     if (this.config.url.startsWith("wss://")) return `https://${this.config.url.slice("wss://".length).replace(/\/+$/, "")}`;
     if (this.config.url.startsWith("ws://")) return `http://${this.config.url.slice("ws://".length).replace(/\/+$/, "")}`;

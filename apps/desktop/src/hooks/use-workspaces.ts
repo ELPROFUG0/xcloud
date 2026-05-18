@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AgentInfo } from "./use-agents";
+import type { BrowserEngine } from "@/lib/engine";
 import { BaseDirectory, mkdir, readTextFile, remove, writeTextFile } from "@tauri-apps/plugin-fs";
+import { engineScopedStorageKey } from "@/lib/engine-storage";
 
 export interface WorkspaceInfo {
   id: string;
@@ -27,17 +29,17 @@ export function getWorkspaceDir(workspaceId: string) {
   return `.openclaw/workspace/${getWorkspaceAgentId(workspaceId)}`;
 }
 
-function readWorkspaces(): WorkspaceInfo[] {
+function readWorkspaces(storageKey: string): WorkspaceInfo[] {
   try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]") as WorkspaceInfo[];
+    const parsed = JSON.parse(localStorage.getItem(storageKey) ?? "[]") as WorkspaceInfo[];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
 }
 
-function writeWorkspaces(workspaces: WorkspaceInfo[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(workspaces));
+function writeWorkspaces(storageKey: string, workspaces: WorkspaceInfo[]) {
+  localStorage.setItem(storageKey, JSON.stringify(workspaces));
   window.dispatchEvent(new CustomEvent("xcloud-workspaces-changed"));
 }
 
@@ -418,26 +420,31 @@ export async function workspaceHasContext(workspaceId: string) {
   return hasMemory || hasGoals;
 }
 
-export function useWorkspaces(agents: AgentInfo[]) {
-  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>(() => readWorkspaces());
+export function useWorkspaces(agents: AgentInfo[], engine: BrowserEngine) {
+  const storageKey = engineScopedStorageKey(STORAGE_KEY, engine);
+  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>(() => readWorkspaces(storageKey));
 
   const persist = useCallback((updater: (prev: WorkspaceInfo[]) => WorkspaceInfo[]) => {
     setWorkspaces((prev) => {
       const next = updater(prev);
-      writeWorkspaces(next);
+      writeWorkspaces(storageKey, next);
       return next;
     });
-  }, []);
+  }, [storageKey]);
 
   useEffect(() => {
-    const refresh = () => setWorkspaces(readWorkspaces());
+    const refresh = () => setWorkspaces(readWorkspaces(storageKey));
     window.addEventListener("storage", refresh);
     window.addEventListener("xcloud-workspaces-changed", refresh);
     return () => {
       window.removeEventListener("storage", refresh);
       window.removeEventListener("xcloud-workspaces-changed", refresh);
     };
-  }, []);
+  }, [storageKey]);
+
+  useEffect(() => {
+    setWorkspaces(readWorkspaces(storageKey));
+  }, [storageKey]);
 
   const createWorkspace = useCallback((name: string, agentIds: string[] = []) => {
     const trimmed = name.trim();
@@ -447,7 +454,7 @@ export function useWorkspaces(agents: AgentInfo[]) {
         const agent = agents.find((item) => item.id === id);
         return id && !id.startsWith("workspace-") && !agent?.isDefault;
       });
-    const prev = readWorkspaces();
+    const prev = readWorkspaces(storageKey);
     const now = Date.now();
     const created: WorkspaceInfo = {
       id: uniqueId(trimmed, prev),
@@ -457,14 +464,16 @@ export function useWorkspaces(agents: AgentInfo[]) {
       updatedAt: now,
     };
     const next = [...prev, created];
-    writeWorkspaces(next);
+    writeWorkspaces(storageKey, next);
     setWorkspaces(next);
-    void syncWorkspaceFiles(created, agents.filter((agent) => cleanAgentIds.includes(agent.id)))
-      .then((identityChanged) => {
-        if (identityChanged) window.dispatchEvent(new CustomEvent("xcloud-agents-local-config-changed"));
-      });
+    if (!engine.isRemote) {
+      void syncWorkspaceFiles(created, agents.filter((agent) => cleanAgentIds.includes(agent.id)))
+        .then((identityChanged) => {
+          if (identityChanged) window.dispatchEvent(new CustomEvent("xcloud-agents-local-config-changed"));
+        });
+    }
     return created;
-  }, [agents]);
+  }, [agents, engine.isRemote, storageKey]);
 
   const linkAgent = useCallback((workspaceId: string, agentId: string) => {
     persist((prev) => prev.map((workspace) => {
@@ -497,8 +506,8 @@ export function useWorkspaces(agents: AgentInfo[]) {
     persist((prev) => prev.filter((workspace) => workspace.id !== workspaceId));
     localStorage.removeItem(`xcloudWorkspaceSetupPrompted:${workspaceId}`);
     localStorage.removeItem(`xcloudWorkspaceSetupPrompted:v2:${workspaceId}`);
-    void remove(getWorkspaceDir(workspaceId), { baseDir: BaseDirectory.Home, recursive: true }).catch(() => {});
-  }, [persist]);
+    if (!engine.isRemote) void remove(getWorkspaceDir(workspaceId), { baseDir: BaseDirectory.Home, recursive: true }).catch(() => {});
+  }, [engine.isRemote, persist]);
 
   const getWorkspaceAgents = useCallback((workspace: WorkspaceInfo | null | undefined) => {
     if (!workspace) return [];
@@ -513,6 +522,7 @@ export function useWorkspaces(agents: AgentInfo[]) {
   }, [agents]);
 
   useEffect(() => {
+    if (engine.isRemote) return;
     for (const workspace of workspaces) {
       void syncWorkspaceFiles(workspace, getWorkspaceAgents(workspace))
         .then((identityChanged) => {
@@ -520,7 +530,7 @@ export function useWorkspaces(agents: AgentInfo[]) {
         });
     }
     void syncGlobalWorkspaceFiles(workspaces, getWorkspaceAgents);
-  }, [workspaces, getWorkspaceAgents]);
+  }, [engine.isRemote, workspaces, getWorkspaceAgents]);
 
   const workspacesWithAgents = useMemo(() => (
     workspaces.map((workspace) => ({
@@ -550,8 +560,8 @@ export function useWorkspaces(agents: AgentInfo[]) {
     });
     if (!changed) return;
     setWorkspaces(next);
-    writeWorkspaces(next);
-  }, [agents, workspaces]);
+    writeWorkspaces(storageKey, next);
+  }, [agents, storageKey, workspaces]);
 
   return {
     workspaces,
