@@ -132,6 +132,26 @@ export class BrowserEngine {
     return base64UrlEncode(signature);
   }
 
+  private deviceAuthStorageKey(role = "operator"): string {
+    return `xcloud:gateway-device-token:${this.config.url}:${this.config.deviceId}:${role}`;
+  }
+
+  private loadDeviceToken(role = "operator"): string | null {
+    try {
+      return localStorage.getItem(this.deviceAuthStorageKey(role));
+    } catch {
+      return null;
+    }
+  }
+
+  private storeDeviceToken(token: string, role = "operator"): void {
+    try {
+      localStorage.setItem(this.deviceAuthStorageKey(role), token);
+    } catch {
+      // Ignore storage failures; the shared gateway token can still reconnect.
+    }
+  }
+
   async connect(): Promise<{ scopes: string[]; serverVersion: string }> {
     this.setState("connecting");
 
@@ -139,6 +159,8 @@ export class BrowserEngine {
       const ws = new WebSocket(this.config.url);
       this.ws = ws;
       let settled = false;
+      let handshakeError: Error | null = null;
+      let sawSocketError = false;
 
       ws.onmessage = async (event) => {
         const frame = JSON.parse(event.data as string);
@@ -148,6 +170,8 @@ export class BrowserEngine {
           const nonce = frame.payload.nonce as string;
           const signedAt = Date.now();
           const scopes = ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing", "operator.talk.secrets"];
+          const storedDeviceToken = this.loadDeviceToken("operator");
+          const authToken = this.config.token || storedDeviceToken || "";
 
           const sigPayload = [
             "v2",
@@ -155,7 +179,7 @@ export class BrowserEngine {
             "cli", "cli", "operator",
             scopes.join(","),
             String(signedAt),
-            this.config.token,
+            authToken,
             nonce,
           ].join("|");
 
@@ -170,7 +194,10 @@ export class BrowserEngine {
                 client: { id: "cli", version: "0.1.0", platform: "darwin", mode: "cli" },
                 role: "operator",
                 scopes,
-                auth: { token: this.config.token },
+                auth: {
+                  ...(this.config.token ? { token: this.config.token } : {}),
+                  ...(!this.config.token && storedDeviceToken ? { deviceToken: storedDeviceToken } : {}),
+                },
                 device: {
                   id: this.config.deviceId,
                   publicKey: this.config.publicKeyBase64Url,
@@ -193,6 +220,8 @@ export class BrowserEngine {
         // Handshake response
         if (frame.type === "res" && frame.id === "__handshake") {
           if (frame.ok) {
+            const auth = frame.payload?.auth as { deviceToken?: string; role?: string } | undefined;
+            if (auth?.deviceToken) this.storeDeviceToken(auth.deviceToken, auth.role ?? "operator");
             this._connected = true;
             this.wasConnected = true;
             this.reconnectAttempt = 0;
@@ -208,7 +237,15 @@ export class BrowserEngine {
             this.setState("disconnected");
             if (!settled) {
               settled = true;
-              reject(new Error(frame.error?.message ?? "Handshake failed"));
+              const details = frame.error?.details as { requestId?: string } | undefined;
+              const requestId = typeof details?.requestId === "string" ? details.requestId.trim() : "";
+              const baseMessage = frame.error?.message ?? "Handshake failed";
+              handshakeError = new Error(
+                requestId && !baseMessage.includes(requestId)
+                  ? `${baseMessage} (requestId: ${requestId})`
+                  : baseMessage,
+              );
+              reject(handshakeError);
             }
           }
           return;
@@ -231,7 +268,7 @@ export class BrowserEngine {
         }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         const wasActive = this._connected;
         this._connected = false;
         for (const [, p] of this.pending) p.reject(new Error("Connection closed"));
@@ -242,15 +279,19 @@ export class BrowserEngine {
           this.scheduleReconnect();
         }
 
-        if (!settled) { settled = true; reject(new Error("Connection closed")); }
+        if (!settled) {
+          settled = true;
+          const closeReason = event.reason?.trim();
+          reject(
+            handshakeError
+              ?? new Error(closeReason ? `gateway closed (${event.code}): ${closeReason}` : sawSocketError ? "WebSocket failed" : "Connection closed"),
+          );
+        }
       };
 
       ws.onerror = () => {
-        if (!settled) {
-          settled = true;
-          this.setState("disconnected");
-          reject(new Error("WebSocket failed"));
-        }
+        sawSocketError = true;
+        this.setState("disconnected");
       };
     });
   }

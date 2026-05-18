@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { ChevronLeft, Check, Copy } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { invoke } from "@tauri-apps/api/core";
+import { BaseDirectory, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import type { BrowserEngine } from "@/lib/engine";
 import type { EngineMode } from "./types";
 
@@ -13,11 +14,90 @@ interface EngineSectionProps {
   engine: BrowserEngine;
 }
 
+function normalizeGatewayUrl(value: string) {
+  const trimmed = value.trim().replace(/^URL:\s*/i, "");
+  if (!trimmed) return "";
+  if (trimmed.startsWith("http://")) return `ws://${trimmed.slice("http://".length)}`;
+  if (trimmed.startsWith("https://")) return `wss://${trimmed.slice("https://".length)}`;
+  if (trimmed.startsWith("ws://") || trimmed.startsWith("wss://")) return trimmed;
+  return `ws://${trimmed}`;
+}
+
+function normalizeGatewayToken(value: string) {
+  return value.trim().replace(/^Token:\s*/i, "");
+}
+
+function getStoredRemoteEngineConfig(mode: Exclude<EngineMode, "local">) {
+  const prefix = mode === "mac-mini" ? "engineMacMini" : "engineVps";
+  return {
+    url: localStorage.getItem(`${prefix}Url`) ?? "",
+    token: localStorage.getItem(`${prefix}Token`) ?? "",
+  };
+}
+
+async function writeGatewayModeToOpenClawConfig(mode: EngineMode, url?: string, token?: string) {
+  const raw = await readTextFile(".openclaw/openclaw.json", { baseDir: BaseDirectory.Home }).catch(() => "{}");
+  const config = JSON.parse(raw || "{}") as Record<string, unknown>;
+  const gateway = ((config.gateway && typeof config.gateway === "object") ? config.gateway : {}) as Record<string, unknown>;
+  const remote = ((gateway.remote && typeof gateway.remote === "object") ? gateway.remote : {}) as Record<string, unknown>;
+  const normalizedUrl = normalizeGatewayUrl(url ?? "");
+  const existingRemoteUrl = typeof remote.url === "string" && remote.url.trim() ? normalizeGatewayUrl(remote.url) : "";
+  const nextRemote = normalizedUrl
+    ? {
+        ...remote,
+        url: normalizedUrl,
+        ...(token?.trim() ? { token: token.trim() } : {}),
+      }
+    : existingRemoteUrl
+      ? { ...remote, url: existingRemoteUrl }
+      : null;
+
+  if (mode === "local") {
+    config.gateway = { ...gateway, mode: "local", ...(nextRemote ? { remote: nextRemote } : {}) };
+  } else {
+    if (!nextRemote) {
+      config.gateway = { ...gateway, mode: "local" };
+      await writeTextFile(".openclaw/openclaw.json", `${JSON.stringify(config, null, 2)}\n`, { baseDir: BaseDirectory.Home });
+      return;
+    }
+    config.gateway = {
+      ...gateway,
+      mode: "remote",
+      remote: nextRemote,
+    };
+  }
+
+  await writeTextFile(".openclaw/openclaw.json", `${JSON.stringify(config, null, 2)}\n`, { baseDir: BaseDirectory.Home });
+}
+
 export function EngineSection({ engine: _engine }: EngineSectionProps) {
   const [engineMode, setEngineModeState] = useState<EngineMode>(() =>
     (localStorage.getItem("engineMode") as EngineMode) ?? "local",
   );
-  const setEngineMode = (m: EngineMode) => { setEngineModeState(m); localStorage.setItem("engineMode", m); };
+  const saveRemoteEngineConfig = (mode: Exclude<EngineMode, "local">, url: string, token: string) => {
+    const normalizedUrl = normalizeGatewayUrl(url);
+    const normalizedToken = normalizeGatewayToken(token);
+    const prefix = mode === "mac-mini" ? "engineMacMini" : "engineVps";
+    localStorage.setItem(`${prefix}Url`, normalizedUrl);
+    localStorage.setItem(`${prefix}Token`, normalizedToken);
+    if (mode === "mac-mini") {
+      setMacMiniUrl(normalizedUrl);
+      setMacMiniToken(normalizedToken);
+    } else {
+      setVpsUrl(normalizedUrl);
+      setVpsToken(normalizedToken);
+    }
+    return { url: normalizedUrl, token: normalizedToken };
+  };
+  const setEngineMode = async (m: EngineMode, remoteOverride?: { url: string; token: string }) => {
+    setEngineModeState(m);
+    localStorage.setItem("engineMode", m);
+    const prefix = m === "mac-mini" ? "engineMacMini" : m === "vps" ? "engineVps" : "";
+    const url = remoteOverride?.url ?? (prefix ? localStorage.getItem(`${prefix}Url`) ?? "" : "");
+    const token = remoteOverride?.token ?? (prefix ? localStorage.getItem(`${prefix}Token`) ?? "" : "");
+    await writeGatewayModeToOpenClawConfig(m, url, token).catch(() => {});
+    window.dispatchEvent(new CustomEvent("xcloud-engine-config-changed"));
+  };
   const [macMiniUrl, setMacMiniUrl] = useState(() => localStorage.getItem("engineMacMiniUrl") ?? "");
   const [macMiniToken, setMacMiniToken] = useState(() => localStorage.getItem("engineMacMiniToken") ?? "");
   const [vpsUrl, setVpsUrl] = useState(() => localStorage.getItem("engineVpsUrl") ?? "");
@@ -145,7 +225,7 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
           const token = isMini ? macMiniToken : vpsToken;
           const setUrl = isMini ? setMacMiniUrl : setVpsUrl;
           const setToken = isMini ? setMacMiniToken : setVpsToken;
-          const installCmd = "curl -fsSL https://raw.githubusercontent.com/user/agent-studio/main/scripts/setup-remote.sh | bash";
+          const installCmd = "npm install -g openclaw@latest && TOKEN=$(openssl rand -hex 24) && openclaw onboard --non-interactive --accept-risk --mode local --gateway-bind lan --gateway-auth token --gateway-token \"$TOKEN\" --install-daemon --skip-channels --skip-skills --skip-search --skip-ui && openclaw config set gateway.controlUi.allowedOrigins '[\"http://localhost:1420\",\"http://127.0.0.1:1420\",\"tauri://localhost\",\"http://tauri.localhost\"]' --strict-json && openclaw gateway restart && IP=$(hostname -I 2>/dev/null | awk '{print $1}' || ipconfig getifaddr en0) && echo \"URL: ws://$IP:18789\" && echo \"Token: $TOKEN\"";
 
           return (
             <div>
@@ -156,7 +236,11 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
               <div className="flex items-center justify-between border-b border-border/50 py-3">
                 <span className="text-sm text-text">Active</span>
                 <button
-                  onClick={() => setEngineMode(selectedEngineView)}
+                  onClick={() => {
+                    const remote = saveRemoteEngineConfig(selectedEngineView, url, token);
+                    if (!remote.url) return;
+                    void setEngineMode(selectedEngineView, remote);
+                  }}
                   className={cn(
                     "relative h-5 w-9 rounded-full transition-colors",
                     engineMode === selectedEngineView ? "bg-emerald-500" : "bg-text-muted/20",
@@ -218,11 +302,24 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
               <div className="flex justify-center pt-5">
                 <button
                   onClick={() => {
-                    localStorage.setItem(isMini ? "engineMacMiniUrl" : "engineVpsUrl", url);
-                    localStorage.setItem(isMini ? "engineMacMiniToken" : "engineVpsToken", token);
+                    const activeMode = selectedEngineView;
+                    const savedRemote = saveRemoteEngineConfig(activeMode, url, token);
                     if (engineMode === selectedEngineView) localStorage.setItem("engineMode", selectedEngineView);
-                    setEngineSaved(true);
-                    setTimeout(() => setEngineSaved(false), 3000);
+                    const activeConfig = engineMode !== selectedEngineView && engineMode !== "local"
+                      ? getStoredRemoteEngineConfig(engineMode)
+                      : savedRemote;
+                    writeGatewayModeToOpenClawConfig(engineMode === selectedEngineView ? activeMode : engineMode, activeConfig.url, activeConfig.token)
+                      .then(() => {
+                        setEngineSaved(true);
+                        if (engineMode === selectedEngineView) {
+                          window.dispatchEvent(new CustomEvent("xcloud-engine-config-changed"));
+                        }
+                        setTimeout(() => setEngineSaved(false), 3000);
+                      })
+                      .catch(() => {
+                        setEngineSaved(true);
+                        setTimeout(() => setEngineSaved(false), 3000);
+                      });
                   }}
                   disabled={!url.trim()}
                   className="rounded-2xl bg-text text-bg px-8 py-2 text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-30"

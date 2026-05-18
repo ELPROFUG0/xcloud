@@ -331,6 +331,7 @@ fn run_openclaw(resource_dir: &Option<PathBuf>, args: &[&str]) -> Result<String,
     let output = Command::new(&node_bin)
         .arg(&openclaw_mjs)
         .args(args)
+        .env("OPENCLAW_ALLOW_INSECURE_PRIVATE_WS", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
