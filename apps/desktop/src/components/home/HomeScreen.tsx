@@ -21,6 +21,7 @@ import orbVideo from "@/assets/setup-icons/orb-video.mp4";
 
 const AGENT_MENU_WIDTH = 160;
 const WORKSPACE_AGENT_MENU_WIDTH = 188;
+const MAIN_AGENT_ID = "main";
 const EMOJI_PICKER_WIDTH = 288;
 const FLOATING_GAP = 6;
 const ROW_META_SLOT_CLASS = "relative flex h-5 w-8 shrink-0 items-center justify-end";
@@ -134,8 +135,8 @@ function isWorkspaceSpecialistAgent(agent: AgentInfo, workspace: WorkspaceInfo) 
 }
 
 function isWorkspaceOwnedAgent(agent: AgentInfo, workspaces: WorkspaceInfo[]) {
-  if (agent.isDefault) return false;
   if (agent.id.startsWith("workspace-")) return true;
+  if (agent.isDefault) return false;
   return workspaces.some((workspace) => isWorkspaceSpecialistAgent(agent, workspace));
 }
 
@@ -318,7 +319,12 @@ export function HomeScreen({
 }: HomeScreenProps) {
   const [relativeNow, setRelativeNow] = useState(() => Date.now());
   const globalAgents = agents.filter((agent) => !isWorkspaceOwnedAgent(agent, workspaces));
-  const mainAgent = globalAgents.find((a) => a.isDefault) ?? agents.find((a) => a.isDefault) ?? globalAgents[0] ?? agents[0];
+  const mainAgent = globalAgents.find((a) => a.id === MAIN_AGENT_ID)
+    ?? agents.find((a) => a.id === MAIN_AGENT_ID)
+    ?? globalAgents.find((a) => a.isDefault)
+    ?? agents.find((a) => a.isDefault)
+    ?? globalAgents[0]
+    ?? agents[0];
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem("pinnedAgents") ?? "[]"); } catch { return []; }
   });

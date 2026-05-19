@@ -138,8 +138,8 @@ function workspaceAgentPrefixes(workspace: WorkspaceInfo) {
 }
 
 function isWorkspaceOwnedAgent(agent: AgentInfo, workspaces: WorkspaceInfo[]) {
-  if (agent.isDefault) return false;
   if (agent.id.startsWith("workspace-")) return true;
+  if (agent.isDefault) return false;
   return workspaces.some((workspace) => (
     workspaceAgentPrefixes(workspace).some((prefix) => agent.id.startsWith(`${prefix}-`))
   ));
@@ -185,11 +185,28 @@ async function syncAgentsToGatewayConfig(engine: BrowserEngine, agents: Record<s
     ? agentsConfig.list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
     : [];
 
+  let changed = false;
+  const addsNonMainAgent = agents.some((agent) => agent.id !== MAIN_AGENT_ID);
+  if (addsNonMainAgent && !list.some((item) => item.id === MAIN_AGENT_ID)) {
+    list.unshift({ id: MAIN_AGENT_ID, default: true });
+    changed = true;
+  }
+
   for (const agent of agents) {
     const index = list.findIndex((item) => item.id === agent.id);
-    if (index >= 0) list[index] = { ...list[index], ...agent };
-    else list.push(agent);
+    if (index >= 0) {
+      const next = { ...list[index], ...agent };
+      if (JSON.stringify(list[index]) !== JSON.stringify(next)) {
+        list[index] = next;
+        changed = true;
+      }
+    } else {
+      list.push(agent);
+      changed = true;
+    }
   }
+
+  if (!changed) return;
 
   await withTimeout(
     engine.patchConfig(JSON.stringify({ agents: { ...agentsConfig, list } }), hash),
@@ -534,7 +551,11 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const globalAgents = agents.filter((agent) => !isWorkspaceOwnedAgent(agent, workspaces));
   const chatAgentOptions = activeWorkspace ? workspaceAgents : globalAgents;
   const hasWorkspaceChat = activeWorkspace !== null && activeAgentId === null && !showNewChat;
-  const defaultAgentId = globalAgents.find((a) => a.isDefault)?.id ?? agents.find((a) => a.isDefault)?.id ?? MAIN_AGENT_ID;
+  const defaultAgentId = globalAgents.find((a) => a.id === MAIN_AGENT_ID)?.id
+    ?? agents.find((a) => a.id === MAIN_AGENT_ID)?.id
+    ?? globalAgents.find((a) => a.isDefault)?.id
+    ?? agents.find((a) => a.isDefault)?.id
+    ?? MAIN_AGENT_ID;
   const activeWorkspaceCoordinatorId = activeWorkspace ? getWorkspaceAgentId(activeWorkspace.id) : null;
   const currentAgentId = activeAgentId ?? activeWorkspaceCoordinatorId ?? defaultAgentId;
   const isWorkspaceCoordinatorActive = Boolean(activeWorkspace && activeWorkspaceCoordinatorId && currentAgentId === activeWorkspaceCoordinatorId);

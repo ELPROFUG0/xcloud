@@ -18,6 +18,13 @@ export interface AgentInfo {
   status: "active" | "idle" | "error";
 }
 
+interface AgentIdentityPayload {
+  name?: string;
+  emoji?: string;
+  avatar?: string;
+}
+
+const MAIN_AGENT_ID = "main";
 const DELETED_AGENTS_KEY = "xcloudDeletedAgents";
 
 function readDeletedAgentIds(storageKey: string) {
@@ -122,6 +129,21 @@ function isRenderableRemoteAvatar(avatar?: string) {
   return Boolean(avatar && /^(data:|blob:|https?:\/\/|\/assets\/|\/api\/)/.test(avatar));
 }
 
+function normalizeRemoteIdentity(value: unknown): AgentIdentityPayload | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const identity: AgentIdentityPayload = {};
+  if (typeof record.name === "string" && record.name.trim()) identity.name = record.name;
+  if (typeof record.emoji === "string" && record.emoji.trim()) identity.emoji = record.emoji;
+  if (typeof record.avatar === "string" && record.avatar.trim()) identity.avatar = record.avatar;
+  return Object.keys(identity).length > 0 ? identity : undefined;
+}
+
+async function readRemoteMainIdentity(engine: BrowserEngine): Promise<AgentIdentityPayload | undefined> {
+  const result = await engine.rpc("agent.identity.get", { agentId: MAIN_AGENT_ID, sessionKey: MAIN_AGENT_ID }).catch(() => null);
+  return normalizeRemoteIdentity(result);
+}
+
 export function useAgents(engine: BrowserEngine): UseAgentsReturn {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [selectedId, setSelectedId] = useState("main");
@@ -138,6 +160,7 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
           name?: string;
           emoji?: string;
           avatar?: string;
+          identity?: AgentIdentityPayload;
           workspace?: string;
           model?: string | { primary?: string };
         }>;
@@ -153,12 +176,25 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
         seenIds.add(localAgent.id);
       }
 
-      const defaultId = payload.defaultId ?? localAgents.find((agent) => agent.default)?.id ?? "main";
+      if (engine.isRemote && !seenIds.has(MAIN_AGENT_ID)) {
+        const identity = await readRemoteMainIdentity(engine);
+        merged.unshift({
+          id: MAIN_AGENT_ID,
+          name: identity?.name,
+          emoji: identity?.emoji,
+          avatar: identity?.avatar,
+          identity,
+        });
+        seenIds.add(MAIN_AGENT_ID);
+      }
+
+      const rawDefaultId = payload.defaultId ?? localAgents.find((agent) => agent.default)?.id ?? MAIN_AGENT_ID;
+      const defaultId = merged.some((agent) => agent.id === MAIN_AGENT_ID) ? MAIN_AGENT_ID : rawDefaultId;
       const list: AgentInfo[] = merged.filter((a) => !deletedAgentIds.has(a.id)).map((a) => ({
         id: a.id,
-        name: a.name,
-        emoji: a.emoji,
-        avatar: a.avatar,
+        name: a.identity?.name ?? a.name,
+        emoji: a.identity?.emoji ?? a.emoji,
+        avatar: a.identity?.avatar ?? a.avatar,
         workspace: a.workspace ?? "",
         model: normalizeAgentModel(a.model),
         isDefault: a.id === defaultId,
@@ -199,7 +235,7 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
 
       // If selected agent no longer exists, fallback to default
       if (!list.find((a) => a.id === selectedId)) {
-        setSelectedId(defaultId);
+        setSelectedId(list.find((a) => a.id === defaultId)?.id ?? list.find((a) => a.id === MAIN_AGENT_ID)?.id ?? list[0]?.id ?? defaultId);
       }
     } catch {
       // Keep existing agents on error

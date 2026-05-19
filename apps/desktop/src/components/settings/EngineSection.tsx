@@ -430,7 +430,9 @@ async function writeGatewayModeToOpenClawConfig(mode: EngineMode, url?: string, 
       : null;
 
   if (mode === "local") {
-    config.gateway = { ...gateway, mode: "local", ...(nextRemote ? { remote: nextRemote } : {}) };
+    const nextGateway: Record<string, unknown> = { ...gateway, mode: "local" };
+    delete nextGateway.remote;
+    config.gateway = nextGateway;
   } else {
     if (!nextRemote) {
       config.gateway = { ...gateway, mode: "local" };

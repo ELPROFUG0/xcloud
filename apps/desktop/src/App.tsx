@@ -4,6 +4,7 @@ import { AppLayout } from "@/components/AppLayout";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { BaseDirectory, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import xcloudLogo from "@/assets/xcloud-logo.svg?url";
 import { OnboardingScreen } from "@/components/OnboardingScreen";
 
@@ -48,12 +49,32 @@ function normalizeGatewayToken(value: string) {
   return value.trim().replace(/^Token:\s*/i, "");
 }
 
+function getRemoteEngineStoragePrefix(mode: RemoteEngineMode) {
+  return mode === "mac-mini" ? "engineMacMini" : "engineVps";
+}
+
 function getRemoteEngineConfig(mode: RemoteEngineMode) {
-  const prefix = mode === "mac-mini" ? "engineMacMini" : "engineVps";
+  const prefix = getRemoteEngineStoragePrefix(mode);
   return {
     url: normalizeGatewayUrl(localStorage.getItem(`${prefix}Url`) ?? ""),
     token: normalizeGatewayToken(localStorage.getItem(`${prefix}Token`) ?? ""),
   };
+}
+
+function saveRemoteEngineConfig(mode: RemoteEngineMode, url: string, token: string) {
+  const prefix = getRemoteEngineStoragePrefix(mode);
+  localStorage.setItem(`${prefix}Url`, normalizeGatewayUrl(url));
+  localStorage.setItem(`${prefix}Token`, normalizeGatewayToken(token));
+}
+
+async function writeLocalGatewayModeToOpenClawConfig() {
+  const raw = await readTextFile(".openclaw/openclaw.json", { baseDir: BaseDirectory.Home }).catch(() => "{}");
+  const config = JSON.parse(raw || "{}") as Record<string, unknown>;
+  const gateway = ((config.gateway && typeof config.gateway === "object") ? config.gateway : {}) as Record<string, unknown>;
+  const nextGateway: Record<string, unknown> = { ...gateway, mode: "local" };
+  delete nextGateway.remote;
+  config.gateway = nextGateway;
+  await writeTextFile(".openclaw/openclaw.json", `${JSON.stringify(config, null, 2)}\n`, { baseDir: BaseDirectory.Home });
 }
 
 function getErrorMessage(error: unknown) {
@@ -92,12 +113,35 @@ type AppState =
   | { kind: "pairing" }
   | { kind: "connected"; engine: BrowserEngine }
   | { kind: "reconnecting"; engine: BrowserEngine }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; remoteMode?: RemoteEngineMode | null };
+
+function remoteEngineLabel(mode?: RemoteEngineMode | null) {
+  if (mode === "mac-mini") return "Mac Mini";
+  if (mode === "vps") return "VPS";
+  return "Remote engine";
+}
+
+function formatStartupError(error: unknown, mode?: RemoteEngineMode | null) {
+  const message = getErrorMessage(error) || "Failed to connect";
+  if (!mode) return message;
+  if (
+    message.includes("timed out")
+    || message.includes("WebSocket failed")
+    || message.includes("Connection closed")
+    || message.includes("Failed to connect")
+  ) {
+    return `${remoteEngineLabel(mode)} is not reachable right now. Make sure it is turned on, OpenClaw gateway is running, and the saved URL is still correct.`;
+  }
+  return message;
+}
 
 export default function App() {
   const [appState, setAppState] = useState<AppState>({ kind: "checking" });
   const engineRef = useRef<BrowserEngine | null>(null);
   const [connectAttempt, setConnectAttempt] = useState(0);
+  const [engineEditOpen, setEngineEditOpen] = useState(false);
+  const [engineEditUrl, setEngineEditUrl] = useState("");
+  const [engineEditToken, setEngineEditToken] = useState("");
 
   // Initial check: does config exist?
   useEffect(() => {
@@ -129,17 +173,20 @@ export default function App() {
     let cancelled = false;
 
     (async () => {
+      let activeRemoteMode: RemoteEngineMode | null = null;
       try {
         const mode = localStorage.getItem("engineMode") ?? "local";
         const configuredRemoteMode: RemoteEngineMode | null = mode === "mac-mini" || mode === "vps" ? mode : null;
         const configuredRemote = configuredRemoteMode ? getRemoteEngineConfig(configuredRemoteMode) : null;
         const remoteMode = configuredRemoteMode && configuredRemote?.url ? configuredRemoteMode : null;
+        activeRemoteMode = remoteMode;
         let wsUrl: string;
         let identity: ReturnType<typeof parseIdentity> | null = null;
         let remoteToken = "";
 
         if (configuredRemoteMode && !configuredRemote?.url) {
           localStorage.setItem("engineMode", "local");
+          await writeLocalGatewayModeToOpenClawConfig().catch(() => {});
         }
 
         if (remoteMode) {
@@ -156,6 +203,7 @@ export default function App() {
             identity = { ...parseIdentity(statusForId.identity), token: remoteToken };
           }
         } else {
+          await writeLocalGatewayModeToOpenClawConfig().catch(() => {});
           const status = await invoke<EngineStatusResult>("engine_ensure_running");
           wsUrl = `ws://127.0.0.1:${status.port}`;
           // Identity comes from the same call — no separate invoke needed
@@ -286,7 +334,8 @@ export default function App() {
         if (cancelled) return;
         setAppState({
           kind: "error",
-          message: getErrorMessage(err) || "Failed to connect",
+          message: formatStartupError(err, activeRemoteMode),
+          remoteMode: activeRemoteMode,
         });
       }
     })();
@@ -318,6 +367,17 @@ export default function App() {
     };
   }, []);
 
+  const errorRemoteMode = appState.kind === "error" ? appState.remoteMode ?? null : null;
+  useEffect(() => {
+    if (!errorRemoteMode) {
+      setEngineEditOpen(false);
+      return;
+    }
+    const current = getRemoteEngineConfig(errorRemoteMode);
+    setEngineEditUrl(current.url);
+    setEngineEditToken(current.token);
+  }, [errorRemoteMode]);
+
   // Handlers
   function handleOnboardingComplete() {
     setAppState({ kind: "starting" });
@@ -327,6 +387,21 @@ export default function App() {
   function handleRetry() {
     setAppState({ kind: "starting" });
     setConnectAttempt((c) => c + 1);
+  }
+
+  async function handleUseLocalEngine() {
+    engineRef.current?.disconnect();
+    localStorage.setItem("engineMode", "local");
+    await writeLocalGatewayModeToOpenClawConfig().catch(() => {});
+    setAppState({ kind: "starting" });
+    setConnectAttempt((c) => c + 1);
+  }
+
+  function handleSaveRemoteEngine() {
+    if (!errorRemoteMode) return;
+    saveRemoteEngineConfig(errorRemoteMode, engineEditUrl, engineEditToken);
+    setEngineEditOpen(false);
+    handleRetry();
   }
 
   // ─── Loading status texts ───────────────────────────────────────────────────
@@ -407,11 +482,41 @@ export default function App() {
       return <AppLayout key={appState.engine.storageScope} engine={appState.engine} reconnecting />;
 
     case "error":
+      const remoteMode = appState.remoteMode ?? null;
+      const title = remoteMode ? `${remoteEngineLabel(remoteMode)} unavailable` : "Connection Failed";
       return (
-        <div className="flex h-full items-center justify-center bg-bg" onMouseDown={async (e) => { if (e.button === 0 && !(e.target as HTMLElement).closest("button")) { try { await getCurrentWindow().startDragging(); } catch {} } }}>
+        <div className="flex h-full items-center justify-center bg-bg" onMouseDown={async (e) => { if (e.button === 0 && !(e.target as HTMLElement).closest("button,input,textarea")) { try { await getCurrentWindow().startDragging(); } catch {} } }}>
           <div className="text-center max-w-sm px-4">
-            <div className="text-lg font-medium text-text">Connection Failed</div>
+            <div className="text-lg font-medium text-text">{title}</div>
             <div className="mt-2 text-xs text-text-muted leading-relaxed">{appState.message}</div>
+            {remoteMode && engineEditOpen && (
+              <div className="mt-4 space-y-2 rounded-xl border border-white/8 bg-white/[0.03] p-3 text-left">
+                <label className="block text-[11px] font-medium text-text-muted">
+                  Gateway URL
+                  <input
+                    value={engineEditUrl}
+                    onChange={(event) => setEngineEditUrl(event.target.value)}
+                    placeholder="ws://192.168.1.6:18789"
+                    className="mt-1 h-9 w-full rounded-lg border border-white/8 bg-[#111111] px-3 text-xs text-text outline-none transition-colors placeholder:text-text-muted/50 focus:border-white/18"
+                  />
+                </label>
+                <label className="block text-[11px] font-medium text-text-muted">
+                  Token
+                  <input
+                    value={engineEditToken}
+                    onChange={(event) => setEngineEditToken(event.target.value)}
+                    placeholder="Remote gateway token"
+                    className="mt-1 h-9 w-full rounded-lg border border-white/8 bg-[#111111] px-3 text-xs text-text outline-none transition-colors placeholder:text-text-muted/50 focus:border-white/18"
+                  />
+                </label>
+                <button
+                  onClick={handleSaveRemoteEngine}
+                  className="h-9 w-full rounded-lg bg-white/10 text-xs font-medium text-text transition-colors hover:bg-white/15"
+                >
+                  Save and Retry
+                </button>
+              </div>
+            )}
             <div className="mt-4 flex items-center justify-center gap-2">
               <button
                 onClick={handleRetry}
@@ -419,6 +524,22 @@ export default function App() {
               >
                 Retry
               </button>
+              {remoteMode && (
+                <>
+                  <button
+                    onClick={() => setEngineEditOpen((open) => !open)}
+                    className="rounded-xl bg-white/5 px-4 py-2 text-xs text-text-muted hover:bg-white/10 hover:text-text transition-colors"
+                  >
+                    Edit Engine
+                  </button>
+                  <button
+                    onClick={handleUseLocalEngine}
+                    className="rounded-xl bg-white/5 px-4 py-2 text-xs text-text-muted hover:bg-white/10 hover:text-text transition-colors"
+                  >
+                    Use Local
+                  </button>
+                </>
+              )}
               {appState.message.includes("identity") && (
                 <button
                   onClick={() => setAppState({ kind: "onboarding" })}

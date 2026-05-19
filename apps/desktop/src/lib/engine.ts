@@ -167,6 +167,32 @@ export class BrowserEngine {
       let settled = false;
       let handshakeError: Error | null = null;
       let sawSocketError = false;
+      let timeout: ReturnType<typeof setTimeout> | null = null;
+      const clearConnectTimeout = () => {
+        if (!timeout) return;
+        clearTimeout(timeout);
+        timeout = null;
+      };
+      const rejectOnce = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        clearConnectTimeout();
+        this.setState("disconnected");
+        try {
+          if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) ws.close();
+        } catch { /* ignore close failures */ }
+        reject(error);
+      };
+      const resolveOnce = (value: { scopes: string[]; serverVersion: string }) => {
+        if (settled) return;
+        settled = true;
+        clearConnectTimeout();
+        resolve(value);
+      };
+
+      timeout = setTimeout(() => {
+        rejectOnce(new Error(`${this.isRemote ? "Remote engine" : "Gateway"} connection timed out`));
+      }, this.isRemote ? 12_000 : 15_000);
 
       ws.onmessage = async (event) => {
         const frame = JSON.parse(event.data as string);
@@ -214,11 +240,7 @@ export class BrowserEngine {
               },
             }));
           }).catch((err) => {
-            if (!settled) {
-              settled = true;
-              this.setState("disconnected");
-              reject(new Error("Signing failed: " + (err instanceof Error ? err.message : String(err))));
-            }
+            rejectOnce(new Error("Signing failed: " + (err instanceof Error ? err.message : String(err))));
           });
           return;
         }
@@ -232,27 +254,21 @@ export class BrowserEngine {
             this.wasConnected = true;
             this.reconnectAttempt = 0;
             this.setState("connected");
-            if (!settled) {
-              settled = true;
-              resolve({
-                scopes: frame.payload?.auth?.scopes ?? [],
-                serverVersion: frame.payload?.server?.version ?? "unknown",
-              });
-            }
+            resolveOnce({
+              scopes: frame.payload?.auth?.scopes ?? [],
+              serverVersion: frame.payload?.server?.version ?? "unknown",
+            });
           } else {
             this.setState("disconnected");
-            if (!settled) {
-              settled = true;
-              const details = frame.error?.details as { requestId?: string } | undefined;
-              const requestId = typeof details?.requestId === "string" ? details.requestId.trim() : "";
-              const baseMessage = frame.error?.message ?? "Handshake failed";
-              handshakeError = new Error(
-                requestId && !baseMessage.includes(requestId)
-                  ? `${baseMessage} (requestId: ${requestId})`
-                  : baseMessage,
-              );
-              reject(handshakeError);
-            }
+            const details = frame.error?.details as { requestId?: string } | undefined;
+            const requestId = typeof details?.requestId === "string" ? details.requestId.trim() : "";
+            const baseMessage = frame.error?.message ?? "Handshake failed";
+            handshakeError = new Error(
+              requestId && !baseMessage.includes(requestId)
+                ? `${baseMessage} (requestId: ${requestId})`
+                : baseMessage,
+            );
+            rejectOnce(handshakeError);
           }
           return;
         }
@@ -293,9 +309,8 @@ export class BrowserEngine {
         }
 
         if (!settled) {
-          settled = true;
           const closeReason = event.reason?.trim();
-          reject(
+          rejectOnce(
             handshakeError
               ?? new Error(closeReason ? `gateway closed (${event.code}): ${closeReason}` : sawSocketError ? "WebSocket failed" : "Connection closed"),
           );
