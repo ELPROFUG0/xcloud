@@ -2,13 +2,13 @@ import { useMemo, useRef, useState, useEffect, useCallback, useLayoutEffect } fr
 import ForceGraph2D from "react-force-graph-2d";
 import type { AgentInfo } from "@/hooks/use-agents";
 import { getWorkspaceAgentId, getWorkspaceDir, type WorkspaceInfo } from "@/hooks/use-workspaces";
-import { BaseDirectory, readTextFile } from "@tauri-apps/plugin-fs";
 import { AgentUIContent, useAgentUI } from "./AgentUI";
 import type { DetailPanel } from "./AgentCanvas";
 import type { BrowserEngine } from "@/lib/engine";
 import { ContinuousTabs } from "./ContinuousTabs";
 import { CanvasSearchControl } from "./CanvasSearchControl";
 import { getCanvasSurfaceTab, setCanvasSurfaceTab, type CanvasSurfaceTab } from "@/lib/canvas-preferences";
+import { readOpenClawAgentFile } from "@/lib/openclaw-store";
 
 interface WorkspaceCanvasProps {
   engine: BrowserEngine;
@@ -194,15 +194,12 @@ export function WorkspaceCanvas({ engine, workspace, agents, onNodeDetail }: Wor
   }, [graphData.links, activeNode]);
 
   const readWorkspaceFile = useCallback(async (file: string) => {
-    if (engine.isRemote) return `Remote workspace files are not mounted in this local app.`;
-    const dir = getWorkspaceDir(workspace.id);
-    return readTextFile(`${dir}/${file}`, { baseDir: BaseDirectory.Home }).catch(() => `No ${file}`);
-  }, [engine.isRemote, workspace.id]);
+    return readOpenClawAgentFile(engine, workspaceAgentId, file, `No ${file}`);
+  }, [engine, workspaceAgentId]);
 
   const readAgentFile = useCallback(async (agentId: string, file: string) => {
-    if (engine.isRemote) return "";
-    return readTextFile(`.openclaw/workspace/${agentId}/${file}`, { baseDir: BaseDirectory.Home }).catch(() => "");
-  }, [engine.isRemote]);
+    return readOpenClawAgentFile(engine, agentId, file, "");
+  }, [engine]);
 
   const showNodeDetail = useCallback(async (node: WorkspaceNode) => {
     if (!onNodeDetail) return;

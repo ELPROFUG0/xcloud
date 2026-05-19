@@ -237,7 +237,7 @@ export default function App() {
           url: wsUrl,
           ...identity,
           mode: remoteMode ?? "local",
-          scopeKey: remoteMode ? `${remoteMode}:${wsUrl}` : "local",
+          scopeKey: remoteMode ?? "local",
         });
         engineRef.current = client;
 

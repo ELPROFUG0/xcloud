@@ -86,7 +86,7 @@ export class BrowserEngine {
   get authToken(): string { return this.config.token; }
   get mode(): EngineConfig["mode"] { return this.config.mode ?? "local"; }
   get isRemote(): boolean { return this.mode !== "local"; }
-  get storageScope(): string { return this.config.scopeKey ?? (this.isRemote ? `${this.mode}:${this.config.url}` : "local"); }
+  get storageScope(): string { return this.config.scopeKey ?? (this.isRemote ? (this.mode ?? "remote") : "local"); }
   get wsUrl(): string { return this.config.url; }
   get httpBaseUrl(): string {
     if (this.config.url.startsWith("wss://")) return `https://${this.config.url.slice("wss://".length).replace(/\/+$/, "")}`;

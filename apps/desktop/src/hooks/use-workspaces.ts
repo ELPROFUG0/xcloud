@@ -1,8 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentInfo } from "./use-agents";
 import type { BrowserEngine } from "@/lib/engine";
 import { BaseDirectory, mkdir, readTextFile, remove, writeTextFile } from "@tauri-apps/plugin-fs";
 import { engineScopedStorageKey } from "@/lib/engine-storage";
+import {
+  deleteOpenClawAgent,
+  readOpenClawAgentFile,
+  upsertOpenClawAgent,
+  writeOpenClawAgentFile,
+} from "@/lib/openclaw-store";
 
 export interface WorkspaceInfo {
   id: string;
@@ -407,6 +413,39 @@ async function syncWorkspaceFiles(workspace: WorkspaceInfo, agents: AgentInfo[])
   return identityChanged;
 }
 
+function buildWorkspaceSoulMd(workspace: WorkspaceInfo) {
+  return `# SOUL.md
+
+You are the workspace-scoped Main coordinator for "${workspace.name}".
+
+Be practical, concise, and project-aware. Keep this workspace separate from the user's global Main agent and from other workspaces.
+`;
+}
+
+async function syncRemoteWorkspaceFiles(engine: BrowserEngine, workspace: WorkspaceInfo, agents: AgentInfo[]) {
+  const agentId = getWorkspaceAgentId(workspace.id);
+  await upsertOpenClawAgent(engine, {
+    agentId,
+    name: `${workspace.name} Main`,
+    workspace: `~/.openclaw/workspace/${agentId}`,
+  });
+
+  const mainAgents = stripUnicoreBlocks(await readOpenClawAgentFile(engine, "main", "AGENTS.md"));
+  const agentsContent = `${(mainAgents || fallbackMainAgentsMd()).trim()}\n\n${buildWorkspaceMainOverlay(workspace, agents)}`;
+  const existingMemory = await readOpenClawAgentFile(engine, agentId, "MEMORY.md");
+
+  await Promise.all([
+    writeOpenClawAgentFile(engine, agentId, "IDENTITY.md", buildWorkspaceIdentityMd(workspace)),
+    writeOpenClawAgentFile(engine, agentId, "SOUL.md", buildWorkspaceSoulMd(workspace)),
+    writeOpenClawAgentFile(engine, agentId, "AGENTS.md", agentsContent),
+    writeOpenClawAgentFile(engine, agentId, "TEAM.md", buildWorkspaceTeamMd(workspace, agents)),
+    writeOpenClawAgentFile(engine, agentId, "GOALS.md", buildWorkspaceGoalsMd(workspace)),
+    !existingMemory.trim()
+      ? writeOpenClawAgentFile(engine, agentId, "MEMORY.md", buildWorkspaceMemoryMd(workspace))
+      : Promise.resolve(),
+  ]);
+}
+
 export async function workspaceHasContext(workspaceId: string) {
   const dir = getWorkspaceDir(workspaceId);
   const [memory, goals] = await Promise.all([
@@ -423,6 +462,7 @@ export async function workspaceHasContext(workspaceId: string) {
 export function useWorkspaces(agents: AgentInfo[], engine: BrowserEngine) {
   const storageKey = engineScopedStorageKey(STORAGE_KEY, engine);
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>(() => readWorkspaces(storageKey));
+  const remoteSyncKeysRef = useRef(new Set<string>());
 
   const persist = useCallback((updater: (prev: WorkspaceInfo[]) => WorkspaceInfo[]) => {
     setWorkspaces((prev) => {
@@ -466,14 +506,16 @@ export function useWorkspaces(agents: AgentInfo[], engine: BrowserEngine) {
     const next = [...prev, created];
     writeWorkspaces(storageKey, next);
     setWorkspaces(next);
-    if (!engine.isRemote) {
+    if (engine.isRemote) {
+      void syncRemoteWorkspaceFiles(engine, created, agents.filter((agent) => cleanAgentIds.includes(agent.id))).catch(() => {});
+    } else {
       void syncWorkspaceFiles(created, agents.filter((agent) => cleanAgentIds.includes(agent.id)))
         .then((identityChanged) => {
           if (identityChanged) window.dispatchEvent(new CustomEvent("xcloud-agents-local-config-changed"));
         });
     }
     return created;
-  }, [agents, engine.isRemote, storageKey]);
+  }, [agents, engine, storageKey]);
 
   const linkAgent = useCallback((workspaceId: string, agentId: string) => {
     persist((prev) => prev.map((workspace) => {
@@ -506,8 +548,13 @@ export function useWorkspaces(agents: AgentInfo[], engine: BrowserEngine) {
     persist((prev) => prev.filter((workspace) => workspace.id !== workspaceId));
     localStorage.removeItem(`xcloudWorkspaceSetupPrompted:${workspaceId}`);
     localStorage.removeItem(`xcloudWorkspaceSetupPrompted:v2:${workspaceId}`);
-    if (!engine.isRemote) void remove(getWorkspaceDir(workspaceId), { baseDir: BaseDirectory.Home, recursive: true }).catch(() => {});
-  }, [engine.isRemote, persist]);
+    if (engine.isRemote) {
+      void deleteOpenClawAgent(engine, getWorkspaceAgentId(workspaceId))
+        .finally(() => window.dispatchEvent(new CustomEvent("xcloud-agents-local-config-changed")));
+    } else {
+      void remove(getWorkspaceDir(workspaceId), { baseDir: BaseDirectory.Home, recursive: true }).catch(() => {});
+    }
+  }, [engine, persist]);
 
   const getWorkspaceAgents = useCallback((workspace: WorkspaceInfo | null | undefined) => {
     if (!workspace) return [];
@@ -521,8 +568,36 @@ export function useWorkspaces(agents: AgentInfo[], engine: BrowserEngine) {
     return coordinator ? [coordinator, ...linkedAgents] : linkedAgents;
   }, [agents]);
 
+  const ensureWorkspaceReady = useCallback(async (workspace: WorkspaceInfo) => {
+    const workspaceAgents = getWorkspaceAgents(workspace);
+    if (engine.isRemote) {
+      await syncRemoteWorkspaceFiles(engine, workspace, workspaceAgents);
+      window.dispatchEvent(new CustomEvent("xcloud-agents-local-config-changed"));
+      return;
+    }
+    const identityChanged = await syncWorkspaceFiles(workspace, workspaceAgents);
+    if (identityChanged) window.dispatchEvent(new CustomEvent("xcloud-agents-local-config-changed"));
+  }, [engine, getWorkspaceAgents]);
+
   useEffect(() => {
-    if (engine.isRemote) return;
+    if (engine.isRemote) {
+      for (const workspace of workspaces) {
+        const workspaceAgents = getWorkspaceAgents(workspace);
+        const syncKey = JSON.stringify({
+          engine: engine.storageScope,
+          workspaceId: workspace.id,
+          workspaceName: workspace.name,
+          agentIds: workspaceAgents.map((agent) => `${agent.id}:${agent.name ?? ""}`).sort(),
+          updatedAt: workspace.updatedAt,
+        });
+        if (remoteSyncKeysRef.current.has(syncKey)) continue;
+        remoteSyncKeysRef.current.add(syncKey);
+        void syncRemoteWorkspaceFiles(engine, workspace, workspaceAgents).catch(() => {
+          remoteSyncKeysRef.current.delete(syncKey);
+        });
+      }
+      return;
+    }
     for (const workspace of workspaces) {
       void syncWorkspaceFiles(workspace, getWorkspaceAgents(workspace))
         .then((identityChanged) => {
@@ -530,7 +605,7 @@ export function useWorkspaces(agents: AgentInfo[], engine: BrowserEngine) {
         });
     }
     void syncGlobalWorkspaceFiles(workspaces, getWorkspaceAgents);
-  }, [engine.isRemote, workspaces, getWorkspaceAgents]);
+  }, [engine, workspaces, getWorkspaceAgents]);
 
   const workspacesWithAgents = useMemo(() => (
     workspaces.map((workspace) => ({
@@ -572,5 +647,6 @@ export function useWorkspaces(agents: AgentInfo[], engine: BrowserEngine) {
     removeAgentFromWorkspaces,
     deleteWorkspace,
     getWorkspaceAgents,
+    ensureWorkspaceReady,
   };
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { BaseDirectory, mkdir, readDir, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import { BaseDirectory, mkdir, readDir, readFile, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { homeDir } from "@tauri-apps/api/path";
 import { FolderOpen, Plus, RefreshCw, ExternalLink, ArrowLeft, ArrowRight, X, ChevronDown, MoreHorizontal, Share2, Copy, Check } from "lucide-react";
@@ -8,6 +8,7 @@ import { XCLOUD_AG_UI_EVENT, xcloudCapabilities } from "@/lib/ag-ui-bridge";
 import { setRegisteredUiTools, type XCloudUiToolDefinition, type XCloudUiActionResult } from "@/lib/ui-action-registry";
 import type { BrowserEngine } from "@/lib/engine";
 import { agentUiConfigStorageKey } from "@/lib/agent-ui-config";
+import { readOpenClawAgentFile, runRemoteEngineShell, writeOpenClawAgentFile } from "@/lib/openclaw-store";
 import xcloudLogo from "@/assets/xcloud-logo.svg?url";
 
 import cursorLogo from "@/assets/editors/cursor.svg";
@@ -25,8 +26,156 @@ function shellQuote(value: string) {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-function safePathSegment(value: string) {
-  return value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "engine";
+function trimTrailingSlash(value: string) {
+  return value.replace(/\/+$/, "");
+}
+
+function escapeDoubleQuotedPath(value: string) {
+  return value.replace(/(["\\`$])/g, "\\$1");
+}
+
+function engineShellPath(engine: BrowserEngine, path: string) {
+  const cleanPath = trimTrailingSlash(path.trim());
+  if (engine.isRemote) {
+    if (cleanPath.startsWith("~/")) return `"$HOME/${escapeDoubleQuotedPath(cleanPath.slice(2))}"`;
+    if (!cleanPath.startsWith("/")) return `"$HOME/${escapeDoubleQuotedPath(cleanPath)}"`;
+  }
+  return shellQuote(cleanPath);
+}
+
+function previewUrlForPort(engine: BrowserEngine, port: number, path = "") {
+  if (!engine.isRemote) return `http://localhost:${port}${path}`;
+  try {
+    const base = new URL(engine.httpBaseUrl);
+    return `http://${base.hostname}:${port}${path}`;
+  } catch {
+    return `http://localhost:${port}${path}`;
+  }
+}
+
+function httpStatusOk(status: string) {
+  return ["200", "204", "301", "302", "304", "307", "308"].includes(status.trim());
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function runEngineShell(engine: BrowserEngine, cmd: string, timeoutMs = 20_000) {
+  if (engine.isRemote) return runRemoteEngineShell(engine, cmd, timeoutMs);
+  return invoke<string>("run_shell", { cmd });
+}
+
+async function writeEngineShellFile(engine: BrowserEngine, path: string, content: string) {
+  const target = engineShellPath(engine, path);
+  await runEngineShell(
+    engine,
+    `mkdir -p "$(dirname ${target})" && cat > ${target} << 'XCLOUD_EOF'\n${content}\nXCLOUD_EOF`,
+  );
+}
+
+async function readEngineShellFile(engine: BrowserEngine, path: string, fallback = "") {
+  return runEngineShell(engine, `cat ${engineShellPath(engine, path)} 2>/dev/null || true`).catch(() => fallback);
+}
+
+async function probeDevServer(engine: BrowserEngine, port: number) {
+  const status = await runEngineShell(
+    engine,
+    `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:${port} 2>/dev/null || echo "0"`,
+    8_000,
+  ).catch(() => "0");
+  return httpStatusOk(status);
+}
+
+async function hasUiProject(engine: BrowserEngine, path: string) {
+  const root = engineShellPath(engine, path);
+  const result = await runEngineShell(
+    engine,
+    `cd ${root} 2>/dev/null && (([ -f package.json ] && grep -Eq '"(dev|start)"[[:space:]]*:' package.json) || [ -f index.html ]) && echo yes || echo no`,
+  ).catch(() => "no");
+  return result.trim() === "yes";
+}
+
+function uint8ToBase64(bytes: Uint8Array) {
+  let binary = "";
+  const chunkSize = 8192;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function createLocalRepoArchive(sourcePath: string) {
+  const command = `set -e
+ARCHIVE_REL=".openclaw/tmp/xcloud-ui-sync-$(date +%s)-$$.tgz"
+TMP_ARCHIVE="$HOME/$ARCHIVE_REL"
+mkdir -p "$(dirname "$TMP_ARCHIVE")"
+COPYFILE_DISABLE=1 tar \
+  --exclude='.git' \
+  --exclude='node_modules' \
+  --exclude='.next' \
+  --exclude='dist' \
+  --exclude='build' \
+  --exclude='.turbo' \
+  --exclude='.cache' \
+  --exclude='coverage' \
+  --exclude='.DS_Store' \
+  -czf "$TMP_ARCHIVE" -C ${shellQuote(sourcePath)} .
+printf "%s" "$ARCHIVE_REL"`;
+  const output = await invoke<string>("run_shell", { cmd: command });
+  return output.trim().split("\n").filter(Boolean).at(-1) ?? "";
+}
+
+async function cleanupLocalArchive(path: string) {
+  if (!path) return;
+  const target = path.startsWith("/") ? shellQuote(path) : `"$HOME/${escapeDoubleQuotedPath(path)}"`;
+  await invoke("run_shell", { cmd: `rm -f ${target}` }).catch(() => {});
+}
+
+async function appendRemoteBase64Chunk(engine: BrowserEngine, path: string, chunk: string, replace: boolean) {
+  const operator = replace ? ">" : ">>";
+  await runEngineShell(
+    engine,
+    `cat ${operator} ${engineShellPath(engine, path)} << 'XCLOUD_B64'\n${chunk}\nXCLOUD_B64`,
+    20_000,
+  );
+}
+
+async function installUiDependencies(engine: BrowserEngine, repoPath: string) {
+  const root = engineShellPath(engine, repoPath);
+  const command = `cd ${root} || exit 0
+if [ ! -f package.json ]; then exit 0; fi
+if [ -d node_modules ]; then exit 0; fi
+if [ -f pnpm-lock.yaml ] && command -v pnpm >/dev/null 2>&1; then
+  pnpm install --frozen-lockfile || pnpm install
+elif [ -f pnpm-lock.yaml ] && command -v corepack >/dev/null 2>&1; then
+  corepack pnpm install --frozen-lockfile || corepack pnpm install
+elif [ -f yarn.lock ] && command -v yarn >/dev/null 2>&1; then
+  yarn install --immutable || yarn install --frozen-lockfile || yarn install
+elif [ -f yarn.lock ] && command -v corepack >/dev/null 2>&1; then
+  corepack yarn install --immutable || corepack yarn install --frozen-lockfile || corepack yarn install
+elif [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+  npm ci || npm install
+else
+  npm install
+fi`;
+  await runEngineShell(engine, command, 600_000);
+}
+
+async function stopDevServerPort(engine: BrowserEngine, port?: number) {
+  const safePort = Number(port);
+  if (!Number.isInteger(safePort) || safePort <= 0 || safePort > 65535) return;
+  await runEngineShell(
+    engine,
+    `PORT=${safePort}
+if command -v lsof >/dev/null 2>&1; then
+  PIDS="$(lsof -ti tcp:$PORT -sTCP:LISTEN 2>/dev/null || true)"
+  [ -n "$PIDS" ] && kill $PIDS 2>/dev/null || true
+elif command -v fuser >/dev/null 2>&1; then
+  fuser -k "$PORT/tcp" >/dev/null 2>&1 || true
+fi`,
+    8_000,
+  ).catch(() => {});
 }
 
 type ShareTunnelState = {
@@ -35,6 +184,15 @@ type ShareTunnelState = {
   pid?: number;
   logPath?: string;
   targetUrl?: string;
+  error?: string;
+};
+
+type RepoSyncState = {
+  status: "idle" | "packing" | "uploading" | "extracting" | "installing" | "ready" | "error";
+  message?: string;
+  progress?: number;
+  sourcePath?: string;
+  targetPath?: string;
   error?: string;
 };
 
@@ -118,12 +276,6 @@ fi
 chmod 755 "$BIN"
 "$BIN" --version >/dev/null
 echo "$BIN"`;
-}
-
-async function writeShellFile(path: string, content: string) {
-  await invoke("run_shell", {
-    cmd: `cat > ${shellQuote(path)} << 'XCLOUD_EOF'\n${content}\nXCLOUD_EOF`,
-  });
 }
 
 const xcloudRuntimeJs = `(function () {
@@ -577,17 +729,23 @@ window.xcloud.agent.onAgUiEvent((event) => {
   the user explicitly asks for repeated build checks or a previous build failed.
 `;
 
-async function ensureRealtimeBridge(repoPath: string) {
-  const cleanPath = repoPath.replace(/\/$/, "");
-  await writeShellFile(`${cleanPath}/xcloud-runtime.js`, xcloudRuntimeJs).catch(() => {});
-  await writeShellFile(`${cleanPath}/xcloud-ag-ui.js`, xcloudAgUiModule).catch(() => {});
-  await writeShellFile(`${cleanPath}/XCLOUD-UI.md`, xcloudUiGuide).catch(() => {});
-  await invoke("run_shell", { cmd: `[ -d ${shellQuote(`${cleanPath}/public`)} ] && cp ${shellQuote(`${cleanPath}/xcloud-runtime.js`)} ${shellQuote(`${cleanPath}/public/xcloud-runtime.js`)} || true` }).catch(() => {});
+async function ensureRealtimeBridge(engine: BrowserEngine, repoPath: string) {
+  const cleanPath = trimTrailingSlash(repoPath);
+  await writeEngineShellFile(engine, `${cleanPath}/xcloud-runtime.js`, xcloudRuntimeJs).catch(() => {});
+  await writeEngineShellFile(engine, `${cleanPath}/xcloud-ag-ui.js`, xcloudAgUiModule).catch(() => {});
+  await writeEngineShellFile(engine, `${cleanPath}/XCLOUD-UI.md`, xcloudUiGuide).catch(() => {});
+  await runEngineShell(
+    engine,
+    `[ -d ${engineShellPath(engine, `${cleanPath}/public`)} ] && cp ${engineShellPath(engine, `${cleanPath}/xcloud-runtime.js`)} ${engineShellPath(engine, `${cleanPath}/public/xcloud-runtime.js`)} || true`,
+  ).catch(() => {});
 
   const patchScript = `
 const fs = require("fs");
 const path = require("path");
-const root = ${JSON.stringify(cleanPath)};
+const rawRoot = ${JSON.stringify(cleanPath)};
+const root = path.isAbsolute(rawRoot)
+  ? rawRoot
+  : path.resolve(process.env.HOME || process.cwd(), rawRoot.replace(/^~\\//, ""));
 
 function exists(file) { return fs.existsSync(path.join(root, file)); }
 function read(file) { return fs.readFileSync(path.join(root, file), "utf8"); }
@@ -643,22 +801,19 @@ if (viteMain) {
 if (exists("index.html")) patchHtml("index.html");
 `;
 
-  await invoke("run_shell", {
-    cmd: `node << 'XCLOUD_PATCH'\n${patchScript}\nXCLOUD_PATCH`,
-  }).catch(() => {});
+  await runEngineShell(engine, `node << 'XCLOUD_PATCH'\n${patchScript}\nXCLOUD_PATCH`).catch(() => {});
 }
 
 /** Scaffold the UI workspace with agent context files */
-async function scaffoldUI(agentId: string, wsPath: string, home: string): Promise<string> {
-  const uiPath = `${home}/${wsPath}/ui`;
+async function scaffoldUI(agentId: string, wsPath: string, home: string, engine: BrowserEngine): Promise<string> {
+  const uiPath = engine.isRemote ? `${agentWorkspacePath(agentId)}/ui` : `${home}/${wsPath}/ui`;
 
   // Create ui directory
-  await invoke("run_shell", { cmd: `mkdir -p "${uiPath}"` });
+  await runEngineShell(engine, `mkdir -p ${engineShellPath(engine, uiPath)}`);
 
   // Read agent files for context
   const readFile = async (name: string) => {
-    try { return await readTextFile(`${wsPath}/${name}`, { baseDir: undefined }); }
-    catch { try { return await invoke<string>("run_shell", { cmd: `cat "${home}/${wsPath}/${name}" 2>/dev/null` }); } catch { return ""; } }
+    return readOpenClawAgentFile(engine, agentId, name, "");
   };
 
   const identity = await readFile("IDENTITY.md");
@@ -798,13 +953,13 @@ RULES:
 
   // Write files using shell (reliable)
   const writeFile = async (path: string, content: string) => {
-    await writeShellFile(path, content);
+    await writeEngineShellFile(engine, path, content);
   };
 
   await writeFile(`${uiPath}/AGENT-CONTEXT.md`, context);
   await writeFile(`${uiPath}/CLAUDE.md`, claudeMd);
   await writeFile(`${uiPath}/.cursorrules`, cursorRules);
-  await ensureRealtimeBridge(uiPath);
+  await ensureRealtimeBridge(engine, uiPath);
 
   return uiPath;
 }
@@ -816,16 +971,13 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
   const [uiView, setUiView] = useState<"menu" | "create" | "preview">("menu");
   const [hasProject, setHasProject] = useState(false);
   const [autoOpenRevision, setAutoOpenRevision] = useState(0);
+  const [repoSyncState, setRepoSyncState] = useState<RepoSyncState>({ status: "idle" });
   const [home, setHome] = useState<string>("");
   const lastConfigSignatureRef = useRef("");
 
-  const uiWsPath = engine.isRemote
-    ? `.xcloud/remote-engines/${safePathSegment(engine.storageScope)}/${safePathSegment(_agentId)}`
-    : wsPath;
-  const configPath = `${wsPath}/ui-config.json`;
-  const fullConfigPath = !engine.isRemote && home ? `${home.replace(/\/$/, "")}/${configPath}` : "";
+  const uiWsPath = wsPath;
   const remoteConfigStorageKey = agentUiConfigStorageKey(_agentId, engine);
-  const configIdentity = engine.isRemote ? remoteConfigStorageKey : fullConfigPath;
+  const configIdentity = `${engine.storageScope}:${_agentId}:ui-config`;
 
   useEffect(() => {
     homeDir()
@@ -835,113 +987,126 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
 
   // Save config
   const saveConfig = useCallback(async (path: string, port?: number) => {
-    if (engine.isRemote) {
-      let existing: AgentUiConfig = {};
-      try {
-        existing = JSON.parse(localStorage.getItem(remoteConfigStorageKey) ?? "{}") as AgentUiConfig;
-      } catch {
-        existing = {};
-      }
-      const config: AgentUiConfig = { ...existing, repoPath: path, ...(port ? { port } : {}), updatedAt: String(Date.now()) };
-      delete config.openInPreview;
-      localStorage.setItem(remoteConfigStorageKey, JSON.stringify(config));
-      return;
-    }
-    if (!fullConfigPath) return;
-    const existingRaw = await invoke<string>("run_shell", { cmd: `cat "${fullConfigPath}" 2>/dev/null || echo "{}"` }).catch(() => "{}");
+    const existingRaw = await readOpenClawAgentFile(engine, _agentId, "ui-config.json", "{}");
     let existing: AgentUiConfig = {};
     try {
       existing = JSON.parse(existingRaw) as AgentUiConfig;
     } catch {
       existing = {};
     }
-    const config: AgentUiConfig = { ...existing, repoPath: path, ...(port ? { port } : {}) };
+    const config: AgentUiConfig = { ...existing, repoPath: path, ...(port ? { port } : {}), updatedAt: String(Date.now()) };
     delete config.openInPreview;
-    await invoke("run_shell", { cmd: `echo '${JSON.stringify(config)}' > "${fullConfigPath}"` }).catch(() => {});
-  }, [engine.isRemote, fullConfigPath, remoteConfigStorageKey]);
+    const serialized = `${JSON.stringify(config, null, 2)}\n`;
+    await writeOpenClawAgentFile(engine, _agentId, "ui-config.json", serialized);
+    if (engine.isRemote) localStorage.setItem(remoteConfigStorageKey, serialized);
+  }, [_agentId, engine, remoteConfigStorageKey]);
 
   // Start dev server
   const startDevServer = useCallback(async (path: string, savedPort?: number) => {
-    const cleanPath = path.replace(/\/$/, "");
-    await ensureRealtimeBridge(cleanPath).catch(() => {});
+    const cleanPath = trimTrailingSlash(path);
+    await ensureRealtimeBridge(engine, cleanPath).catch(() => {});
 
     // Check if already running on saved port
     if (savedPort) {
-      try {
-        const status = await invoke<string>("run_shell", {
-          cmd: `curl -s -o /dev/null -w "%{http_code}" http://localhost:${savedPort} 2>/dev/null || echo "0"`,
-        });
-        if (["200", "304", "302"].includes(status.trim())) {
-          setDevServerUrl(`http://localhost:${savedPort}`);
-          setDevServerLoading(false);
-          return;
-        }
-      } catch { /* */ }
+      const running = await probeDevServer(engine, savedPort);
+      if (running) {
+        setDevServerUrl(previewUrlForPort(engine, savedPort));
+        setDevServerLoading(false);
+        return;
+      }
     }
 
     try {
-      const pkgStr = await readTextFile(`${cleanPath}/package.json`).catch(() => "");
+      const pkgStr = await readEngineShellFile(engine, `${cleanPath}/package.json`, "");
       if (pkgStr) {
         const pkg = JSON.parse(pkgStr);
         const script = pkg.scripts?.dev ? "dev" : pkg.scripts?.start ? "start" : null;
         if (script) {
           const port = savedPort ?? (3100 + Math.floor(Math.random() * 900));
-          await invoke("spawn_shell", { cmd: `cd "${cleanPath}" && PORT=${port} npm run ${script}` }).catch(() => {});
-          saveConfig(path, port);
+          if (engine.isRemote) {
+            const safeAgentId = _agentId.replace(/[^a-z0-9_-]/gi, "-");
+            const logPath = `"$HOME/.openclaw/logs/xcloud-ui-${safeAgentId}-${port}.log"`;
+            const runScript = script === "dev"
+              ? `HOST=0.0.0.0 PORT=${port} npm run ${script} -- --host 0.0.0.0 --port ${port} || HOST=0.0.0.0 PORT=${port} npm run ${script}`
+              : `HOST=0.0.0.0 PORT=${port} npm run ${script}`;
+            await runEngineShell(
+              engine,
+              `cd ${engineShellPath(engine, cleanPath)} && mkdir -p "$HOME/.openclaw/logs" && nohup sh -lc ${shellQuote(runScript)} > ${logPath} 2>&1 & echo $!`,
+              8_000,
+            ).catch(() => {});
+          } else {
+            await invoke("spawn_shell", { cmd: `cd ${shellQuote(cleanPath)} && PORT=${port} npm run ${script}` }).catch(() => {});
+          }
+          await saveConfig(path, port);
 
           let retries = 0;
           while (retries < 30) {
-            try {
-              const status = await invoke<string>("run_shell", {
-                cmd: `curl -s -o /dev/null -w "%{http_code}" http://localhost:${port} 2>/dev/null || echo "0"`,
-              });
-              if (["200", "304", "302"].includes(status.trim())) {
-                setDevServerUrl(`http://localhost:${port}`);
-                setDevServerLoading(false);
-                return;
-              }
-            } catch { /* */ }
+            if (await probeDevServer(engine, port)) {
+              setDevServerUrl(previewUrlForPort(engine, port));
+              setDevServerLoading(false);
+              return;
+            }
             retries++;
-            await new Promise(r => setTimeout(r, 1000));
+            await delay(1000);
           }
         }
       }
 
-      const htmlContent = await readTextFile(`${cleanPath}/index.html`).catch(() => "");
+      const htmlContent = await readEngineShellFile(engine, `${cleanPath}/index.html`, "");
       if (htmlContent) {
         const port = savedPort ?? (3100 + Math.floor(Math.random() * 900));
-        await invoke("spawn_shell", {
-          cmd: `cd ${shellQuote(cleanPath)} && if command -v python3 >/dev/null 2>&1; then python3 -m http.server ${port} --bind 127.0.0.1; elif command -v python >/dev/null 2>&1; then python -m http.server ${port} --bind 127.0.0.1; else npx --yes serve . -l ${port}; fi`,
-        }).catch(() => {});
-        saveConfig(path, port);
+        const bind = engine.isRemote ? "0.0.0.0" : "127.0.0.1";
+        const staticCmd = `if command -v python3 >/dev/null 2>&1; then python3 -m http.server ${port} --bind ${bind}; elif command -v python >/dev/null 2>&1; then python -m http.server ${port} --bind ${bind}; else npx --yes serve . -l ${port}; fi`;
+        if (engine.isRemote) {
+          const safeAgentId = _agentId.replace(/[^a-z0-9_-]/gi, "-");
+          const logPath = `"$HOME/.openclaw/logs/xcloud-ui-${safeAgentId}-${port}.log"`;
+          await runEngineShell(
+            engine,
+            `cd ${engineShellPath(engine, cleanPath)} && mkdir -p "$HOME/.openclaw/logs" && nohup sh -lc ${shellQuote(staticCmd)} > ${logPath} 2>&1 & echo $!`,
+            8_000,
+          ).catch(() => {});
+        } else {
+          await invoke("spawn_shell", {
+            cmd: `cd ${shellQuote(cleanPath)} && ${staticCmd}`,
+          }).catch(() => {});
+        }
+        await saveConfig(path, port);
 
         let retries = 0;
         while (retries < 20) {
-          try {
-            const status = await invoke<string>("run_shell", {
-              cmd: `curl -s -o /dev/null -w "%{http_code}" http://localhost:${port}/index.html 2>/dev/null || echo "0"`,
-            });
-            if (["200", "304", "302"].includes(status.trim())) {
-              setDevServerUrl(`http://localhost:${port}/index.html`);
-              setDevServerLoading(false);
-              return;
-            }
-          } catch { /* */ }
+          if (await probeDevServer(engine, port)) {
+            setDevServerUrl(previewUrlForPort(engine, port, "/index.html"));
+            setDevServerLoading(false);
+            return;
+          }
           retries++;
-          await new Promise(r => setTimeout(r, 500));
+          await delay(500);
         }
       }
       setDevServerLoading(false);
     } catch {
       setDevServerLoading(false);
     }
-  }, [saveConfig]);
+  }, [_agentId, engine, saveConfig]);
 
   const loadSavedConfig = useCallback(async (initial = false) => {
     if (!configIdentity) return;
-    const content = engine.isRemote
-      ? localStorage.getItem(remoteConfigStorageKey) ?? "{}"
-      : await invoke<string>("run_shell", { cmd: `cat "${fullConfigPath}" 2>/dev/null || echo "{}"` }).catch(() => "{}");
+    let content = await readOpenClawAgentFile(engine, _agentId, "ui-config.json", "{}");
+    if (engine.isRemote && (!content || content.trim() === "{}")) {
+      const legacyContent = localStorage.getItem(remoteConfigStorageKey) ?? "{}";
+      if (legacyContent && legacyContent.trim() !== "{}") {
+        try {
+          const legacy = JSON.parse(legacyContent) as AgentUiConfig;
+          if (legacy.repoPath) legacy.repoPath = `${agentWorkspacePath(_agentId)}/ui`;
+          content = `${JSON.stringify(legacy, null, 2)}\n`;
+        } catch {
+          content = legacyContent;
+        }
+        await writeOpenClawAgentFile(engine, _agentId, "ui-config.json", content).catch(() => {});
+      } else {
+        content = "{}";
+      }
+    }
     let config: AgentUiConfig = {};
     try {
       config = JSON.parse(content) as AgentUiConfig;
@@ -949,9 +1114,19 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
       config = {};
     }
 
-    const nextRepoPath = typeof config.repoPath === "string" && config.repoPath.trim()
+    let nextRepoPath = typeof config.repoPath === "string" && config.repoPath.trim()
       ? config.repoPath.trim()
       : null;
+    if (engine.isRemote && nextRepoPath) {
+      const localHome = home ? `${home.replace(/\/$/, "")}/` : "";
+      const looksLikeLegacyLocalRepo =
+        nextRepoPath.startsWith(".xcloud/remote-engines/")
+        || (localHome ? nextRepoPath.startsWith(localHome) : false);
+      if (looksLikeLegacyLocalRepo) {
+        nextRepoPath = `${agentWorkspacePath(_agentId)}/ui`;
+        await saveConfig(nextRepoPath, Number.isFinite(Number(config.port)) ? Number(config.port) : undefined).catch(() => {});
+      }
+    }
     const nextPort = Number.isFinite(Number(config.port)) ? Number(config.port) : undefined;
     const signature = nextRepoPath ? `${nextRepoPath}:${nextPort ?? ""}:${config.updatedAt ?? ""}:${config.openInPreview ? "open" : ""}` : "";
     const changed = lastConfigSignatureRef.current !== signature;
@@ -966,18 +1141,12 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
     }
 
     setRepoPath(nextRepoPath);
-    const projectCheck = await invoke<string>("run_shell", {
-      cmd: `(([ -f "${nextRepoPath}/package.json" ] && (grep -q '"dev"' "${nextRepoPath}/package.json" || grep -q '"start"' "${nextRepoPath}/package.json")) || [ -f "${nextRepoPath}/index.html" ]) && echo yes || echo no`,
-    }).catch(() => "no");
-    setHasProject(projectCheck.trim() === "yes");
+    setHasProject(await hasUiProject(engine, nextRepoPath));
 
     let running = false;
     if (nextPort) {
-      const status = await invoke<string>("run_shell", {
-        cmd: `curl -s -o /dev/null -w "%{http_code}" http://localhost:${nextPort} 2>/dev/null || echo "0"`,
-      }).catch(() => "0");
-      running = ["200", "304", "302"].includes(status.trim());
-      if (running) setDevServerUrl(`http://localhost:${nextPort}`);
+      running = await probeDevServer(engine, nextPort);
+      if (running) setDevServerUrl(previewUrlForPort(engine, nextPort));
     }
 
     const autoOpenKey = `xcloud-ui-auto-open:${configIdentity}:${config.updatedAt ?? signature}`;
@@ -992,7 +1161,7 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
         void startDevServer(nextRepoPath, nextPort);
       }
     }
-  }, [configIdentity, devServerLoading, devServerUrl, engine.isRemote, fullConfigPath, remoteConfigStorageKey, startDevServer]);
+  }, [_agentId, configIdentity, devServerLoading, devServerUrl, engine, home, remoteConfigStorageKey, saveConfig, startDevServer]);
 
   useEffect(() => {
     if (!configIdentity) return;
@@ -1005,39 +1174,171 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
   }, [configIdentity, loadSavedConfig]);
 
   useEffect(() => {
-    if (uiView !== "preview" || !repoPath || devServerUrl || devServerLoading) return;
+    const syncBlocksAutoStart = engine.isRemote && !["idle", "ready"].includes(repoSyncState.status);
+    if (uiView !== "preview" || !repoPath || !hasProject || devServerUrl || devServerLoading || syncBlocksAutoStart) return;
     const timer = window.setInterval(() => {
       setDevServerLoading(true);
       void startDevServer(repoPath);
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [devServerLoading, devServerUrl, repoPath, startDevServer, uiView]);
+  }, [devServerLoading, devServerUrl, engine.isRemote, hasProject, repoPath, repoSyncState.status, startDevServer, uiView]);
+
+  const openRemoteUiWorkspace = useCallback(async () => {
+    const path = `${agentWorkspacePath(_agentId)}/ui`;
+    setRepoPath(path);
+    await saveConfig(path);
+    await ensureRealtimeBridge(engine, path).catch(() => {});
+    setDevServerLoading(true);
+    setUiView("preview");
+    await startDevServer(path);
+  }, [_agentId, engine, saveConfig, startDevServer]);
+
+  const syncLocalRepoPathToRemote = useCallback(async (sourcePath: string) => {
+    const targetPath = `${agentWorkspacePath(_agentId)}/ui`;
+    const safeAgentId = _agentId.replace(/[^a-z0-9_-]/gi, "-");
+    const archivePath = `.openclaw/tmp/xcloud-ui-sync-${safeAgentId}-${Date.now()}.tgz`;
+    const archiveB64Path = `${archivePath}.b64`;
+    let localArchive = "";
+
+    try {
+      const previousConfigRaw = await readOpenClawAgentFile(engine, _agentId, "ui-config.json", "{}").catch(() => "{}");
+      let previousPort: number | undefined;
+      try {
+        const previousConfig = JSON.parse(previousConfigRaw) as AgentUiConfig;
+        const parsedPort = Number(previousConfig.port);
+        if (Number.isFinite(parsedPort)) previousPort = parsedPort;
+      } catch {
+        previousPort = undefined;
+      }
+
+      setDevServerUrl(null);
+      setDevServerLoading(true);
+      setUiView("preview");
+
+      setRepoSyncState({ status: "packing", sourcePath, targetPath, message: "Packing local repo..." });
+      localArchive = await createLocalRepoArchive(sourcePath);
+      if (!localArchive) throw new Error("Could not create a local archive for this repo.");
+
+      const archiveBytes = await readFile(localArchive, { baseDir: BaseDirectory.Home });
+      const maxArchiveBytes = 150 * 1024 * 1024;
+      if (archiveBytes.length > maxArchiveBytes) {
+        throw new Error("This repo is too large to sync directly. Remove generated assets or large files and try again.");
+      }
+
+      const base64 = uint8ToBase64(archiveBytes);
+      await runEngineShell(
+        engine,
+        `mkdir -p "$HOME/.openclaw/tmp" && rm -f ${engineShellPath(engine, archivePath)} ${engineShellPath(engine, archiveB64Path)}`,
+      );
+
+      const chunkSize = 96_000;
+      const chunks = Math.ceil(base64.length / chunkSize);
+      for (let index = 0; index < chunks; index += 1) {
+        const chunk = base64.slice(index * chunkSize, (index + 1) * chunkSize);
+        setRepoSyncState({
+          status: "uploading",
+          sourcePath,
+          targetPath,
+          progress: chunks <= 1 ? 1 : index / chunks,
+          message: `Uploading ${index + 1}/${chunks}...`,
+        });
+        await appendRemoteBase64Chunk(engine, archiveB64Path, chunk, index === 0);
+      }
+
+      setRepoSyncState({ status: "extracting", sourcePath, targetPath, progress: 1, message: "Extracting on remote engine..." });
+      const decodeScript = "const fs=require('node:fs');const input=fs.readFileSync(process.argv[1],'utf8').replace(/\\s+/g,'');fs.writeFileSync(process.argv[2],Buffer.from(input,'base64'));";
+      const depsSignatureScript = "const fs=require('node:fs');const path=require('node:path');const crypto=require('node:crypto');const root=process.argv[1];const files=['package.json','package-lock.json','npm-shrinkwrap.json','pnpm-lock.yaml','pnpm-workspace.yaml','yarn.lock','bun.lock','bun.lockb','.npmrc','.yarnrc.yml'];const hash=crypto.createHash('sha256');let any=false;for(const file of files){const full=path.join(root,file);if(fs.existsSync(full)&&fs.statSync(full).isFile()){any=true;hash.update(file);hash.update('\\0');hash.update(fs.readFileSync(full));hash.update('\\0');}}process.stdout.write(any?hash.digest('hex'):'');";
+      const extractOutput = await runEngineShell(
+        engine,
+        `set -e
+TARGET=${engineShellPath(engine, targetPath)}
+STAGING="$HOME/.openclaw/tmp/xcloud-ui-sync-${safeAgentId}-staging"
+node -e ${shellQuote(decodeScript)} ${engineShellPath(engine, archiveB64Path)} ${engineShellPath(engine, archivePath)}
+rm -rf "$STAGING"
+mkdir -p "$TARGET" "$STAGING"
+tar -xzf ${engineShellPath(engine, archivePath)} -C "$STAGING"
+OLD_DEPS="$(node -e ${shellQuote(depsSignatureScript)} "$TARGET" 2>/dev/null || true)"
+NEW_DEPS="$(node -e ${shellQuote(depsSignatureScript)} "$STAGING" 2>/dev/null || true)"
+if [ -n "$OLD_DEPS" ] && [ "$OLD_DEPS" = "$NEW_DEPS" ] && [ -d "$TARGET/node_modules" ]; then
+  find "$TARGET" -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf {} +
+  printf "%s\\n" "XCLOUD_DEPS_CACHE=reused"
+else
+  find "$TARGET" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  printf "%s\\n" "XCLOUD_DEPS_CACHE=fresh"
+fi
+(cd "$STAGING" && tar -cf - .) | tar -xf - -C "$TARGET"
+rm -rf "$STAGING"
+rm -f ${engineShellPath(engine, archivePath)} ${engineShellPath(engine, archiveB64Path)}`,
+        90_000,
+      );
+      const reusedRemoteDependencies = extractOutput.includes("XCLOUD_DEPS_CACHE=reused");
+
+      await ensureRealtimeBridge(engine, targetPath);
+
+      setRepoSyncState({
+        status: "installing",
+        sourcePath,
+        targetPath,
+        message: reusedRemoteDependencies ? "Reusing cached remote dependencies..." : "Installing dependencies on remote engine...",
+      });
+      await installUiDependencies(engine, targetPath);
+
+      await stopDevServerPort(engine, previousPort);
+      await saveConfig(targetPath);
+      setRepoPath(targetPath);
+      setHasProject(await hasUiProject(engine, targetPath));
+      setDevServerUrl(null);
+      setDevServerLoading(true);
+      setRepoSyncState({ status: "installing", sourcePath, targetPath, message: "Starting remote preview..." });
+      await startDevServer(targetPath);
+      setRepoSyncState({ status: "ready", sourcePath, targetPath, message: "Repo synced to remote engine." });
+      window.setTimeout(() => setRepoSyncState({ status: "idle" }), 2500);
+    } catch (error) {
+      setDevServerLoading(false);
+      setRepoSyncState({
+        status: "error",
+        sourcePath,
+        targetPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      await cleanupLocalArchive(localArchive);
+    }
+  }, [_agentId, engine, saveConfig, startDevServer]);
 
   // Select repo
   const selectRepo = useCallback(async () => {
+    if (engine.isRemote) {
+      const selected = await openDialog({ directory: true, title: "Sync Local UI Repo to Remote Engine" });
+      if (!selected) return;
+      const path = typeof selected === "string" ? selected : String(selected);
+      await syncLocalRepoPathToRemote(path);
+      return;
+    }
+
     const selected = await openDialog({ directory: true, title: "Select UI Project" });
     if (!selected) return;
     const path = typeof selected === "string" ? selected : String(selected);
     setRepoPath(path);
     await saveConfig(path);
-    await ensureRealtimeBridge(path);
+    await ensureRealtimeBridge(engine, path);
     setDevServerLoading(true);
     setUiView("preview");
     await startDevServer(path);
-  }, [saveConfig, startDevServer]);
+  }, [engine, saveConfig, startDevServer, syncLocalRepoPathToRemote]);
 
   // Disconnect repo
   const disconnectRepo = useCallback(async () => {
     setRepoPath(null);
     setDevServerUrl(null);
     setUiView("menu");
-    if (engine.isRemote) {
-      localStorage.removeItem(remoteConfigStorageKey);
-      return;
-    }
-    if (!fullConfigPath) return;
-    await invoke("run_shell", { cmd: `rm -f "${fullConfigPath}"` }).catch(() => {});
-  }, [engine.isRemote, fullConfigPath, remoteConfigStorageKey]);
+    localStorage.removeItem(remoteConfigStorageKey);
+    await writeOpenClawAgentFile(engine, _agentId, "ui-config.json", "{}\n").catch(() => {});
+  }, [_agentId, engine, remoteConfigStorageKey]);
+
+  const clearRepoSyncState = useCallback(() => {
+    setRepoSyncState({ status: "idle" });
+  }, []);
 
   // Launch preview (from menu or tab switch)
   const launchPreview = useCallback(() => {
@@ -1053,11 +1354,18 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
 
   // Create UI — scaffold and open editor
   const createUI = useCallback(async (editor: string) => {
-    if (!home) return;
-    const uiPath = await scaffoldUI(_agentId, uiWsPath, home);
+    if (!engine.isRemote && !home) return;
+    const uiPath = await scaffoldUI(_agentId, uiWsPath, home, engine);
     setRepoPath(uiPath);
     await saveConfig(uiPath);
-    await ensureRealtimeBridge(uiPath);
+    await ensureRealtimeBridge(engine, uiPath);
+
+    if (engine.isRemote) {
+      setUiView("preview");
+      setDevServerLoading(true);
+      await startDevServer(uiPath);
+      return;
+    }
 
     const cmds: Record<string, string> = {
       cursor: `open -a "Cursor" "${uiPath}" || cursor "${uiPath}"`,
@@ -1074,12 +1382,15 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
 
     const cmd = cmds[editor];
     if (cmd) await invoke("run_shell", { cmd }).catch(() => {});
-  }, [_agentId, uiWsPath, home, saveConfig]);
+  }, [_agentId, uiWsPath, home, saveConfig, engine, startDevServer]);
 
   return {
     agentId: _agentId,
     repoPath, devServerUrl, devServerLoading, uiView, hasProject, autoOpenRevision,
+    engineIsRemote: engine.isRemote,
+    repoSyncState,
     setUiView, selectRepo, disconnectRepo, launchPreview, createUI,
+    openRemoteUiWorkspace, clearRepoSyncState,
   };
 }
 
@@ -1239,7 +1550,9 @@ function CreateDropdown({ label, options, onSelect }: {
 /** Main UI tab content */
 export function AgentUIContent({
   agentId, uiView, repoPath, devServerUrl, devServerLoading, hasProject,
+  engineIsRemote, repoSyncState,
   setUiView, selectRepo, disconnectRepo, launchPreview, createUI,
+  openRemoteUiWorkspace, clearRepoSyncState,
 }: ReturnType<typeof useAgentUI>) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -1555,7 +1868,7 @@ export function AgentUIContent({
   const browserButtonClass = "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-white/8 hover:text-text disabled:pointer-events-none disabled:opacity-30";
   const menuItemClass = "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[12px] text-text transition-colors hover:bg-white/6";
   const dangerMenuItemClass = "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[12px] text-red-400/80 transition-colors hover:bg-red-400/10 hover:text-red-300";
-  const browserUrl = devServerUrl ?? (repoPath ? `file://${repoPath}` : "");
+  const browserUrl = devServerUrl ?? (repoPath ? (engineIsRemote ? repoPath : `file://${repoPath}`) : "");
   const canGoBackToMenu = uiView === "preview";
   const browserIsLoading = uiView === "preview" && (devServerLoading || previewLoadPhase !== "idle");
   const browserLoadingBarClass = previewLoadPhase === "finishing"
@@ -1787,6 +2100,51 @@ true`,
     );
   };
 
+  const renderRepoSyncStatus = () => {
+    if (!engineIsRemote || repoSyncState.status === "idle") return null;
+    const progress = typeof repoSyncState.progress === "number"
+      ? ` ${Math.max(0, Math.min(100, Math.round(repoSyncState.progress * 100)))}%`
+      : "";
+    const text = repoSyncState.status === "error"
+      ? repoSyncState.error
+      : repoSyncState.message ?? (
+        repoSyncState.status === "packing" ? "Packing local repo..."
+        : repoSyncState.status === "uploading" ? `Uploading local repo...${progress}`
+        : repoSyncState.status === "extracting" ? "Extracting on remote engine..."
+        : repoSyncState.status === "installing" ? "Installing dependencies..."
+        : "Repo synced to remote engine."
+      );
+
+    return (
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border/70 bg-[#111111] px-3">
+        <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg bg-white/[0.06] text-text-muted">
+          {repoSyncState.status === "ready" ? (
+            <Check className="h-3 w-3 text-emerald-400" />
+          ) : repoSyncState.status === "error" ? (
+            <X className="h-3 w-3 text-red-400" />
+          ) : (
+            <RefreshCw className="h-3 w-3 animate-spin" />
+          )}
+        </div>
+        <span className={`min-w-0 flex-1 truncate text-[11px] ${
+          repoSyncState.status === "error" ? "text-red-300/85" : "text-text-muted"
+        }`}>
+          {text}
+        </span>
+        {(repoSyncState.status === "error" || repoSyncState.status === "ready") && (
+          <button
+            type="button"
+            onClick={clearRepoSyncState}
+            className={browserButtonClass}
+            title="Dismiss"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+    );
+  };
+
   const renderSubHeader = () => (
     <div className="relative flex h-10 shrink-0 items-center gap-2 border-b border-border/70 bg-[#111111] px-2.5">
       <div className="flex shrink-0 items-center gap-1">
@@ -1877,8 +2235,18 @@ true`,
               className={menuItemClass}
             >
               <FolderOpen className="h-3.5 w-3.5" />
-              {repoPath ? "Change" : "Open Repo"}
+              {engineIsRemote ? "Sync Local Repo" : repoPath ? "Change" : "Open Repo"}
             </button>
+
+            {engineIsRemote && (
+              <button
+                onClick={() => closeBrowserMenu(openRemoteUiWorkspace)}
+                className={menuItemClass}
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Open Remote UI
+              </button>
+            )}
 
             {!repoPath && (
               <button
@@ -1920,6 +2288,7 @@ true`,
       <div className="flex min-h-0 flex-1 flex-col bg-[#111111]">
         {renderSubHeader()}
         {renderShareStatus()}
+        {renderRepoSyncStatus()}
         <div className="relative min-h-0 flex-1 bg-[#111111]">
           {devServerLoading ? (
             <div className="flex h-full items-center justify-center">
@@ -1983,6 +2352,7 @@ true`,
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         {renderSubHeader()}
+        {renderRepoSyncStatus()}
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-6 px-8">
         {/* Stacked editor logos */}
         <div className="flex items-center justify-center h-20">
@@ -2038,6 +2408,7 @@ true`,
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {renderSubHeader()}
+      {renderRepoSyncStatus()}
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-6 px-8">
       {repoPath ? (
         <>
@@ -2079,8 +2450,17 @@ true`,
               className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
             >
               <FolderOpen className="h-3.5 w-3.5" />
-              Change Repo
+              {engineIsRemote ? "Sync Local Repo" : "Change Repo"}
             </button>
+            {engineIsRemote && (
+              <button
+                onClick={openRemoteUiWorkspace}
+                className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Open Remote UI
+              </button>
+            )}
             <button
               onClick={disconnectRepo}
               className="flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-medium text-red-400/70 hover:text-red-400 transition-colors"
@@ -2120,8 +2500,17 @@ true`,
               className="flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-xs font-medium text-black hover:bg-white/90 transition-colors"
             >
               <FolderOpen className="h-3.5 w-3.5" />
-              Open Repo
+              {engineIsRemote ? "Sync Local Repo" : "Open Repo"}
             </button>
+            {engineIsRemote && (
+              <button
+                onClick={openRemoteUiWorkspace}
+                className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Open Remote UI
+              </button>
+            )}
             <button
               onClick={() => setUiView("create")}
               className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"

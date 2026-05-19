@@ -2,13 +2,13 @@ import { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } fr
 import ForceGraph2D from "react-force-graph-2d";
 // ReactMarkdown removed — detail panel moved to sidebar
 import type { BrowserEngine } from "@/lib/engine";
-import { readTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
 import orbOverlayUrl from "@/assets/orb-overlay.png?url";
 // lucide icons removed — detail panel moved to sidebar
 import { useAgentUI, AgentUIContent } from "./AgentUI";
 import { ContinuousTabs } from "./ContinuousTabs";
 import { CanvasSearchControl } from "./CanvasSearchControl";
 import { getCanvasSurfaceTab, setCanvasSurfaceTab, type CanvasSurfaceTab } from "@/lib/canvas-preferences";
+import { listOpenClawAgentFiles, readOpenClawAgentFile } from "@/lib/openclaw-store";
 
 export interface DetailPanel {
   title: string;
@@ -251,10 +251,8 @@ export function AgentCanvas({ engine, agentId, agentAvatar, integrationsStorageK
       integrations: readConnectedIntegrations(integrationsStorageKey),
     };
 
-    if (!engine.isRemote) {
-      try { data.identity = parseIdentity(await readTextFile(`${wsPath}/IDENTITY.md`, { baseDir: BaseDirectory.Home })); } catch { /* */ }
-      try { data.soul.traits = parseSoul(await readTextFile(`${wsPath}/SOUL.md`, { baseDir: BaseDirectory.Home })); } catch { /* */ }
-    }
+    try { data.identity = parseIdentity(await readOpenClawAgentFile(engine, agentId, "IDENTITY.md")); } catch { /* */ }
+    try { data.soul.traits = parseSoul(await readOpenClawAgentFile(engine, agentId, "SOUL.md")); } catch { /* */ }
 
     try {
       const result = await engine.rpc("config.get", {});
@@ -272,10 +270,10 @@ export function AgentCanvas({ engine, agentId, agentAvatar, integrationsStorageK
 
     try { data.skills = (await engine.listCommands()).slice(0, 20).map((c) => ({ name: c.name, description: c.description ?? "" })); } catch { /* */ }
 
-    if (!engine.isRemote) {
-      for (const file of ["MEMORY.md", "HEARTBEAT.md", "USER.md", "TOOLS.md", "AGENTS.md"]) {
-        try { if ((await readTextFile(`${wsPath}/${file}`, { baseDir: BaseDirectory.Home })).trim()) data.memoryFiles.push(file); } catch { /* */ }
-      }
+    const agentFiles = await listOpenClawAgentFiles(engine, agentId).catch(() => []);
+    const availableFiles = new Set(agentFiles.filter((file) => file.missing !== true).map((file) => file.name));
+    for (const file of ["MEMORY.md", "HEARTBEAT.md", "USER.md", "TOOLS.md", "AGENTS.md"]) {
+      if (availableFiles.has(file)) data.memoryFiles.push(file);
     }
 
     setAgentData(data);
@@ -343,14 +341,14 @@ export function AgentCanvas({ engine, agentId, agentAvatar, integrationsStorageK
     if (!onNodeDetail) return;
     try {
       if (node.id === "identity") {
-        onNodeDetail({ title: "Identity", type: "markdown", content: await readTextFile(`${wsPath}/IDENTITY.md`, { baseDir: BaseDirectory.Home }).catch(() => "No IDENTITY.md") });
+        onNodeDetail({ title: "Identity", type: "markdown", content: await readOpenClawAgentFile(engine, agentId, "IDENTITY.md", "No IDENTITY.md") });
       } else if (node.id === "soul") {
-        onNodeDetail({ title: "Soul", type: "markdown", content: await readTextFile(`${wsPath}/SOUL.md`, { baseDir: BaseDirectory.Home }).catch(() => "No SOUL.md") });
+        onNodeDetail({ title: "Soul", type: "markdown", content: await readOpenClawAgentFile(engine, agentId, "SOUL.md", "No SOUL.md") });
       } else if (node.id === "memory" || node.id.startsWith("memory-")) {
         const file = node.id.startsWith("memory-") ? node.id.slice(7) : null;
         if (file) {
           try {
-            onNodeDetail({ title: file, type: "markdown", content: await readTextFile(`${wsPath}/${file}`, { baseDir: BaseDirectory.Home }) });
+            onNodeDetail({ title: file, type: "markdown", content: await readOpenClawAgentFile(engine, agentId, file, `No ${file}`) });
           } catch {
             onNodeDetail({ title: file, type: "markdown", content: "Failed to load file" });
           }
@@ -369,7 +367,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, integrationsStorageK
         const m = agentData.model;
         onNodeDetail({ title: "Model", type: "info", content: `**Provider:** ${m.provider}\n\n**Model:** ${m.model}\n\n**Context Window:** ${m.contextWindow.toLocaleString()} tokens` });
       } else if (node.id === "agent") {
-        onNodeDetail({ title: "Agent Config", type: "markdown", content: await readTextFile(`${wsPath}/AGENTS.md`, { baseDir: BaseDirectory.Home }).catch(() => "No AGENTS.md") });
+        onNodeDetail({ title: "Agent Config", type: "markdown", content: await readOpenClawAgentFile(engine, agentId, "AGENTS.md", "No AGENTS.md") });
       } else if (node.id === "ui-repo") {
         setPersistentTab("ui");
         agentUI.launchPreview();
@@ -377,7 +375,7 @@ export function AgentCanvas({ engine, agentId, agentAvatar, integrationsStorageK
         // traits don't have detail
       }
     } catch { /* */ }
-  }, [wsPath, agentData, agentUI, onNodeDetail, setPersistentTab]);
+  }, [engine, agentId, agentData, agentUI, onNodeDetail, setPersistentTab]);
 
   // Build graph data
   const graphData = useMemo(() => {

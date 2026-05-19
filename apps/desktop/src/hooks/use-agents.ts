@@ -6,6 +6,7 @@ import { ensureAgentDefaultAvatar, isAgentAvatarOptedOut } from "@/lib/update-id
 import { engineScopedStorageKey } from "@/lib/engine-storage";
 import { getStableDefaultAvatarUrl } from "@/lib/default-avatar";
 import { AGENT_VISUALS_CHANGED_EVENT, getAgentVisualOverride } from "@/lib/agent-visuals";
+import { readOpenClawAgentFile } from "@/lib/openclaw-store";
 
 export interface AgentInfo {
   id: string;
@@ -170,20 +171,30 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
       const deletedAgentIds = readDeletedAgentIds(deletedAgentsKey);
       const merged = [...(payload.agents ?? [])];
       const seenIds = new Set(merged.map((agent) => agent.id));
+      const remoteMainIdentity = engine.isRemote ? await readRemoteMainIdentity(engine) : undefined;
       for (const localAgent of localAgents) {
         if (seenIds.has(localAgent.id)) continue;
         merged.push(localAgent);
         seenIds.add(localAgent.id);
       }
 
+      if (engine.isRemote && remoteMainIdentity) {
+        const mainAgent = merged.find((agent) => agent.id === MAIN_AGENT_ID);
+        if (mainAgent) {
+          mainAgent.identity = { ...mainAgent.identity, ...remoteMainIdentity };
+          mainAgent.name = remoteMainIdentity.name ?? mainAgent.name;
+          mainAgent.emoji = remoteMainIdentity.emoji ?? mainAgent.emoji;
+          mainAgent.avatar = remoteMainIdentity.avatar ?? mainAgent.avatar;
+        }
+      }
+
       if (engine.isRemote && !seenIds.has(MAIN_AGENT_ID)) {
-        const identity = await readRemoteMainIdentity(engine);
         merged.unshift({
           id: MAIN_AGENT_ID,
-          name: identity?.name,
-          emoji: identity?.emoji,
-          avatar: identity?.avatar,
-          identity,
+          name: remoteMainIdentity?.name,
+          emoji: remoteMainIdentity?.emoji,
+          avatar: remoteMainIdentity?.avatar,
+          identity: remoteMainIdentity,
         });
         seenIds.add(MAIN_AGENT_ID);
       }
@@ -201,33 +212,30 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
         status: "active" as const,
       }));
 
-      const enriched = engine.isRemote ? list.map((agent) => {
-        const visualOverride = getAgentVisualOverride(engine, agent.id);
-        const emoji = visualOverride?.emoji ?? agent.emoji;
-        const avatar = visualOverride?.avatar ?? (isRenderableRemoteAvatar(agent.avatar)
-          ? agent.avatar
-          : !emoji
-            ? getStableDefaultAvatarUrl(`${engine.storageScope}:${agent.id}`)
-            : undefined);
-        return { ...agent, emoji, avatar };
-      }) : await Promise.all(list.map(async (agent) => {
+      const enriched = await Promise.all(list.map(async (agent) => {
         const wsPath = agent.isDefault
           ? ".openclaw/workspace/IDENTITY.md"
           : `.openclaw/workspace/${agent.id}/IDENTITY.md`;
-        const content = await readTextFile(wsPath, { baseDir: BaseDirectory.Home }).catch(() => "");
+        const content = engine.isRemote
+          ? await readOpenClawAgentFile(engine, agent.id, "IDENTITY.md")
+          : await readTextFile(wsPath, { baseDir: BaseDirectory.Home }).catch(() => "");
         const identity = parseIdentity(content);
-        const defaultAvatar = !agent.isDefault && !identity.avatar && !isAgentAvatarOptedOut(agent.id)
+        const visualOverride = engine.isRemote ? getAgentVisualOverride(engine, agent.id) : undefined;
+        const defaultAvatar = !engine.isRemote && !agent.isDefault && !identity.avatar && !isAgentAvatarOptedOut(agent.id)
           ? await ensureAgentDefaultAvatar(agent.id).catch(() => undefined)
           : undefined;
-        const avatarField = identity.avatar ?? defaultAvatar;
+        const emoji = visualOverride?.emoji ?? identity.emoji ?? agent.emoji;
+        const avatarField = visualOverride?.avatar ?? identity.avatar ?? defaultAvatar;
         const avatar = avatarField
-          ? await resolveAvatarUrl(agent.id, avatarField).catch(() => undefined)
+          ? engine.isRemote && !isRenderableRemoteAvatar(avatarField)
+            ? undefined
+            : await resolveAvatarUrl(agent.id, avatarField).catch(() => undefined)
           : undefined;
         return {
           ...agent,
           name: identity.name ?? agent.name,
-          emoji: identity.emoji ?? agent.emoji,
-          avatar: avatar ?? agent.avatar,
+          emoji,
+          avatar: avatar ?? (isRenderableRemoteAvatar(agent.avatar) ? agent.avatar : !emoji ? getStableDefaultAvatarUrl(`${engine.storageScope}:${agent.id}`) : agent.avatar),
         };
       }));
 

@@ -11,8 +11,8 @@ import { AgentAvatar } from "../ui/AgentAvatar";
 import { XCloudDotLogo } from "../ui/XCloudDotLogo";
 import { ensureAgentDefaultAvatar, updateAgentEmoji } from "@/lib/update-identity";
 import { resolveAvatarUrl } from "@/lib/avatar";
-import { BaseDirectory, readTextFile } from "@tauri-apps/plugin-fs";
 import { setAgentVisualOverride } from "@/lib/agent-visuals";
+import { readOpenClawAgentFile } from "@/lib/openclaw-store";
 import gmailIcon from "@/assets/setup-icons/gmail.svg";
 import slackIcon from "@/assets/setup-icons/slack.svg";
 import notionIcon from "@/assets/setup-icons/notion.svg";
@@ -105,10 +105,10 @@ function identityField(content: string, field: "Name" | "Emoji" | "Avatar") {
   return value || undefined;
 }
 
-async function loadWorkspaceCoordinatorFallback(workspace: WorkspaceInfo): Promise<AgentInfo> {
+async function loadWorkspaceCoordinatorFallback(engine: BrowserEngine, workspace: WorkspaceInfo): Promise<AgentInfo> {
   const id = workspaceCoordinatorId(workspace);
-  const content = await readTextFile(`.openclaw/workspace/${id}/IDENTITY.md`, { baseDir: BaseDirectory.Home }).catch(() => "");
-  const avatarField = identityField(content, "Avatar") ?? await ensureAgentDefaultAvatar(id).catch(() => undefined);
+  const content = await readOpenClawAgentFile(engine, id, "IDENTITY.md");
+  const avatarField = identityField(content, "Avatar") ?? (engine.isRemote ? undefined : await ensureAgentDefaultAvatar(id).catch(() => undefined));
   const avatar = avatarField ? await resolveAvatarUrl(id, avatarField).catch(() => undefined) : undefined;
   return {
     id,
@@ -423,7 +423,7 @@ export function HomeScreen({
     if (missing.length === 0) return;
 
     let cancelled = false;
-    void Promise.all(missing.map(loadWorkspaceCoordinatorFallback)).then((fallbacks) => {
+    void Promise.all(missing.map((workspace) => loadWorkspaceCoordinatorFallback(engine, workspace))).then((fallbacks) => {
       if (cancelled) return;
       setWorkspaceCoordinatorFallbacks((current) => {
         const next = { ...current };
@@ -436,7 +436,7 @@ export function HomeScreen({
     });
 
     return () => { cancelled = true; };
-  }, [agents, workspaceCoordinatorFallbacks, workspaces]);
+  }, [agents, engine, workspaceCoordinatorFallbacks, workspaces]);
 
   useEffect(() => {
     const interval = window.setInterval(() => setRelativeNow(Date.now()), 60_000);

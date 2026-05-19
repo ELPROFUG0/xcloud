@@ -19,10 +19,11 @@ import { DevPreview } from "./DevPreview";
 import { OnboardingScreen } from "./OnboardingScreen";
 import { getCanvasPanelOpen, setCanvasPanelOpen } from "@/lib/canvas-preferences";
 import { engineScopedStorageKey } from "@/lib/engine-storage";
+import { deleteOpenClawAgent } from "@/lib/openclaw-store";
 const TerminalPanel = lazy(() => import("./terminal/TerminalPanel").then(m => ({ default: m.TerminalPanel })));
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { homeDir } from "@tauri-apps/api/path";
-import { BaseDirectory, readTextFile, remove, writeTextFile } from "@tauri-apps/plugin-fs";
+import { BaseDirectory, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { useTheme } from "@/hooks/use-theme";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -500,7 +501,7 @@ function TerminalDock({
 export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   useTheme(); // Initialize theme CSS variables
   const { agents, refresh: refreshAgents } = useAgents(engine);
-  const { workspaces, createWorkspace, linkAgent, unlinkAgent, removeAgentFromWorkspaces, deleteWorkspace, getWorkspaceAgents } = useWorkspaces(agents, engine);
+  const { workspaces, createWorkspace, linkAgent, unlinkAgent, removeAgentFromWorkspaces, deleteWorkspace, getWorkspaceAgents, ensureWorkspaceReady } = useWorkspaces(agents, engine);
   const { getAgentSessions, refresh: refreshSessions } = useSessions(engine);
   const engineStorageScope = engine.storageScope;
   const canvasSurfaceId = (agentId: string) => `${engineStorageScope}:${agentId}`;
@@ -691,61 +692,46 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const ensureWorkspaceCoordinator = useCallback(async (workspace: WorkspaceInfo) => {
     if (ensuringWorkspaceIdsRef.current.has(workspace.id)) return;
     ensuringWorkspaceIdsRef.current.add(workspace.id);
-    let nextAgent: Record<string, unknown> | null = null;
-    let isCurrent = true;
     try {
+      await ensureWorkspaceReady(workspace).catch(() => {});
       const agentId = getWorkspaceAgentId(workspace.id);
       if (engine.isRemote) {
-        const current = agents.find((agent) => agent.id === agentId);
-        nextAgent = { id: agentId, name: workspace.name };
-        isCurrent = Boolean(current) && current?.name === nextAgent.name;
-      } else {
-        await ensureUnicoreWorkspaceSupportInLocalConfig().catch(() => false);
-        const home = (await homeDir()).replace(/\/$/, "");
-        const workspacePath = `${home}/${getWorkspaceDir(workspace.id)}`;
-        const localConfigRaw = await readTextFile(".openclaw/openclaw.json", { baseDir: BaseDirectory.Home }).catch(() => "{}");
-        const config = JSON.parse(localConfigRaw || "{}") as Record<string, unknown>;
-        const agentsConfig = (config.agents as Record<string, unknown> | undefined) ?? {};
-        const defaults = (agentsConfig.defaults as Record<string, unknown> | undefined) ?? {};
-        const defaultModel = (defaults.model as Record<string, unknown> | undefined)?.primary as string | undefined;
-        const list = Array.isArray(agentsConfig.list)
-          ? agentsConfig.list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
-          : [];
-        const index = list.findIndex((item) => item.id === agentId);
-        const current = index >= 0 ? list[index]! : null;
-        nextAgent = {
-          id: agentId,
-          name: workspace.name,
-          workspace: workspacePath,
-          ...(defaultModel ? { model: { primary: defaultModel } } : {}),
-        };
-        isCurrent = Boolean(current)
-          && current?.name === nextAgent.name
-          && current?.workspace === nextAgent.workspace;
-        if (!isCurrent) {
-          await upsertAgentInLocalConfig(nextAgent).catch(() => {});
-          window.dispatchEvent(new CustomEvent("xcloud-agents-local-config-changed"));
-          void refreshAgents();
-        }
-      }
-    } catch {
-      ensuringWorkspaceIdsRef.current.delete(workspace.id);
-      return;
-    }
-
-    void (async () => {
-      try {
         await ensureUnicoreWorkspaceSupport(engine).catch(() => {});
-        if (nextAgent && !isCurrent) {
-          await syncAgentsToGatewayConfig(engine, [nextAgent]).catch(() => {});
-        }
         window.dispatchEvent(new CustomEvent("xcloud-agents-local-config-changed"));
         void refreshAgents();
-      } finally {
-        ensuringWorkspaceIdsRef.current.delete(workspace.id);
+        return;
       }
-    })();
-  }, [agents, engine, refreshAgents]);
+
+      await ensureUnicoreWorkspaceSupportInLocalConfig().catch(() => false);
+      const home = (await homeDir()).replace(/\/$/, "");
+      const workspacePath = `${home}/${getWorkspaceDir(workspace.id)}`;
+      const localConfigRaw = await readTextFile(".openclaw/openclaw.json", { baseDir: BaseDirectory.Home }).catch(() => "{}");
+      const config = JSON.parse(localConfigRaw || "{}") as Record<string, unknown>;
+      const agentsConfig = (config.agents as Record<string, unknown> | undefined) ?? {};
+      const defaults = (agentsConfig.defaults as Record<string, unknown> | undefined) ?? {};
+      const defaultModel = (defaults.model as Record<string, unknown> | undefined)?.primary as string | undefined;
+      const list = Array.isArray(agentsConfig.list)
+        ? agentsConfig.list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+        : [];
+      const current = list.find((item) => item.id === agentId) ?? null;
+      const nextAgent: Record<string, unknown> = {
+        id: agentId,
+        name: workspace.name,
+        workspace: workspacePath,
+        ...(defaultModel ? { model: { primary: defaultModel } } : {}),
+      };
+      const isCurrent = Boolean(current)
+        && current?.name === nextAgent.name
+        && current?.workspace === nextAgent.workspace;
+      if (!isCurrent) {
+        await upsertAgentInLocalConfig(nextAgent).catch(() => {});
+        window.dispatchEvent(new CustomEvent("xcloud-agents-local-config-changed"));
+        void refreshAgents();
+      }
+    } finally {
+      ensuringWorkspaceIdsRef.current.delete(workspace.id);
+    }
+  }, [engine, ensureWorkspaceReady, refreshAgents]);
 
   const openTerminal = useCallback((command?: string, options?: { remote?: boolean }) => {
     setTerminalByContext((prev) => {
@@ -994,8 +980,10 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const handleCreateWorkspace = useCallback((name: string) => {
     const workspace = createWorkspace(name);
     if (!workspace) return;
-    handleSelectWorkspace(workspace.id);
-  }, [createWorkspace, handleSelectWorkspace]);
+    void ensureWorkspaceCoordinator(workspace).finally(() => {
+      handleSelectWorkspace(workspace.id);
+    });
+  }, [createWorkspace, ensureWorkspaceCoordinator, handleSelectWorkspace]);
 
   const handleCreateAgentInWorkspace = useCallback((workspaceId: string) => {
     const workspace = workspaces.find((item) => item.id === workspaceId);
@@ -1038,6 +1026,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
           output: "Workspace creation skipped: empty name.",
         };
       }
+      await ensureWorkspaceCoordinator(workspace);
       handleSelectWorkspace(workspace.id);
       return {
         message: `Listo, creé el workspace **${workspace.name}**. Ya lo abrí para que podamos definir su contexto, equipo y agentes vinculados.`,
@@ -1125,7 +1114,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
       message: "Esa herramienta de workspace todavía no está disponible.",
       output: `Unsupported app tool: ${request.name}`,
     };
-  }, [createWorkspace, handleDeleteWorkspace, handleSelectWorkspace, workspaces]);
+  }, [createWorkspace, ensureWorkspaceCoordinator, handleDeleteWorkspace, handleSelectWorkspace, workspaces]);
 
   const handleRemoveAgentFromWorkspace = useCallback((workspaceId: string, agentId: string) => {
     unlinkAgent(workspaceId, agentId);
@@ -1154,29 +1143,8 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
       localStorage.setItem("pinnedAgents", "[]");
     }
 
-    try {
-      const configResult = await engine.rpc("config.get", {});
-      const hash = (configResult as { hash?: string }).hash ?? "";
-      const config = ((configResult as { config?: Record<string, unknown> }).config ?? configResult) as Record<string, unknown>;
-      const agentsConfig = (config.agents as Record<string, unknown> | undefined) ?? {};
-      const list = Array.isArray(agentsConfig.list)
-        ? agentsConfig.list.filter((item) => {
-          if (!item || typeof item !== "object") return false;
-          return String((item as Record<string, unknown>).id ?? "") !== agentId;
-        })
-        : [];
-      await engine.patchConfig(JSON.stringify({ agents: { ...agentsConfig, list } }), hash).catch(() => {});
-    } catch {
-      // The gateway may restart or be temporarily unavailable while config changes apply.
-    }
-
-    if (!engine.isRemote) {
-      await removeAgentFromLocalConfig(agentId).catch(() => {});
-      await Promise.all([
-        remove(`.openclaw/workspace/${agentId}`, { baseDir: BaseDirectory.Home, recursive: true }).catch(() => {}),
-        remove(`.openclaw/agents/${agentId}`, { baseDir: BaseDirectory.Home, recursive: true }).catch(() => {}),
-      ]);
-    }
+    await deleteOpenClawAgent(engine, agentId).catch(() => {});
+    if (!engine.isRemote) await removeAgentFromLocalConfig(agentId).catch(() => {});
 
     if (activeAgentId === agentId) {
       setActiveAgentId(null);
