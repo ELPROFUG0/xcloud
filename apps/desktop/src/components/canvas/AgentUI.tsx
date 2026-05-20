@@ -43,6 +43,14 @@ function engineShellPath(engine: BrowserEngine, path: string) {
   return shellQuote(cleanPath);
 }
 
+function localShellPath(path: string) {
+  const cleanPath = trimTrailingSlash(path.trim());
+  if (!cleanPath) return shellQuote(cleanPath);
+  if (cleanPath.startsWith("~/")) return `"$HOME/${escapeDoubleQuotedPath(cleanPath.slice(2))}"`;
+  if (!cleanPath.startsWith("/")) return `"$HOME/${escapeDoubleQuotedPath(cleanPath)}"`;
+  return shellQuote(cleanPath);
+}
+
 function previewUrlForPort(engine: BrowserEngine, port: number, path = "") {
   if (!engine.isRemote) return `http://localhost:${port}${path}`;
   try {
@@ -141,6 +149,89 @@ async function appendRemoteBase64Chunk(engine: BrowserEngine, path: string, chun
   );
 }
 
+async function appendLocalBase64Chunk(path: string, chunk: string, replace: boolean) {
+  const operator = replace ? ">" : ">>";
+  const target = localShellPath(path);
+  await invoke("run_shell", {
+    cmd: `mkdir -p "$(dirname ${target})" && cat ${operator} ${target} << 'XCLOUD_B64'\n${chunk}\nXCLOUD_B64`,
+  });
+}
+
+async function readRemoteBase64Chunk(engine: BrowserEngine, path: string, offset: number, size: number) {
+  return runEngineShell(
+    engine,
+    `dd if=${engineShellPath(engine, path)} bs=1 skip=${Math.max(0, offset)} count=${Math.max(0, size)} 2>/dev/null || true`,
+    20_000,
+  );
+}
+
+async function createRemoteRepoArchive(engine: BrowserEngine, repoPath: string, safeAgentId: string) {
+  const archivePath = `.openclaw/tmp/xcloud-ui-pull-${safeAgentId}-${Date.now()}.tgz`;
+  const archiveB64Path = `${archivePath}.b64`;
+  const encodeScript = "const fs=require('node:fs');fs.writeFileSync(process.argv[2],fs.readFileSync(process.argv[1]).toString('base64'));";
+  const output = await runEngineShell(
+    engine,
+    `set -e
+TARGET=${engineShellPath(engine, repoPath)}
+ARCHIVE="$HOME/${escapeDoubleQuotedPath(archivePath)}"
+ARCHIVE_B64="$HOME/${escapeDoubleQuotedPath(archiveB64Path)}"
+mkdir -p "$(dirname "$ARCHIVE")"
+rm -f "$ARCHIVE" "$ARCHIVE_B64"
+COPYFILE_DISABLE=1 tar \
+  --exclude='.git' \
+  --exclude='node_modules' \
+  --exclude='.next' \
+  --exclude='dist' \
+  --exclude='build' \
+  --exclude='.turbo' \
+  --exclude='.cache' \
+  --exclude='coverage' \
+  --exclude='.DS_Store' \
+  -czf "$ARCHIVE" -C "$TARGET" .
+node -e ${shellQuote(encodeScript)} "$ARCHIVE" "$ARCHIVE_B64"
+BYTES="$(wc -c < "$ARCHIVE_B64" | tr -d ' ')"
+printf "ARCHIVE=%s\\nARCHIVE_B64=%s\\nBYTES=%s\\n" ${shellQuote(archivePath)} ${shellQuote(archiveB64Path)} "$BYTES"`,
+    120_000,
+  );
+  const archive = output.match(/^ARCHIVE=(.+)$/m)?.[1]?.trim() || archivePath;
+  const archiveB64 = output.match(/^ARCHIVE_B64=(.+)$/m)?.[1]?.trim() || archiveB64Path;
+  const bytes = Number(output.match(/^BYTES=(\d+)$/m)?.[1] || 0);
+  return { archivePath: archive, archiveB64Path: archiveB64, bytes };
+}
+
+async function cleanupRemoteArchive(engine: BrowserEngine, ...paths: string[]) {
+  const targets = paths.filter(Boolean).map((path) => engineShellPath(engine, path)).join(" ");
+  if (!targets) return;
+  await runEngineShell(engine, `rm -f ${targets}`, 8_000).catch(() => {});
+}
+
+async function applyLocalRepoArchive(localArchiveB64Path: string, localArchivePath: string, localTargetPath: string, safeAgentId: string) {
+  const decodeScript = "const fs=require('node:fs');const input=fs.readFileSync(process.argv[1],'utf8').replace(/\\s+/g,'');fs.writeFileSync(process.argv[2],Buffer.from(input,'base64'));";
+  const stagingPath = `.openclaw/tmp/xcloud-ui-pull-${safeAgentId}-staging`;
+  await invoke("run_shell", {
+    cmd: `set -e
+TARGET=${localShellPath(localTargetPath)}
+STAGING=${localShellPath(stagingPath)}
+node -e ${shellQuote(decodeScript)} ${localShellPath(localArchiveB64Path)} ${localShellPath(localArchivePath)}
+rm -rf "$STAGING"
+mkdir -p "$TARGET" "$STAGING"
+tar -xzf ${localShellPath(localArchivePath)} -C "$STAGING"
+find "$TARGET" -mindepth 1 -maxdepth 1 \
+  ! -name .git \
+  ! -name node_modules \
+  ! -name .next \
+  ! -name dist \
+  ! -name build \
+  ! -name .turbo \
+  ! -name .cache \
+  ! -name coverage \
+  -exec rm -rf {} +
+(cd "$STAGING" && tar -cf - .) | tar -xf - -C "$TARGET"
+rm -rf "$STAGING"
+rm -f ${localShellPath(localArchivePath)} ${localShellPath(localArchiveB64Path)}`,
+  });
+}
+
 async function installUiDependencies(engine: BrowserEngine, repoPath: string) {
   const root = engineShellPath(engine, repoPath);
   const command = `cd ${root} || exit 0
@@ -198,6 +289,7 @@ type RepoSyncState = {
 
 type AgentUiConfig = {
   repoPath?: string;
+  localSourcePath?: string;
   port?: number;
   ownerAgentId?: string;
   openInPreview?: boolean;
@@ -966,6 +1058,7 @@ RULES:
 
 export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngine) {
   const [repoPath, setRepoPath] = useState<string | null>(null);
+  const [localSourcePath, setLocalSourcePath] = useState<string | null>(null);
   const [devServerUrl, setDevServerUrl] = useState<string | null>(null);
   const [devServerLoading, setDevServerLoading] = useState(false);
   const [uiView, setUiView] = useState<"menu" | "create" | "preview">("menu");
@@ -977,6 +1070,7 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
 
   const uiWsPath = wsPath;
   const remoteConfigStorageKey = agentUiConfigStorageKey(_agentId, engine);
+  const localSourceStorageKey = `${remoteConfigStorageKey}:local-source`;
   const configIdentity = `${engine.storageScope}:${_agentId}:ui-config`;
 
   useEffect(() => {
@@ -986,7 +1080,11 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
   }, []);
 
   // Save config
-  const saveConfig = useCallback(async (path: string, port?: number) => {
+  const saveConfig = useCallback(async (path: string, port?: number, options?: { localSourcePath?: string | null }) => {
+    if (engine.isRemote && options && "localSourcePath" in options) {
+      if (options.localSourcePath) localStorage.setItem(localSourceStorageKey, options.localSourcePath);
+      else localStorage.removeItem(localSourceStorageKey);
+    }
     const existingRaw = await readOpenClawAgentFile(engine, _agentId, "ui-config.json", "{}");
     let existing: AgentUiConfig = {};
     try {
@@ -995,11 +1093,46 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
       existing = {};
     }
     const config: AgentUiConfig = { ...existing, repoPath: path, ...(port ? { port } : {}), updatedAt: String(Date.now()) };
+    if (options && "localSourcePath" in options) {
+      if (options.localSourcePath) config.localSourcePath = options.localSourcePath;
+      else delete config.localSourcePath;
+    } else if (engine.isRemote && !config.localSourcePath) {
+      const cachedLocalSourcePath = localSourcePath ?? localStorage.getItem(localSourceStorageKey);
+      if (cachedLocalSourcePath?.trim()) config.localSourcePath = cachedLocalSourcePath.trim();
+    }
     delete config.openInPreview;
     const serialized = `${JSON.stringify(config, null, 2)}\n`;
     await writeOpenClawAgentFile(engine, _agentId, "ui-config.json", serialized);
     if (engine.isRemote) localStorage.setItem(remoteConfigStorageKey, serialized);
-  }, [_agentId, engine, remoteConfigStorageKey]);
+  }, [_agentId, engine, localSourcePath, localSourceStorageKey, remoteConfigStorageKey]);
+
+  const cacheLocalSourcePath = useCallback((path: string | null) => {
+    setLocalSourcePath(path);
+    if (!engine.isRemote) return;
+    if (path) localStorage.setItem(localSourceStorageKey, path);
+    else localStorage.removeItem(localSourceStorageKey);
+  }, [engine.isRemote, localSourceStorageKey]);
+
+  const getCachedLocalSourcePath = useCallback(() => {
+    if (localSourcePath) return localSourcePath;
+    const direct = engine.isRemote ? localStorage.getItem(localSourceStorageKey) : null;
+    if (direct?.trim()) {
+      setLocalSourcePath(direct.trim());
+      return direct.trim();
+    }
+    const cachedConfigRaw = engine.isRemote ? localStorage.getItem(remoteConfigStorageKey) : null;
+    if (!cachedConfigRaw) return null;
+    try {
+      const config = JSON.parse(cachedConfigRaw) as AgentUiConfig;
+      const path = typeof config.localSourcePath === "string" && config.localSourcePath.trim()
+        ? config.localSourcePath.trim()
+        : null;
+      if (path) cacheLocalSourcePath(path);
+      return path;
+    } catch {
+      return null;
+    }
+  }, [cacheLocalSourcePath, engine.isRemote, localSourcePath, localSourceStorageKey, remoteConfigStorageKey]);
 
   // Start dev server
   const startDevServer = useCallback(async (path: string, savedPort?: number) => {
@@ -1128,12 +1261,13 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
       }
     }
     const nextPort = Number.isFinite(Number(config.port)) ? Number(config.port) : undefined;
-    const signature = nextRepoPath ? `${nextRepoPath}:${nextPort ?? ""}:${config.updatedAt ?? ""}:${config.openInPreview ? "open" : ""}` : "";
+    const signature = nextRepoPath ? `${nextRepoPath}:${config.localSourcePath ?? ""}:${nextPort ?? ""}:${config.updatedAt ?? ""}:${config.openInPreview ? "open" : ""}` : "";
     const changed = lastConfigSignatureRef.current !== signature;
     lastConfigSignatureRef.current = signature;
 
     if (!nextRepoPath) {
       setRepoPath(null);
+      cacheLocalSourcePath(null);
       setDevServerUrl(null);
       setHasProject(false);
       setUiView("menu");
@@ -1141,6 +1275,10 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
     }
 
     setRepoPath(nextRepoPath);
+    const nextLocalSourcePath = typeof config.localSourcePath === "string" && config.localSourcePath.trim()
+      ? config.localSourcePath.trim()
+      : getCachedLocalSourcePath();
+    cacheLocalSourcePath(nextLocalSourcePath);
     setHasProject(await hasUiProject(engine, nextRepoPath));
 
     let running = false;
@@ -1161,7 +1299,7 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
         void startDevServer(nextRepoPath, nextPort);
       }
     }
-  }, [_agentId, configIdentity, devServerLoading, devServerUrl, engine, home, remoteConfigStorageKey, saveConfig, startDevServer]);
+  }, [_agentId, cacheLocalSourcePath, configIdentity, devServerLoading, devServerUrl, engine, getCachedLocalSourcePath, home, remoteConfigStorageKey, saveConfig, startDevServer]);
 
   useEffect(() => {
     if (!configIdentity) return;
@@ -1201,6 +1339,7 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
     let localArchive = "";
 
     try {
+      cacheLocalSourcePath(sourcePath);
       const previousConfigRaw = await readOpenClawAgentFile(engine, _agentId, "ui-config.json", "{}").catch(() => "{}");
       let previousPort: number | undefined;
       try {
@@ -1284,8 +1423,9 @@ rm -f ${engineShellPath(engine, archivePath)} ${engineShellPath(engine, archiveB
       await installUiDependencies(engine, targetPath);
 
       await stopDevServerPort(engine, previousPort);
-      await saveConfig(targetPath);
+      await saveConfig(targetPath, undefined, { localSourcePath: sourcePath });
       setRepoPath(targetPath);
+      cacheLocalSourcePath(sourcePath);
       setHasProject(await hasUiProject(engine, targetPath));
       setDevServerUrl(null);
       setDevServerLoading(true);
@@ -1304,14 +1444,97 @@ rm -f ${engineShellPath(engine, archivePath)} ${engineShellPath(engine, archiveB
     } finally {
       await cleanupLocalArchive(localArchive);
     }
-  }, [_agentId, engine, saveConfig, startDevServer]);
+  }, [_agentId, cacheLocalSourcePath, engine, saveConfig, startDevServer]);
+
+  const applyRemoteChangesToLocal = useCallback(async () => {
+    if (!engine.isRemote || !repoPath) return;
+    let targetLocalPath = getCachedLocalSourcePath();
+    if (!targetLocalPath) {
+      const selected = await openDialog({ directory: true, title: "Select Local Repo to Apply Remote Changes" });
+      if (!selected) return;
+      targetLocalPath = typeof selected === "string" ? selected : String(selected);
+      cacheLocalSourcePath(targetLocalPath);
+      await saveConfig(repoPath, undefined, { localSourcePath: targetLocalPath });
+    }
+
+    const safeAgentId = _agentId.replace(/[^a-z0-9_-]/gi, "-");
+    const localArchivePath = `.openclaw/tmp/xcloud-ui-pull-${safeAgentId}-${Date.now()}.tgz`;
+    const localArchiveB64Path = `${localArchivePath}.b64`;
+    let remoteArchivePath = "";
+    let remoteArchiveB64Path = "";
+
+    try {
+      setRepoSyncState({
+        status: "packing",
+        sourcePath: repoPath,
+        targetPath: targetLocalPath,
+        message: "Packing remote repo changes...",
+      });
+      const remoteArchive = await createRemoteRepoArchive(engine, repoPath, safeAgentId);
+      remoteArchivePath = remoteArchive.archivePath;
+      remoteArchiveB64Path = remoteArchive.archiveB64Path;
+
+      const maxBase64Bytes = 210 * 1024 * 1024;
+      if (remoteArchive.bytes > maxBase64Bytes) {
+        throw new Error("Remote repo is too large to pull directly. Remove generated assets or large files and try again.");
+      }
+
+      const chunkSize = 96_000;
+      const chunks = Math.max(1, Math.ceil(remoteArchive.bytes / chunkSize));
+      for (let index = 0; index < chunks; index += 1) {
+        const offset = index * chunkSize;
+        const chunk = await readRemoteBase64Chunk(engine, remoteArchiveB64Path, offset, chunkSize);
+        setRepoSyncState({
+          status: "uploading",
+          sourcePath: repoPath,
+          targetPath: targetLocalPath,
+          progress: chunks <= 1 ? 1 : index / chunks,
+          message: `Downloading remote changes ${index + 1}/${chunks}...`,
+        });
+        await appendLocalBase64Chunk(localArchiveB64Path, chunk, index === 0);
+      }
+
+      setRepoSyncState({
+        status: "extracting",
+        sourcePath: repoPath,
+        targetPath: targetLocalPath,
+        progress: 1,
+        message: "Applying remote changes to local repo...",
+      });
+      await applyLocalRepoArchive(localArchiveB64Path, localArchivePath, targetLocalPath, safeAgentId);
+      setRepoSyncState({
+        status: "ready",
+        sourcePath: repoPath,
+        targetPath: targetLocalPath,
+        message: "Remote changes applied to local repo.",
+      });
+      window.setTimeout(() => setRepoSyncState({ status: "idle" }), 2500);
+    } catch (error) {
+      setRepoSyncState({
+        status: "error",
+        sourcePath: repoPath,
+        targetPath: targetLocalPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      await cleanupRemoteArchive(engine, remoteArchivePath, remoteArchiveB64Path);
+      await cleanupLocalArchive(localArchivePath);
+      await cleanupLocalArchive(localArchiveB64Path);
+    }
+  }, [_agentId, cacheLocalSourcePath, engine, getCachedLocalSourcePath, repoPath, saveConfig]);
 
   // Select repo
   const selectRepo = useCallback(async () => {
     if (engine.isRemote) {
+      const savedLocalPath = getCachedLocalSourcePath();
+      if (savedLocalPath) {
+        await syncLocalRepoPathToRemote(savedLocalPath);
+        return;
+      }
       const selected = await openDialog({ directory: true, title: "Sync Local UI Repo to Remote Engine" });
       if (!selected) return;
       const path = typeof selected === "string" ? selected : String(selected);
+      cacheLocalSourcePath(path);
       await syncLocalRepoPathToRemote(path);
       return;
     }
@@ -1320,21 +1543,23 @@ rm -f ${engineShellPath(engine, archivePath)} ${engineShellPath(engine, archiveB
     if (!selected) return;
     const path = typeof selected === "string" ? selected : String(selected);
     setRepoPath(path);
-    await saveConfig(path);
+    cacheLocalSourcePath(null);
+    await saveConfig(path, undefined, { localSourcePath: null });
     await ensureRealtimeBridge(engine, path);
     setDevServerLoading(true);
     setUiView("preview");
     await startDevServer(path);
-  }, [engine, saveConfig, startDevServer, syncLocalRepoPathToRemote]);
+  }, [cacheLocalSourcePath, engine, getCachedLocalSourcePath, saveConfig, startDevServer, syncLocalRepoPathToRemote]);
 
   // Disconnect repo
   const disconnectRepo = useCallback(async () => {
     setRepoPath(null);
+    cacheLocalSourcePath(null);
     setDevServerUrl(null);
     setUiView("menu");
     localStorage.removeItem(remoteConfigStorageKey);
     await writeOpenClawAgentFile(engine, _agentId, "ui-config.json", "{}\n").catch(() => {});
-  }, [_agentId, engine, remoteConfigStorageKey]);
+  }, [_agentId, cacheLocalSourcePath, engine, remoteConfigStorageKey]);
 
   const clearRepoSyncState = useCallback(() => {
     setRepoSyncState({ status: "idle" });
@@ -1357,7 +1582,8 @@ rm -f ${engineShellPath(engine, archivePath)} ${engineShellPath(engine, archiveB
     if (!engine.isRemote && !home) return;
     const uiPath = await scaffoldUI(_agentId, uiWsPath, home, engine);
     setRepoPath(uiPath);
-    await saveConfig(uiPath);
+    cacheLocalSourcePath(null);
+    await saveConfig(uiPath, undefined, { localSourcePath: null });
     await ensureRealtimeBridge(engine, uiPath);
 
     if (engine.isRemote) {
@@ -1382,15 +1608,15 @@ rm -f ${engineShellPath(engine, archivePath)} ${engineShellPath(engine, archiveB
 
     const cmd = cmds[editor];
     if (cmd) await invoke("run_shell", { cmd }).catch(() => {});
-  }, [_agentId, uiWsPath, home, saveConfig, engine, startDevServer]);
+  }, [_agentId, cacheLocalSourcePath, uiWsPath, home, saveConfig, engine, startDevServer]);
 
   return {
     agentId: _agentId,
-    repoPath, devServerUrl, devServerLoading, uiView, hasProject, autoOpenRevision,
+    repoPath, localSourcePath, devServerUrl, devServerLoading, uiView, hasProject, autoOpenRevision,
     engineIsRemote: engine.isRemote,
     repoSyncState,
     setUiView, selectRepo, disconnectRepo, launchPreview, createUI,
-    openRemoteUiWorkspace, clearRepoSyncState,
+    openRemoteUiWorkspace, applyRemoteChangesToLocal, clearRepoSyncState,
   };
 }
 
@@ -1549,10 +1775,10 @@ function CreateDropdown({ label, options, onSelect }: {
 
 /** Main UI tab content */
 export function AgentUIContent({
-  agentId, uiView, repoPath, devServerUrl, devServerLoading, hasProject,
+  agentId, uiView, repoPath, localSourcePath, devServerUrl, devServerLoading, hasProject,
   engineIsRemote, repoSyncState,
   setUiView, selectRepo, disconnectRepo, launchPreview, createUI,
-  openRemoteUiWorkspace, clearRepoSyncState,
+  openRemoteUiWorkspace, applyRemoteChangesToLocal, clearRepoSyncState,
 }: ReturnType<typeof useAgentUI>) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -2235,8 +2461,18 @@ true`,
               className={menuItemClass}
             >
               <FolderOpen className="h-3.5 w-3.5" />
-              {engineIsRemote ? "Sync Local Repo" : repoPath ? "Change" : "Open Repo"}
+              {engineIsRemote ? localSourcePath ? "Sync to Remote" : "Sync Local Repo" : repoPath ? "Change" : "Open Repo"}
             </button>
+
+            {engineIsRemote && repoPath && (
+              <button
+                onClick={() => closeBrowserMenu(applyRemoteChangesToLocal)}
+                className={menuItemClass}
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                Apply to Local
+              </button>
+            )}
 
             {engineIsRemote && (
               <button
@@ -2431,6 +2667,9 @@ true`,
           <div className="text-center max-w-xs">
             <h3 className="text-sm font-medium text-text">{repoPath.split("/").pop()}</h3>
             <p className="mt-1 text-[10px] text-text-muted truncate max-w-[220px]">{repoPath}</p>
+            {engineIsRemote && localSourcePath && (
+              <p className="mt-1 text-[10px] text-text-muted/70 truncate max-w-[220px]">Local: {localSourcePath}</p>
+            )}
             {!hasProject && (
               <p className="mt-1.5 text-[10px] text-amber-400/70">Waiting for project to be built...</p>
             )}
@@ -2450,8 +2689,17 @@ true`,
               className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
             >
               <FolderOpen className="h-3.5 w-3.5" />
-              {engineIsRemote ? "Sync Local Repo" : "Change Repo"}
+              {engineIsRemote ? localSourcePath ? "Sync to Remote" : "Sync Local Repo" : "Change Repo"}
             </button>
+            {engineIsRemote && (
+              <button
+                onClick={applyRemoteChangesToLocal}
+                className="flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-xs font-medium text-text hover:bg-white/15 transition-colors"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                Apply to Local
+              </button>
+            )}
             {engineIsRemote && (
               <button
                 onClick={openRemoteUiWorkspace}
@@ -2500,7 +2748,7 @@ true`,
               className="flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-xs font-medium text-black hover:bg-white/90 transition-colors"
             >
               <FolderOpen className="h-3.5 w-3.5" />
-              {engineIsRemote ? "Sync Local Repo" : "Open Repo"}
+              {engineIsRemote ? localSourcePath ? "Sync to Remote" : "Sync Local Repo" : "Open Repo"}
             </button>
             {engineIsRemote && (
               <button
