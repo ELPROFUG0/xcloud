@@ -356,28 +356,48 @@ function buildRemoteHelperUpdateCommand() {
   ].join(" && ");
 }
 
-function buildRemoteSetupCommand() {
+function buildRemoteSetupCommand(access: "lan" | "ssh" = "ssh") {
+  const gatewayBind = access === "lan" ? "lan" : "loopback";
+  const onboardCommand = [
+    "ONBOARD_STATUS=0",
+    `openclaw onboard --non-interactive --accept-risk --mode local --gateway-bind ${gatewayBind} --gateway-auth token --gateway-token "$TOKEN" --install-daemon --skip-channels --skip-skills --skip-search --skip-ui || ONBOARD_STATUS=$?`,
+    "if [ \"$ONBOARD_STATUS\" -ne 0 ]; then echo \"OpenClaw setup finished with a health warning; continuing to print xCloud connection details.\"; fi",
+  ].join("; ");
+  const printConnection = access === "lan"
+    ? [
+        "IP=$(hostname -I 2>/dev/null | awk '{print $1}' || ipconfig getifaddr en0)",
+        "echo \"URL: ws://$IP:18789\"",
+      ]
+    : [
+        "HOST=$(hostname -I 2>/dev/null | awk '{print $1}' || hostname)",
+        "echo \"Host: $HOST\"",
+        "echo \"SSH tunnel: ssh -N -L 18790:127.0.0.1:18789 root@$HOST\"",
+        "echo \"URL: ws://127.0.0.1:18790\"",
+      ];
   return [
     "unset npm_config_prefix",
+    "if ! command -v npm >/dev/null 2>&1; then if command -v apt-get >/dev/null 2>&1; then SUDO=\"\"; [ \"$(id -u)\" -eq 0 ] || SUDO=\"sudo\"; $SUDO apt-get update && $SUDO apt-get install -y curl ca-certificates gnupg openssl build-essential python3 && curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO -E bash - && $SUDO apt-get install -y nodejs; else curl -fsSL https://openclaw.ai/install.sh | bash; fi; fi",
     "npm install -g openclaw@latest",
     "TOKEN=$(openssl rand -hex 24)",
     buildRemoteHelperFilesCommand(),
-    "openclaw onboard --non-interactive --accept-risk --mode local --gateway-bind lan --gateway-auth token --gateway-token \"$TOKEN\" --install-daemon --skip-channels --skip-skills --skip-search --skip-ui",
-    "openclaw config set plugins.entries.xcloud-terminal.enabled true --strict-json",
-    "openclaw config set gateway.controlUi.allowedOrigins '[\"http://localhost:1420\",\"http://127.0.0.1:1420\",\"tauri://localhost\",\"http://tauri.localhost\"]' --strict-json",
-    "openclaw gateway restart",
-    "IP=$(hostname -I 2>/dev/null | awk '{print $1}' || ipconfig getifaddr en0)",
-    "echo \"URL: ws://$IP:18789\"",
+    onboardCommand,
+    "openclaw devices approve --latest >/dev/null 2>&1 && echo \"Approved pending OpenClaw device request.\" || true",
+    "openclaw config set plugins.entries.xcloud-terminal.enabled true --strict-json || echo \"Warning: could not enable the xCloud terminal helper automatically.\"",
+    "openclaw config set gateway.controlUi.allowedOrigins '[\"http://localhost:1420\",\"http://127.0.0.1:1420\",\"tauri://localhost\",\"http://tauri.localhost\"]' --strict-json || echo \"Warning: could not update Control UI allowed origins automatically.\"",
+    "openclaw gateway restart || echo \"Warning: gateway restart reported a problem; run openclaw gateway status.\"",
+    "openclaw gateway status || true",
+    ...printConnection,
     "echo \"Token: $TOKEN\"",
   ].join(" && ");
 }
 
 const DISPLAY_REMOTE_SETUP_COMMAND = [
+  "# installs Node/npm when missing",
   "npm install -g openclaw@latest",
   "# installs the xCloud remote terminal helper",
-  "openclaw onboard --gateway-bind lan ...",
+  "openclaw onboard --gateway-bind loopback ...",
   "openclaw gateway restart",
-  "echo URL and Token",
+  "echo SSH tunnel, URL, and Token",
 ].join("\n");
 
 const DISPLAY_REMOTE_HELPER_UPDATE_COMMAND = [
@@ -391,6 +411,12 @@ interface EngineSectionProps {
   engine: BrowserEngine;
 }
 
+const ENGINE_VIEW_LABELS: Record<EngineMode, { label: string; desc: string }> = {
+  local: { label: "Local", desc: "This machine" },
+  "mac-mini": { label: "Mac mini", desc: "Home OpenClaw host" },
+  vps: { label: "OpenClaw host", desc: "Any VPS or server" },
+};
+
 function normalizeGatewayUrl(value: string) {
   const trimmed = value.trim().replace(/^URL:\s*/i, "");
   if (!trimmed) return "";
@@ -402,6 +428,26 @@ function normalizeGatewayUrl(value: string) {
 
 function normalizeGatewayToken(value: string) {
   return value.trim().replace(/^Token:\s*/i, "");
+}
+
+function normalizePort(value: string | number | null | undefined, fallback: number) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return fallback;
+  return Math.round(numeric);
+}
+
+function localTunnelUrl(port: string | number | null | undefined) {
+  return `ws://127.0.0.1:${normalizePort(port, 18790)}`;
+}
+
+function inferSshHostFromGatewayUrl(url: string) {
+  try {
+    const parsed = new URL(normalizeGatewayUrl(url).replace(/^ws:\/\//, "http://").replace(/^wss:\/\//, "https://"));
+    if (!parsed.hostname || parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") return "";
+    return parsed.hostname;
+  } catch {
+    return "";
+  }
 }
 
 function getStoredRemoteEngineConfig(mode: Exclude<EngineMode, "local">) {
@@ -454,7 +500,7 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
     (localStorage.getItem("engineMode") as EngineMode) ?? "local",
   );
   const saveRemoteEngineConfig = (mode: Exclude<EngineMode, "local">, url: string, token: string) => {
-    const normalizedUrl = normalizeGatewayUrl(url);
+    const normalizedUrl = normalizeGatewayUrl(mode === "vps" ? localTunnelUrl(vpsTunnelPort) : url);
     const normalizedToken = normalizeGatewayToken(token);
     const prefix = mode === "mac-mini" ? "engineMacMini" : "engineVps";
     localStorage.setItem(`${prefix}Url`, normalizedUrl);
@@ -463,6 +509,10 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
       setMacMiniUrl(normalizedUrl);
       setMacMiniToken(normalizedToken);
     } else {
+      localStorage.setItem("engineVpsSshHost", vpsSshHost.trim());
+      localStorage.setItem("engineVpsSshUser", vpsSshUser.trim() || "root");
+      localStorage.setItem("engineVpsSshPort", String(normalizePort(vpsSshPort, 22)));
+      localStorage.setItem("engineVpsTunnelPort", String(normalizePort(vpsTunnelPort, 18790)));
       setVpsUrl(normalizedUrl);
       setVpsToken(normalizedToken);
     }
@@ -481,6 +531,12 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
   const [macMiniToken, setMacMiniToken] = useState(() => localStorage.getItem("engineMacMiniToken") ?? "");
   const [vpsUrl, setVpsUrl] = useState(() => localStorage.getItem("engineVpsUrl") ?? "");
   const [vpsToken, setVpsToken] = useState(() => localStorage.getItem("engineVpsToken") ?? "");
+  const [vpsSshHost, setVpsSshHost] = useState(() =>
+    localStorage.getItem("engineVpsSshHost") ?? inferSshHostFromGatewayUrl(localStorage.getItem("engineVpsUrl") ?? ""),
+  );
+  const [vpsSshUser, setVpsSshUser] = useState(() => localStorage.getItem("engineVpsSshUser") ?? "root");
+  const [vpsSshPort, setVpsSshPort] = useState(() => localStorage.getItem("engineVpsSshPort") ?? "22");
+  const [vpsTunnelPort, setVpsTunnelPort] = useState(() => localStorage.getItem("engineVpsTunnelPort") ?? "18790");
   const [engineSaved, setEngineSaved] = useState(false);
   const [engineStatus, setEngineStatus] = useState<{ running: boolean; port: number; pid: number | null; managed: boolean } | null>(null);
   const [copiedScript, setCopiedScript] = useState<"setup" | "helper" | null>(null);
@@ -504,9 +560,7 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
           </button>
         )}
         <h3 className="text-base font-semibold">
-          {selectedEngineView
-            ? ({ local: "Local", "mac-mini": "Mac Mini", vps: "Cloud VPS" }[selectedEngineView])
-            : "Engine"}
+          {selectedEngineView ? ENGINE_VIEW_LABELS[selectedEngineView].label : "Engine"}
         </h3>
       </div>
 
@@ -516,14 +570,15 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
         {!selectedEngineView && (
           <div className="space-y-1">
             {([
-              { id: "local" as EngineMode, label: "Local", desc: "This machine", img: localDesktopLogo },
-              { id: "mac-mini" as EngineMode, label: "Mac Mini", desc: "Home server", img: macMiniLogo },
-              { id: "vps" as EngineMode, label: "Cloud VPS", desc: "Cloud server", img: cloudServerLogo },
-            ]).map(({ id, label, desc, img }) => {
+              { id: "local" as EngineMode, img: localDesktopLogo },
+              { id: "mac-mini" as EngineMode, img: macMiniLogo },
+              { id: "vps" as EngineMode, img: cloudServerLogo },
+            ]).map(({ id, img }) => {
+              const { label, desc } = ENGINE_VIEW_LABELS[id];
               const active = engineMode === id;
               const configured = id === "local"
                 ? (engineStatus?.running ?? false)
-                : id === "mac-mini" ? !!macMiniUrl : !!vpsUrl;
+                : id === "mac-mini" ? !!macMiniUrl : !!(vpsSshHost || vpsUrl);
               return (
                 <button
                   key={id}
@@ -597,15 +652,17 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
           </div>
         )}
 
-        {/* Engine: Mac Mini / VPS detail */}
+        {/* Engine: remote host detail */}
         {(selectedEngineView === "mac-mini" || selectedEngineView === "vps") && (() => {
           const isMini = selectedEngineView === "mac-mini";
-          const url = isMini ? macMiniUrl : vpsUrl;
+          const title = ENGINE_VIEW_LABELS[selectedEngineView].label;
+          const url = isMini ? macMiniUrl : localTunnelUrl(vpsTunnelPort);
           const token = isMini ? macMiniToken : vpsToken;
           const setUrl = isMini ? setMacMiniUrl : setVpsUrl;
           const setToken = isMini ? setMacMiniToken : setVpsToken;
-          const installCmd = buildRemoteSetupCommand();
+          const installCmd = buildRemoteSetupCommand(isMini ? "lan" : "ssh");
           const helperUpdateCmd = buildRemoteHelperUpdateCommand();
+          const canSave = isMini ? Boolean(url.trim() && token.trim()) : Boolean(vpsSshHost.trim() && token.trim());
 
           return (
             <div>
@@ -618,7 +675,7 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
                 <button
                   onClick={() => {
                     const remote = saveRemoteEngineConfig(selectedEngineView, url, token);
-                    if (!remote.url) return;
+                    if (!canSave || !remote.url) return;
                     void setEngineMode(selectedEngineView, remote);
                   }}
                   className={cn(
@@ -632,16 +689,67 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
                   )} />
                 </button>
               </div>
-              <div className="flex items-center justify-between border-b border-border/50 py-3">
-                <span className="text-sm text-text">URL</span>
-                <input
-                  type="text"
-                  value={url}
-                  onChange={(e) => { setUrl(e.target.value); setEngineSaved(false); }}
-                  placeholder={isMini ? "ws://192.168.1.50:18789" : "ws://100.64.0.5:18789"}
-                  className="w-52 rounded-xl bg-[#262626] px-3 py-1.5 text-sm text-text font-mono placeholder:text-text-muted text-right focus:outline-none"
-                />
-              </div>
+              {isMini ? (
+                <div className="flex items-center justify-between border-b border-border/50 py-3">
+                  <span className="text-sm text-text">URL</span>
+                  <input
+                    type="text"
+                    value={url}
+                    onChange={(e) => { setUrl(e.target.value); setEngineSaved(false); }}
+                    placeholder="ws://192.168.1.50:18789"
+                    className="w-52 rounded-xl bg-[#262626] px-3 py-1.5 text-sm text-text font-mono placeholder:text-text-muted text-right focus:outline-none"
+                  />
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between border-b border-border/50 py-3">
+                    <span className="text-sm text-text">SSH Host</span>
+                    <input
+                      type="text"
+                      value={vpsSshHost}
+                      onChange={(e) => { setVpsSshHost(e.target.value); setEngineSaved(false); }}
+                      placeholder="2.24.111.200"
+                      className="w-52 rounded-xl bg-[#262626] px-3 py-1.5 text-sm text-text font-mono placeholder:text-text-muted text-right focus:outline-none"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between border-b border-border/50 py-3">
+                    <span className="text-sm text-text">SSH User</span>
+                    <input
+                      type="text"
+                      value={vpsSshUser}
+                      onChange={(e) => { setVpsSshUser(e.target.value); setEngineSaved(false); }}
+                      placeholder="root"
+                      className="w-52 rounded-xl bg-[#262626] px-3 py-1.5 text-sm text-text font-mono placeholder:text-text-muted text-right focus:outline-none"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between border-b border-border/50 py-3">
+                    <span className="text-sm text-text">SSH Port</span>
+                    <input
+                      type="text"
+                      value={vpsSshPort}
+                      onChange={(e) => { setVpsSshPort(e.target.value); setEngineSaved(false); }}
+                      placeholder="22"
+                      className="w-52 rounded-xl bg-[#262626] px-3 py-1.5 text-sm text-text font-mono placeholder:text-text-muted text-right focus:outline-none"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between border-b border-border/50 py-3">
+                    <span className="text-sm text-text">Local Tunnel</span>
+                    <input
+                      type="text"
+                      value={vpsTunnelPort}
+                      onChange={(e) => { setVpsTunnelPort(e.target.value); setEngineSaved(false); }}
+                      placeholder="18790"
+                      className="w-52 rounded-xl bg-[#262626] px-3 py-1.5 text-sm text-text font-mono placeholder:text-text-muted text-right focus:outline-none"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between border-b border-border/50 py-3">
+                    <span className="text-sm text-text">Gateway URL</span>
+                    <span className="w-52 truncate rounded-xl bg-[#202020] px-3 py-1.5 text-right font-mono text-sm text-text-muted">
+                      {url}
+                    </span>
+                  </div>
+                </>
+              )}
               <div className="flex items-center justify-between border-b border-border/50 py-3">
                 <span className="text-sm text-text">Token</span>
                 <input
@@ -655,12 +763,12 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
               {/* Setup script */}
               <div className="py-4 border-b border-border/50">
                 <h4 className="text-[13px] font-medium mb-1">
-                  {isMini ? "Setup new Mac Mini" : "Setup new VPS"}
+                  {isMini ? "Setup new Mac mini" : "Setup new OpenClaw host"}
                 </h4>
                 <p className="text-xs text-text-muted mb-3">
                   {isMini
-                    ? "Use this for a fresh Mac Mini. It installs the engine and outputs a new URL and token."
-                    : "Use this for a fresh VPS. It installs the engine and outputs a new URL and token."}
+                    ? "Use this on a fresh Mac mini or home server. It installs OpenClaw and outputs a URL and token."
+                    : "Use this on any VPS or server that can run OpenClaw. xCloud opens the SSH tunnel automatically after you paste the SSH host and token."}
                 </p>
                 <div className="flex items-center gap-2">
                   <pre className="flex-1 min-w-0 rounded-xl bg-[#262626] px-3 py-2.5 text-[11px] font-mono text-text-muted leading-relaxed overflow-x-auto">{DISPLAY_REMOTE_SETUP_COMMAND}</pre>
@@ -681,7 +789,7 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
               <div className="py-4 border-b border-border/50">
                 <h4 className="text-[13px] font-medium mb-1">Repair / update remote helper</h4>
                 <p className="text-xs text-text-muted mb-3">
-                  Use this when this engine is already connected. It keeps the current URL and token.
+                  Use this when this {title.toLowerCase()} is already connected. It keeps the current URL and token.
                 </p>
                 <div className="flex items-center gap-2">
                   <pre className="flex-1 min-w-0 rounded-xl bg-[#262626] px-3 py-2.5 text-[11px] font-mono text-text-muted leading-relaxed overflow-x-auto">{DISPLAY_REMOTE_HELPER_UPDATE_COMMAND}</pre>
@@ -721,7 +829,7 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
                         setTimeout(() => setEngineSaved(false), 3000);
                       });
                   }}
-                  disabled={!url.trim()}
+                  disabled={!canSave}
                   className="rounded-2xl bg-text text-bg px-8 py-2 text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-30"
                 >
                   {engineSaved ? "Saved" : "Save"}

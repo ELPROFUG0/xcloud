@@ -487,7 +487,7 @@ function TerminalDock({
               <TerminalPanel
                 initialCommand={state.command}
                 remoteEngine={state.remote ? engine : undefined}
-                remoteLabel={engine.mode === "mac-mini" ? "Mac Mini" : engine.mode === "vps" ? "VPS" : "Remote"}
+                remoteLabel={engine.mode === "mac-mini" ? "Mac mini" : engine.mode === "vps" ? "OpenClaw host" : "Remote"}
                 onClose={() => onClose(key)}
               />
             </div>

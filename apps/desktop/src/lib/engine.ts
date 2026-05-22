@@ -46,6 +46,10 @@ export interface EngineConfig {
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
 export type FrameHandler = (frame: Record<string, unknown>) => void;
 
+const GATEWAY_MIN_PROTOCOL = 3;
+const GATEWAY_MAX_PROTOCOL = 4;
+const OPERATOR_ADMIN_SCOPES = ["operator.admin"];
+
 function base64UrlEncode(buf: ArrayBuffer): string {
   const bytes = new Uint8Array(buf);
   let binary = "";
@@ -221,8 +225,8 @@ export class BrowserEngine {
               id: "__handshake",
               method: "connect",
               params: {
-                minProtocol: 3,
-                maxProtocol: 3,
+                minProtocol: GATEWAY_MIN_PROTOCOL,
+                maxProtocol: GATEWAY_MAX_PROTOCOL,
                 client: { id: "cli", version: "0.1.0", platform: "darwin", mode: "cli" },
                 role: "operator",
                 scopes,
@@ -342,6 +346,114 @@ export class BrowserEngine {
         // connect() failed, onclose will trigger another scheduleReconnect
       }
     }, delay);
+  }
+
+  async approvePendingDevice(requestId: string): Promise<void> {
+    const cleanRequestId = requestId.trim();
+    if (!cleanRequestId) throw new Error("Missing device pairing request id.");
+    if (!this.config.token.trim()) throw new Error("Missing gateway token.");
+
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(this.config.url);
+      let settled = false;
+      let connectOk = false;
+      let timeout: ReturnType<typeof setTimeout>;
+      const closeQuietly = () => {
+        try {
+          if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) ws.close();
+        } catch { /* ignore close failures */ }
+      };
+      const rejectOnce = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        closeQuietly();
+        reject(error);
+      };
+      const resolveOnce = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        closeQuietly();
+        resolve();
+      };
+      const frameMessage = (frame: Record<string, any>, fallback: string) => {
+        const error = frame.error;
+        if (error?.message) return String(error.message);
+        try {
+          return JSON.stringify(error ?? frame);
+        } catch {
+          return fallback;
+        }
+      };
+      timeout = setTimeout(() => {
+        rejectOnce(new Error("Device approval timed out."));
+      }, 12_000);
+
+      ws.onerror = () => rejectOnce(new Error("Could not connect to the gateway approval channel."));
+      ws.onclose = () => {
+        if (!settled) rejectOnce(new Error("Gateway approval channel closed before approval finished."));
+      };
+      ws.onmessage = (event) => {
+        let frame: Record<string, any>;
+        try {
+          frame = JSON.parse(event.data as string);
+        } catch {
+          rejectOnce(new Error("Gateway sent an invalid approval response."));
+          return;
+        }
+
+        if (frame.type === "event" && frame.event === "connect.challenge") {
+          ws.send(JSON.stringify({
+            type: "req",
+            id: "__approval_connect",
+            method: "connect",
+            params: {
+              minProtocol: GATEWAY_MIN_PROTOCOL,
+              maxProtocol: GATEWAY_MAX_PROTOCOL,
+              client: {
+                id: "gateway-client",
+                version: "0.1.0",
+                platform: navigator.platform || "darwin",
+                mode: "backend",
+              },
+              role: "operator",
+              scopes: OPERATOR_ADMIN_SCOPES,
+              auth: { token: this.config.token },
+              caps: [],
+            },
+          }));
+          return;
+        }
+
+        if (frame.type === "res" && frame.id === "__approval_connect") {
+          if (!frame.ok) {
+            rejectOnce(new Error(frameMessage(frame, "Gateway approval handshake failed.")));
+            return;
+          }
+          connectOk = true;
+          ws.send(JSON.stringify({
+            type: "req",
+            id: "__approval_device",
+            method: "device.pair.approve",
+            params: { requestId: cleanRequestId },
+          }));
+          return;
+        }
+
+        if (frame.type === "res" && frame.id === "__approval_device") {
+          if (frame.ok) resolveOnce();
+          else rejectOnce(new Error(frameMessage(frame, "Device approval failed.")));
+        }
+      };
+      ws.onopen = () => {
+        setTimeout(() => {
+          if (!settled && !connectOk && ws.readyState === WebSocket.OPEN) {
+            rejectOnce(new Error("Gateway did not start the approval handshake."));
+          }
+        }, 4_000);
+      };
+    });
   }
 
   disconnect(): void {

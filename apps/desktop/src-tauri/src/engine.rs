@@ -1,9 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::net::TcpStream;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{mpsc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
 
@@ -23,6 +27,13 @@ const UNICORE_WORKSPACE_PLUGIN_PACKAGE: &str =
 
 pub struct EngineProcess {
     pub child: Mutex<Option<Child>>,
+    pub tunnel_child: Mutex<Option<Child>>,
+    pub tunnel_local_port: Mutex<Option<u16>>,
+    pub oauth_tunnel_child: Mutex<Option<Child>>,
+    pub oauth_tunnel_local_port: Mutex<Option<u16>>,
+    pub oauth_capture_stop: Mutex<Option<mpsc::Sender<()>>>,
+    pub oauth_capture_port: Mutex<Option<u16>>,
+    pub oauth_capture_result: Arc<Mutex<Option<String>>>,
     pub port: Mutex<u16>,
     pub resource_dir: Mutex<Option<PathBuf>>,
 }
@@ -31,6 +42,13 @@ impl Default for EngineProcess {
     fn default() -> Self {
         Self {
             child: Mutex::new(None),
+            tunnel_child: Mutex::new(None),
+            tunnel_local_port: Mutex::new(None),
+            oauth_tunnel_child: Mutex::new(None),
+            oauth_tunnel_local_port: Mutex::new(None),
+            oauth_capture_stop: Mutex::new(None),
+            oauth_capture_port: Mutex::new(None),
+            oauth_capture_result: Arc::new(Mutex::new(None)),
             port: Mutex::new(DEFAULT_PORT),
             resource_dir: Mutex::new(None),
         }
@@ -61,6 +79,47 @@ pub struct AuthProfilesStatus {
     pub github_copilot: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshTunnelParams {
+    pub host: String,
+    pub user: Option<String>,
+    pub ssh_port: Option<u16>,
+    pub local_port: Option<u16>,
+    pub remote_port: Option<u16>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshTunnelStatus {
+    pub running: bool,
+    pub local_port: u16,
+    pub pid: Option<u32>,
+    pub url: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthRedirectCaptureStatus {
+    pub running: bool,
+    pub port: u16,
+    pub url: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthRedirectCaptured {
+    pub url: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshKeyInfo {
+    pub private_key_path: String,
+    pub public_key_path: String,
+    pub public_key: String,
+}
+
 fn load_identity() -> Option<IdentityInfo> {
     let state_dir = openclaw_state_dir().ok()?;
     let device_str = fs::read_to_string(state_dir.join("identity/device.json")).ok()?;
@@ -89,6 +148,116 @@ fn is_port_open(port: u16) -> bool {
         Duration::from_millis(500),
     )
     .is_ok()
+}
+
+fn terminate_child(child: &mut Child, grace: Duration) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(child.id() as i32, libc::SIGTERM);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+
+    std::thread::sleep(grace);
+    match child.try_wait() {
+        Ok(Some(_)) => {}
+        _ => {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+fn validate_ssh_part(value: &str, label: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("SSH {} is required.", label));
+    }
+    if value.chars().any(char::is_whitespace) {
+        return Err(format!("SSH {} cannot contain spaces.", label));
+    }
+    Ok(())
+}
+
+fn xcloud_ssh_key_path() -> Result<PathBuf, String> {
+    Ok(home_dir()?.join(".ssh").join("xcloud_openclaw_host"))
+}
+
+fn prepare_xcloud_ssh_key() -> Result<SshKeyInfo, String> {
+    let key_path = xcloud_ssh_key_path()?;
+    let public_key_path = key_path.with_extension("pub");
+    let ssh_dir = key_path
+        .parent()
+        .ok_or_else(|| "SSH key path has no parent directory".to_string())?;
+
+    fs::create_dir_all(ssh_dir)
+        .map_err(|e| format!("Failed to create {}: {}", ssh_dir.display(), e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(ssh_dir, fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("Failed to secure {}: {}", ssh_dir.display(), e))?;
+    }
+
+    if !key_path.exists() {
+        let output = Command::new("ssh-keygen")
+            .arg("-t")
+            .arg("ed25519")
+            .arg("-N")
+            .arg("")
+            .arg("-C")
+            .arg("xcloud-openclaw-host")
+            .arg("-f")
+            .arg(&key_path)
+            .output()
+            .map_err(|e| format!("Failed to run ssh-keygen: {}", e))?;
+        if !output.status.success() {
+            return Err(format!(
+                "ssh-keygen failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+    }
+
+    if !public_key_path.exists() {
+        let output = Command::new("ssh-keygen")
+            .arg("-y")
+            .arg("-f")
+            .arg(&key_path)
+            .output()
+            .map_err(|e| format!("Failed to export SSH public key: {}", e))?;
+        if !output.status.success() {
+            return Err(format!(
+                "Failed to export SSH public key: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        fs::write(&public_key_path, &output.stdout)
+            .map_err(|e| format!("Failed to write {}: {}", public_key_path.display(), e))?;
+    }
+
+    let public_key = fs::read_to_string(&public_key_path)
+        .map_err(|e| format!("Failed to read {}: {}", public_key_path.display(), e))?
+        .trim()
+        .to_string();
+    if public_key.is_empty() {
+        return Err("Generated SSH public key is empty.".to_string());
+    }
+
+    Ok(SshKeyInfo {
+        private_key_path: key_path.display().to_string(),
+        public_key_path: public_key_path.display().to_string(),
+        public_key,
+    })
+}
+
+fn read_child_stderr(child: &mut Child) -> String {
+    let mut output = String::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        let _ = stderr.read_to_string(&mut output);
+    }
+    output.trim().to_string()
 }
 
 fn home_dir() -> Result<PathBuf, String> {
@@ -828,6 +997,564 @@ fn gateway_health_monitor(app: tauri::AppHandle, port: u16) {
 }
 
 #[tauri::command]
+pub async fn engine_ssh_key_prepare() -> Result<SshKeyInfo, String> {
+    tauri::async_runtime::spawn_blocking(prepare_xcloud_ssh_key)
+        .await
+        .map_err(|e| format!("SSH key task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn engine_ssh_tunnel_start(
+    state: tauri::State<'_, EngineProcess>,
+    params: SshTunnelParams,
+) -> Result<SshTunnelStatus, String> {
+    let host = params.host.trim().to_string();
+    let user = params.user.unwrap_or_else(|| "root".to_string()).trim().to_string();
+    let ssh_port = params.ssh_port.unwrap_or(22);
+    let local_port = params.local_port.unwrap_or(18790);
+    let remote_port = params.remote_port.unwrap_or(DEFAULT_PORT);
+
+    validate_ssh_part(&host, "host")?;
+    validate_ssh_part(&user, "user")?;
+
+    if local_port == 0 || remote_port == 0 || ssh_port == 0 {
+        return Err("SSH ports must be valid positive numbers.".to_string());
+    }
+
+    let url = format!("ws://127.0.0.1:{}", local_port);
+
+    {
+        let mut tunnel_guard = state.tunnel_child.lock().unwrap();
+        let mut local_port_guard = state.tunnel_local_port.lock().unwrap();
+        if let Some(ref mut child) = *tunnel_guard {
+            match child.try_wait() {
+                Ok(None) if *local_port_guard == Some(local_port) && is_port_open(local_port) => {
+                    return Ok(SshTunnelStatus {
+                        running: true,
+                        local_port,
+                        pid: Some(child.id()),
+                        url,
+                    });
+                }
+                Ok(None) => {
+                    terminate_child(child, Duration::from_millis(500));
+                }
+                Ok(Some(_)) | Err(_) => {}
+            }
+            *tunnel_guard = None;
+            *local_port_guard = None;
+        }
+    }
+
+    // Reuse an existing external tunnel if the requested local port is already open.
+    if is_port_open(local_port) {
+        *state.tunnel_local_port.lock().unwrap() = Some(local_port);
+        return Ok(SshTunnelStatus {
+            running: true,
+            local_port,
+            pid: None,
+            url,
+        });
+    }
+
+    let target = format!("{}@{}", user, host);
+    let key_path = xcloud_ssh_key_path().ok().filter(|path| path.exists());
+    let mut command = Command::new("ssh");
+    command
+        .arg("-N")
+        .arg("-L")
+        .arg(format!("{}:127.0.0.1:{}", local_port, remote_port))
+        .arg("-p")
+        .arg(ssh_port.to_string())
+        .arg("-o")
+        .arg("ExitOnForwardFailure=yes")
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg("-o")
+        .arg("ServerAliveInterval=30")
+        .arg("-o")
+        .arg("ServerAliveCountMax=3")
+        .arg("-o")
+        .arg("StrictHostKeyChecking=accept-new");
+    if let Some(path) = key_path {
+        command
+            .arg("-i")
+            .arg(path)
+            .arg("-o")
+            .arg("IdentitiesOnly=yes");
+    }
+    let child = command
+        .arg(target)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start SSH tunnel: {}", e))?;
+
+    let pid = child.id();
+    {
+        let mut tunnel_guard = state.tunnel_child.lock().unwrap();
+        let mut local_port_guard = state.tunnel_local_port.lock().unwrap();
+        *tunnel_guard = Some(child);
+        *local_port_guard = Some(local_port);
+    }
+
+    for _ in 0..80 {
+        std::thread::sleep(Duration::from_millis(100));
+        if is_port_open(local_port) {
+            return Ok(SshTunnelStatus {
+                running: true,
+                local_port,
+                pid: Some(pid),
+                url,
+            });
+        }
+
+        let mut tunnel_guard = state.tunnel_child.lock().unwrap();
+        if let Some(ref mut child) = *tunnel_guard {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    let details = read_child_stderr(child);
+                    *tunnel_guard = None;
+                    *state.tunnel_local_port.lock().unwrap() = None;
+                    let detail_suffix = if details.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" SSH said: {}", details)
+                    };
+                    return Err(format!(
+                        "SSH tunnel exited before opening local port {} ({}).{} Make sure SSH access works for this host, then try again.",
+                        local_port, status, detail_suffix
+                    ));
+                }
+                Err(e) => {
+                    *tunnel_guard = None;
+                    *state.tunnel_local_port.lock().unwrap() = None;
+                    return Err(format!("SSH tunnel process check failed: {}", e));
+                }
+                Ok(None) => {}
+            }
+        }
+    }
+
+    {
+        let mut tunnel_guard = state.tunnel_child.lock().unwrap();
+        if let Some(ref mut child) = *tunnel_guard {
+            terminate_child(child, Duration::from_millis(500));
+            let details = read_child_stderr(child);
+            if !details.is_empty() {
+                *tunnel_guard = None;
+                *state.tunnel_local_port.lock().unwrap() = None;
+                return Err(format!(
+                    "SSH tunnel could not open local port {}. SSH said: {}",
+                    local_port, details
+                ));
+            }
+        }
+        *tunnel_guard = None;
+        *state.tunnel_local_port.lock().unwrap() = None;
+    }
+
+    Err(format!(
+        "SSH tunnel could not open local port {}. Make sure SSH key login works with `ssh -p {} {}@{}` and that OpenClaw is running on the host.",
+        local_port, ssh_port, user, host
+    ))
+}
+
+fn parse_http_request_target(buffer: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(buffer);
+    let line = text.lines().next()?.trim();
+    let mut parts = line.split_whitespace();
+    let method = parts.next()?;
+    if method != "GET" {
+        return None;
+    }
+    parts.next().map(|value| value.to_string())
+}
+
+fn write_oauth_capture_response(stream: &mut TcpStream, status: &str, body: &str) {
+    let response = format!(
+        "HTTP/1.1 {}\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+        status,
+        body.as_bytes().len(),
+        body
+    );
+    let _ = stream.write_all(response.as_bytes());
+    let _ = stream.flush();
+}
+
+fn handle_oauth_capture_request(
+    mut stream: TcpStream,
+    port: u16,
+    app: &tauri::AppHandle,
+    result_store: &Arc<Mutex<Option<String>>>,
+) -> bool {
+    let mut buffer = [0_u8; 8192];
+    let read = match stream.read(&mut buffer) {
+        Ok(read) => read,
+        Err(_) => return false,
+    };
+    let Some(target) = parse_http_request_target(&buffer[..read]) else {
+        write_oauth_capture_response(
+            &mut stream,
+            "400 Bad Request",
+            "<!doctype html><meta charset=\"utf-8\"><title>xCloud OAuth</title><body>Invalid OAuth callback request.</body>",
+        );
+        return false;
+    };
+
+    let path = target.split('?').next().unwrap_or("");
+    if path != "/auth/callback" {
+        write_oauth_capture_response(
+            &mut stream,
+            "404 Not Found",
+            "<!doctype html><meta charset=\"utf-8\"><title>xCloud OAuth</title><body>OAuth callback route not found.</body>",
+        );
+        return false;
+    }
+
+    let url = if target.starts_with("http://") || target.starts_with("https://") {
+        target
+    } else {
+        format!("http://localhost:{}{}", port, target)
+    };
+    *result_store.lock().unwrap() = Some(url.clone());
+    let _ = app.emit("engine-oauth-redirect-captured", OAuthRedirectCaptured { url });
+    write_oauth_capture_response(
+        &mut stream,
+        "200 OK",
+        "<!doctype html><meta charset=\"utf-8\"><title>xCloud OAuth</title><body style=\"font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111;color:#fff;display:grid;place-items:center;height:100vh;margin:0\"><main style=\"text-align:center\"><h1 style=\"font-size:18px;font-weight:600\">Authentication captured</h1><p style=\"color:#aaa\">You can close this window and return to xCloud.</p></main></body>",
+    );
+    true
+}
+
+fn stop_oauth_capture(state: &EngineProcess) -> bool {
+    let mut guard = state.oauth_capture_stop.lock().unwrap();
+    if let Some(stop) = guard.take() {
+        let _ = stop.send(());
+        *state.oauth_capture_port.lock().unwrap() = None;
+        return true;
+    }
+    *state.oauth_capture_port.lock().unwrap() = None;
+    false
+}
+
+#[tauri::command]
+pub async fn engine_oauth_redirect_capture_start(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineProcess>,
+    port: Option<u16>,
+) -> Result<OAuthRedirectCaptureStatus, String> {
+    let port = port.unwrap_or(1455);
+    if port == 0 {
+        return Err("OAuth callback port must be a valid positive number.".to_string());
+    }
+
+    {
+        let guard = state.oauth_capture_stop.lock().unwrap();
+        let active_port = *state.oauth_capture_port.lock().unwrap();
+        let has_pending_result = state.oauth_capture_result.lock().unwrap().is_some();
+        if guard.is_some() && active_port == Some(port) && !has_pending_result {
+            return Ok(OAuthRedirectCaptureStatus {
+                running: true,
+                port,
+                url: format!("http://localhost:{}/auth/callback", port),
+            });
+        }
+    }
+
+    stop_oauth_capture(&state);
+    *state.oauth_capture_result.lock().unwrap() = None;
+
+    let mut listeners = Vec::new();
+    let mut errors = Vec::new();
+    for address in [format!("127.0.0.1:{}", port), format!("[::1]:{}", port)] {
+        match TcpListener::bind(&address) {
+            Ok(listener) => {
+                listener
+                    .set_nonblocking(true)
+                    .map_err(|e| format!("OAuth callback listener failed: {}", e))?;
+                listeners.push(listener);
+            }
+            Err(err) => errors.push(format!("{} ({})", address, err)),
+        }
+    }
+
+    if listeners.is_empty() {
+        return Err(format!(
+            "OAuth callback port {} is already in use on this computer. Close the previous login tab/process and try again. Details: {}",
+            port,
+            errors.join("; ")
+        ));
+    }
+
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    let handled = Arc::new(AtomicBool::new(false));
+    let app_handle = app.clone();
+    let result_store = state.oauth_capture_result.clone();
+    thread::spawn(move || loop {
+        if stop_rx.try_recv().is_ok() {
+            break;
+        }
+
+        for listener in &listeners {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    if handled.load(Ordering::SeqCst) {
+                        continue;
+                    }
+                    if handle_oauth_capture_request(stream, port, &app_handle, &result_store) {
+                        handled.store(true, Ordering::SeqCst);
+                        return;
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(_) => {}
+            }
+        }
+
+        thread::sleep(Duration::from_millis(25));
+    });
+
+    *state.oauth_capture_stop.lock().unwrap() = Some(stop_tx);
+    *state.oauth_capture_port.lock().unwrap() = Some(port);
+
+    Ok(OAuthRedirectCaptureStatus {
+        running: true,
+        port,
+        url: format!("http://localhost:{}/auth/callback", port),
+    })
+}
+
+#[tauri::command]
+pub async fn engine_ssh_tunnel_status(
+    state: tauri::State<'_, EngineProcess>,
+) -> Result<Option<SshTunnelStatus>, String> {
+    let mut tunnel_guard = state.tunnel_child.lock().unwrap();
+    let local_port = *state.tunnel_local_port.lock().unwrap();
+    let Some(local_port) = local_port else {
+        return Ok(None);
+    };
+    let url = format!("ws://127.0.0.1:{}", local_port);
+
+    if let Some(ref mut child) = *tunnel_guard {
+        match child.try_wait() {
+            Ok(None) => {
+                return Ok(Some(SshTunnelStatus {
+                    running: is_port_open(local_port),
+                    local_port,
+                    pid: Some(child.id()),
+                    url,
+                }));
+            }
+            Ok(Some(_)) | Err(_) => {
+                *tunnel_guard = None;
+                *state.tunnel_local_port.lock().unwrap() = None;
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+#[tauri::command]
+pub async fn engine_ssh_tunnel_stop(state: tauri::State<'_, EngineProcess>) -> Result<bool, String> {
+    let mut tunnel_guard = state.tunnel_child.lock().unwrap();
+    if let Some(ref mut child) = *tunnel_guard {
+        terminate_child(child, Duration::from_millis(500));
+        *tunnel_guard = None;
+        *state.tunnel_local_port.lock().unwrap() = None;
+        return Ok(true);
+    }
+    *state.tunnel_local_port.lock().unwrap() = None;
+    Ok(false)
+}
+
+#[tauri::command]
+pub async fn engine_oauth_callback_tunnel_start(
+    state: tauri::State<'_, EngineProcess>,
+    params: SshTunnelParams,
+) -> Result<SshTunnelStatus, String> {
+    let host = params.host.trim().to_string();
+    let user = params.user.unwrap_or_else(|| "root".to_string()).trim().to_string();
+    let ssh_port = params.ssh_port.unwrap_or(22);
+    let local_port = params.local_port.unwrap_or(1455);
+    let remote_port = params.remote_port.unwrap_or(1455);
+
+    validate_ssh_part(&host, "host")?;
+    validate_ssh_part(&user, "user")?;
+
+    if local_port == 0 || remote_port == 0 || ssh_port == 0 {
+        return Err("SSH ports must be valid positive numbers.".to_string());
+    }
+
+    stop_oauth_capture(&state);
+    *state.oauth_capture_result.lock().unwrap() = None;
+
+    let url = format!("http://127.0.0.1:{}", local_port);
+    {
+        let mut tunnel_guard = state.oauth_tunnel_child.lock().unwrap();
+        let mut local_port_guard = state.oauth_tunnel_local_port.lock().unwrap();
+        if let Some(ref mut child) = *tunnel_guard {
+            match child.try_wait() {
+                Ok(None) if *local_port_guard == Some(local_port) && is_port_open(local_port) => {
+                    return Ok(SshTunnelStatus {
+                        running: true,
+                        local_port,
+                        pid: Some(child.id()),
+                        url,
+                    });
+                }
+                Ok(None) => terminate_child(child, Duration::from_millis(500)),
+                Ok(Some(_)) | Err(_) => {}
+            }
+            *tunnel_guard = None;
+            *local_port_guard = None;
+        }
+    }
+
+    if is_port_open(local_port) {
+        return Err(format!(
+            "OAuth callback port {} is already in use on this computer. Close the previous login tab/process and try again.",
+            local_port
+        ));
+    }
+
+    let target = format!("{}@{}", user, host);
+    let key_path = xcloud_ssh_key_path().ok().filter(|path| path.exists());
+    let mut command = Command::new("ssh");
+    command
+        .arg("-N")
+        .arg("-L")
+        .arg(format!("{}:127.0.0.1:{}", local_port, remote_port))
+        .arg("-p")
+        .arg(ssh_port.to_string())
+        .arg("-o")
+        .arg("ExitOnForwardFailure=yes")
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg("-o")
+        .arg("ServerAliveInterval=30")
+        .arg("-o")
+        .arg("ServerAliveCountMax=3")
+        .arg("-o")
+        .arg("StrictHostKeyChecking=accept-new");
+    if let Some(path) = key_path {
+        command
+            .arg("-i")
+            .arg(path)
+            .arg("-o")
+            .arg("IdentitiesOnly=yes");
+    }
+
+    let child = command
+        .arg(target)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start OAuth callback tunnel: {}", e))?;
+
+    let pid = child.id();
+    {
+        let mut tunnel_guard = state.oauth_tunnel_child.lock().unwrap();
+        let mut local_port_guard = state.oauth_tunnel_local_port.lock().unwrap();
+        *tunnel_guard = Some(child);
+        *local_port_guard = Some(local_port);
+    }
+
+    for _ in 0..50 {
+        std::thread::sleep(Duration::from_millis(100));
+        if is_port_open(local_port) {
+            return Ok(SshTunnelStatus {
+                running: true,
+                local_port,
+                pid: Some(pid),
+                url,
+            });
+        }
+
+        let mut tunnel_guard = state.oauth_tunnel_child.lock().unwrap();
+        if let Some(ref mut child) = *tunnel_guard {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    let details = read_child_stderr(child);
+                    *tunnel_guard = None;
+                    *state.oauth_tunnel_local_port.lock().unwrap() = None;
+                    let detail_suffix = if details.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" SSH said: {}", details)
+                    };
+                    return Err(format!(
+                        "OAuth callback tunnel exited before opening local port {} ({}).{}",
+                        local_port, status, detail_suffix
+                    ));
+                }
+                Err(e) => {
+                    *tunnel_guard = None;
+                    *state.oauth_tunnel_local_port.lock().unwrap() = None;
+                    return Err(format!("OAuth callback tunnel process check failed: {}", e));
+                }
+                Ok(None) => {}
+            }
+        }
+    }
+
+    {
+        let mut tunnel_guard = state.oauth_tunnel_child.lock().unwrap();
+        if let Some(ref mut child) = *tunnel_guard {
+            terminate_child(child, Duration::from_millis(500));
+            let details = read_child_stderr(child);
+            if !details.is_empty() {
+                *tunnel_guard = None;
+                *state.oauth_tunnel_local_port.lock().unwrap() = None;
+                return Err(format!(
+                    "OAuth callback tunnel could not open local port {}. SSH said: {}",
+                    local_port, details
+                ));
+            }
+        }
+        *tunnel_guard = None;
+        *state.oauth_tunnel_local_port.lock().unwrap() = None;
+    }
+
+    Err(format!(
+        "OAuth callback tunnel could not open local port {}. Make sure SSH key login works with `ssh -p {} {}@{}`.",
+        local_port, ssh_port, user, host
+    ))
+}
+
+#[tauri::command]
+pub async fn engine_oauth_callback_tunnel_stop(
+    state: tauri::State<'_, EngineProcess>,
+) -> Result<bool, String> {
+    let mut tunnel_guard = state.oauth_tunnel_child.lock().unwrap();
+    if let Some(ref mut child) = *tunnel_guard {
+        terminate_child(child, Duration::from_millis(500));
+        *tunnel_guard = None;
+        *state.oauth_tunnel_local_port.lock().unwrap() = None;
+        return Ok(true);
+    }
+    *state.oauth_tunnel_local_port.lock().unwrap() = None;
+    Ok(false)
+}
+
+#[tauri::command]
+pub async fn engine_oauth_redirect_capture_stop(
+    state: tauri::State<'_, EngineProcess>,
+) -> Result<bool, String> {
+    Ok(stop_oauth_capture(&state))
+}
+
+#[tauri::command]
+pub async fn engine_oauth_redirect_capture_take(
+    state: tauri::State<'_, EngineProcess>,
+) -> Result<Option<String>, String> {
+    Ok(state.oauth_capture_result.lock().unwrap().take())
+}
+
+#[tauri::command]
 pub async fn engine_status(state: tauri::State<'_, EngineProcess>) -> Result<EngineStatus, String> {
     let port = *state.port.lock().unwrap();
     let child_guard = state.child.lock().unwrap();
@@ -864,11 +1591,23 @@ pub async fn engine_stop(state: tauri::State<'_, EngineProcess>) -> Result<bool,
 pub fn cleanup(state: &EngineProcess) {
     let mut child_guard = state.child.lock().unwrap();
     if let Some(ref mut child) = *child_guard {
-        #[cfg(unix)]
-        unsafe { libc::kill(child.id() as i32, libc::SIGTERM); }
-        std::thread::sleep(Duration::from_millis(500));
-        let _ = child.kill();
-        let _ = child.wait();
+        terminate_child(child, Duration::from_millis(500));
         *child_guard = None;
     }
+
+    let mut tunnel_guard = state.tunnel_child.lock().unwrap();
+    if let Some(ref mut child) = *tunnel_guard {
+        terminate_child(child, Duration::from_millis(500));
+        *tunnel_guard = None;
+    }
+    *state.tunnel_local_port.lock().unwrap() = None;
+
+    let mut oauth_tunnel_guard = state.oauth_tunnel_child.lock().unwrap();
+    if let Some(ref mut child) = *oauth_tunnel_guard {
+        terminate_child(child, Duration::from_millis(500));
+        *oauth_tunnel_guard = None;
+    }
+    *state.oauth_tunnel_local_port.lock().unwrap() = None;
+
+    stop_oauth_capture(state);
 }

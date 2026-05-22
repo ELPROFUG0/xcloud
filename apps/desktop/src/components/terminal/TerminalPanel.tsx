@@ -114,6 +114,21 @@ function maybeOpenAuthUrlLocally(output: string, opened: Set<string>) {
   }
 }
 
+function extractOpenAIOAuthState(output: string) {
+  const text = stripAnsi(output);
+  for (const match of text.matchAll(URL_PATTERN)) {
+    const authUrl = normalizeAuthUrl(match[0]);
+    if (!authUrl) continue;
+    try {
+      const url = new URL(authUrl);
+      if (url.hostname !== "auth.openai.com" || url.pathname !== "/oauth/authorize") continue;
+      const state = url.searchParams.get("state")?.trim();
+      if (state) return state;
+    } catch {}
+  }
+  return null;
+}
+
 // ── Error boundary ──────────────────────────────────────────────────────────
 class TerminalErrorBoundary extends Component<
   { children: ReactNode; onClose?: () => void },
@@ -149,6 +164,10 @@ interface TerminalTab {
   title: string;
   icon: string;
   agentId: string;
+}
+
+interface OAuthRedirectCapturedEvent {
+  url?: string;
 }
 
 interface TerminalPanelProps {
@@ -220,6 +239,8 @@ function TerminalPanelInner({ className, onClose, initialCommand, remoteEngine, 
       const agent = CLI_AGENTS.find(a => a.id === agentId) ?? CLI_AGENTS[0]!;
       const launchCmd = command ?? (agent.command ? agent.command : null);
       const isAuthLaunch = command?.includes("# xcloud-auth-") ?? false;
+      const isOAuthTunnelLaunch = isAuthLaunch && (launchCmd?.includes("# xcloud-oauth-tunnel") ?? false);
+      const shouldCaptureOAuthUrl = isAuthLaunch && (launchCmd?.includes("# xcloud-oauth-capture-url") ?? false);
       const tabId = tabSeqRef.current++;
       let ptyId: number | undefined;
       let remotePtyId: string | undefined;
@@ -287,6 +308,57 @@ function TerminalPanelInner({ className, onClose, initialCommand, remoteEngine, 
         xterm.onData((data) => {
           remoteEngine.rpc("xcloud.pty.write", { id: remotePtyId, data }).catch(() => {});
         });
+        let oauthCaptureUnlisten: (() => void) | undefined;
+        let oauthCaptureActive = false;
+        let oauthCaptureSent = false;
+        let oauthCapturePoll: number | undefined;
+        let expectedOAuthState: string | null = null;
+        if (isAuthLaunch && !isOAuthTunnelLaunch) {
+          const sendCapturedOAuthUrl = (url?: string) => {
+            if (!url || oauthCaptureSent) return;
+            if (shouldCaptureOAuthUrl) {
+              try {
+                const captured = new URL(url);
+                const capturedState = captured.searchParams.get("state")?.trim() ?? "";
+                if (!expectedOAuthState) {
+                  xterm.write("\r\n\x1b[38;5;214m[OAuth callback captured before the current login URL was ready; ignoring it]\x1b[0m\r\n");
+                  return;
+                }
+                if (!capturedState || capturedState !== expectedOAuthState) {
+                  xterm.write("\r\n\x1b[38;5;214m[OAuth callback ignored because it belongs to an older login attempt]\x1b[0m\r\n");
+                  return;
+                }
+              } catch {
+                xterm.write("\r\n\x1b[38;5;214m[OAuth callback looked invalid; ignoring it]\x1b[0m\r\n");
+                return;
+              }
+            }
+            oauthCaptureSent = true;
+            xterm.write("\r\n\x1b[38;5;75m[OAuth callback captured, sending it to OpenClaw]\x1b[0m\r\n");
+            remoteEngine.rpc("xcloud.pty.write", { id: remotePtyId, data: `${url}\r` }).catch(() => {});
+            invoke("engine_oauth_redirect_capture_stop").catch(() => {});
+            if (oauthCapturePoll !== undefined) {
+              window.clearInterval(oauthCapturePoll);
+              oauthCapturePoll = undefined;
+            }
+          };
+          oauthCaptureUnlisten = await listen<OAuthRedirectCapturedEvent>("engine-oauth-redirect-captured", (event) => {
+            sendCapturedOAuthUrl(event.payload?.url);
+          });
+          try {
+            await invoke("engine_oauth_redirect_capture_start", { port: 1455 });
+            oauthCaptureActive = true;
+            oauthCapturePoll = window.setInterval(() => {
+              invoke<string | null>("engine_oauth_redirect_capture_take")
+                .then((url) => sendCapturedOAuthUrl(url ?? undefined))
+                .catch(() => {});
+            }, 250);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            xterm.write(`\r\n\x1b[38;5;214m[OAuth callback helper unavailable: ${message}]\x1b[0m\r\n`);
+            xterm.write("\x1b[38;5;241mIf the browser cannot finish automatically, copy the full localhost callback URL and paste it here.\x1b[0m\r\n");
+          }
+        }
         const openedAuthUrls = new Set<string>();
         let lastSeq = 0;
         let stopped = false;
@@ -305,13 +377,19 @@ function TerminalPanelInner({ className, onClose, initialCommand, remoteEngine, 
               if (Number.isFinite(seq)) lastSeq = Math.max(lastSeq, seq);
               if (typeof data === "string") {
                 const output = isAuthLaunch ? data.replace(/\r?\n?🦞 OpenClaw[^\r\n]*(?:\r?\n\s+[^\r\n]+)?\r?\n?/g, "\r\n") : data;
-                if (isAuthLaunch) maybeOpenAuthUrlLocally(output, openedAuthUrls);
+                if (isAuthLaunch) {
+                  expectedOAuthState = extractOpenAIOAuthState(output) ?? expectedOAuthState;
+                  maybeOpenAuthUrlLocally(output, openedAuthUrls);
+                }
                 xterm.write(output);
               }
             }
             if (result.exited === true && !exitWritten) {
               exitWritten = true;
               xterm.write("\r\n\x1b[38;5;241m[Process exited]\x1b[0m\r\n");
+              if (oauthCaptureActive) invoke("engine_oauth_redirect_capture_stop").catch(() => {});
+              if (isOAuthTunnelLaunch) invoke("engine_oauth_callback_tunnel_stop").catch(() => {});
+              if (oauthCapturePoll !== undefined) window.clearInterval(oauthCapturePoll);
               stopped = true;
               window.clearInterval(interval);
             }
@@ -331,6 +409,10 @@ function TerminalPanelInner({ className, onClose, initialCommand, remoteEngine, 
         unlistenersRef.current.set(tabId, () => {
           stopped = true;
           window.clearInterval(interval);
+          oauthCaptureUnlisten?.();
+          if (oauthCaptureActive) invoke("engine_oauth_redirect_capture_stop").catch(() => {});
+          if (isOAuthTunnelLaunch) invoke("engine_oauth_callback_tunnel_stop").catch(() => {});
+          if (oauthCapturePoll !== undefined) window.clearInterval(oauthCapturePoll);
         });
       } else if (ptyId !== undefined) {
         xterm.onData((data) => { invoke("pty_write", { id: ptyId, data }).catch(() => {}); });

@@ -104,8 +104,22 @@ function shellCommand(args: string[]) {
   return args.map(shellQuote).join(" ");
 }
 
-function remoteAuthCommandArgs(_provider: string, args: string[]) {
-  return args;
+function savedEngineIsRemote() {
+  const mode = localStorage.getItem("engineMode");
+  return mode === "mac-mini" || mode === "vps";
+}
+
+async function prepareRemoteOAuthBridge(provider: string, engine: BrowserEngine, remoteEngine: boolean) {
+  if (!remoteEngine || provider !== "openai-codex") return "none";
+  const savedMode = localStorage.getItem("engineMode");
+  const mode = engine.mode !== "local" ? engine.mode : savedMode;
+  if (mode === "vps") {
+    await invoke("engine_oauth_callback_tunnel_stop").catch(() => {});
+    await invoke("engine_oauth_redirect_capture_start", { port: 1455 });
+    return "capture-url";
+  }
+  await invoke("engine_oauth_redirect_capture_start", { port: 1455 });
+  return "capture";
 }
 
 function remoteBrowserStubCommand() {
@@ -154,7 +168,7 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
   const [authLoading, setAuthLoading] = useState<Record<string, boolean>>({});
   const [authStatus, setAuthStatus] = useState<Record<string, string>>({});
   const providerConfigs = modelProviders.map((group) => buildProviderConfig(group.provider));
-  const remoteEngine = engine.isRemote;
+  const remoteEngine = engine.isRemote || savedEngineIsRemote();
 
   const openAuthTerminal = useCallback(async (args: string[]) => {
     const command = await invoke<string>("xcloud_shell_command", { args });
@@ -171,22 +185,25 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
     }));
   }, [onOpenTerminal]);
 
-  const openRemoteAuthTerminal = useCallback((name: string, provider: string, args: string[]) => {
-    const hostLabel = engine.mode === "mac-mini" ? "Mac mini" : engine.mode === "vps" ? "VPS" : "remote host";
-    const authArgs = remoteAuthCommandArgs(provider, args);
+  const openRemoteAuthTerminal = useCallback(async (name: string, provider: string, args: string[]) => {
+    const hostLabel = engine.mode === "mac-mini" ? "Mac mini" : "OpenClaw host";
+    const oauthBridge = await prepareRemoteOAuthBridge(provider, engine, remoteEngine);
     const authCommand = [
       "printf '\\033[2J\\033[H'",
       `printf '%s\\n\\n' ${shellQuote(`Preparing ${name} login on this ${hostLabel}...`)}`,
+      oauthBridge === "capture-url" ? `printf '%s\\n\\n' ${shellQuote("OAuth callback bridge ready on localhost:1455.")}` : "",
+      oauthBridge === "capture" ? `printf '%s\\n\\n' ${shellQuote("OAuth callback helper ready on localhost:1455.")}` : "",
       remoteBrowserStubCommand(),
-      `OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH=1 OPENCLAW_HIDE_BANNER=1 openclaw ${shellCommand(authArgs)}`,
+      `OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH=1 OPENCLAW_HIDE_BANNER=1 openclaw ${shellCommand(args)}`,
       `rm -rf "$XCLOUD_BROWSER_STUB"`,
       `printf '\\n%s\\n' ${shellQuote("Login finished. Return to API Keys and click Verify.")}`,
-    ].join("; ");
+    ].filter(Boolean).join("; ");
     const marker = `# xcloud-auth-${Date.now()}`;
     const terminalCommand = [
       authCommand,
+      oauthBridge === "capture-url" ? "# xcloud-oauth-capture-url" : "",
       marker,
-    ].join("; ");
+    ].filter(Boolean).join("; ");
     if (onOpenTerminal) {
       onOpenTerminal(terminalCommand, { remote: true });
       return;
@@ -194,7 +211,7 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
     window.dispatchEvent(new CustomEvent("xcloud-open-terminal", {
       detail: { command: terminalCommand, remote: true },
     }));
-  }, [engine.mode, onOpenTerminal]);
+  }, [engine, onOpenTerminal, remoteEngine]);
 
   useEffect(() => {
     let cancelled = false;
@@ -354,7 +371,7 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
                       onClick={async () => {
                         setAuthLoading(p => ({ ...p, [item.id]: true }));
                         try {
-                          if (remoteEngine) openRemoteAuthTerminal(item.name, item.provider, item.cmdArgs);
+                          if (remoteEngine) await openRemoteAuthTerminal(item.name, item.provider, item.cmdArgs);
                           else await openAuthTerminal(item.cmdArgs);
                           setAuthStatus(p => ({ ...p, [item.id]: "check-terminal" }));
                         } catch {
