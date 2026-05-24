@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import {
   Search, MessageSquare, Layers, KeyRound, Globe, Sparkles,
   Plug, Brain, Server, Palette, SlidersHorizontal, Terminal,
+  ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { AgentInfo } from "@/hooks/use-agents";
@@ -12,8 +13,10 @@ interface CommandItem {
   id: string;
   label: string;
   icon: React.ReactNode;
+  badge?: React.ReactNode;
   category: "conversations" | "agents" | "settings" | "actions";
   action: () => void;
+  muted?: boolean;
 }
 
 interface CommandPaletteProps {
@@ -25,6 +28,35 @@ interface CommandPaletteProps {
   onSelectSession?: (agentId: string, sessionKey: string) => void;
   onOpenSettings: (section: string) => void;
   onOpenTerminal: () => void;
+}
+
+function ConversationAgentBadge({ agent }: { agent: AgentInfo }) {
+  const [imgError, setImgError] = useState(false);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [agent.avatar]);
+
+  if (agent.avatar && !imgError) {
+    return (
+      <img
+        src={agent.avatar}
+        alt=""
+        onError={() => setImgError(true)}
+        className="h-3 w-3 shrink-0 rounded-[4px] object-cover ring-1 ring-white/10"
+      />
+    );
+  }
+
+  return (
+    <div className="flex h-3 w-3 shrink-0 items-center justify-center rounded-[4px] bg-[#262626] text-text ring-1 ring-white/10">
+      {agent.emoji ? (
+        <span className="text-[9px] leading-none">{agent.emoji}</span>
+      ) : (
+        <Sparkles className="h-1.5 w-1.5" />
+      )}
+    </div>
+  );
 }
 
 export function CommandPalette({
@@ -39,6 +71,7 @@ export function CommandPalette({
 }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [showAllConversations, setShowAllConversations] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -48,7 +81,11 @@ export function CommandPalette({
     if (open) {
       setQuery("");
       setSelectedIndex(0);
-      setTimeout(() => inputRef.current?.focus(), 50);
+      setShowAllConversations(false);
+      requestAnimationFrame(() => {
+        if (listRef.current) listRef.current.scrollTop = 0;
+        inputRef.current?.focus();
+      });
     }
   }, [open]);
 
@@ -82,6 +119,7 @@ export function CommandPalette({
             id: `session-${s.key}`,
             label: s.preview.slice(0, 60),
             icon: <MessageSquare className="h-3.5 w-3.5" />,
+            badge: <ConversationAgentBadge agent={agent} />,
             category: "conversations",
             action: () => { onSelectSession?.(agent.id, s.key); onClose(); },
           });
@@ -136,19 +174,53 @@ export function CommandPalette({
 
   // Filter — without query only show conversations + agents
   const filtered = useMemo(() => {
-    if (!query.trim()) {
-      return items.filter(item => item.category === "conversations" || item.category === "agents");
+    const matchingItems = !query.trim()
+      ? items.filter(item => item.category === "conversations" || item.category === "agents")
+      : items.filter(item => {
+          const q = query.toLowerCase();
+          return item.label.toLowerCase().includes(q) || item.category.includes(q);
+        });
+
+    const conversations = matchingItems.filter(item => item.category === "conversations");
+    if (showAllConversations || conversations.length <= 10) return matchingItems;
+
+    let shownConversations = 0;
+    const limited: CommandItem[] = [];
+    for (const item of matchingItems) {
+      if (item.category !== "conversations") {
+        limited.push(item);
+        continue;
+      }
+      if (shownConversations < 10) {
+        limited.push(item);
+        shownConversations += 1;
+      }
     }
-    const q = query.toLowerCase();
-    return items.filter(item =>
-      item.label.toLowerCase().includes(q) ||
-      item.category.includes(q)
-    );
-  }, [items, query]);
+
+    let insertAt = 0;
+    for (let i = limited.length - 1; i >= 0; i -= 1) {
+      if (limited[i].category === "conversations") {
+        insertAt = i + 1;
+        break;
+      }
+    }
+    limited.splice(insertAt, 0, {
+      id: "show-more-conversations",
+      label: "Mostrar más",
+      icon: <ChevronDown className="h-3.5 w-3.5" />,
+      category: "conversations",
+      muted: true,
+      action: () => setShowAllConversations(true),
+    });
+
+    return limited;
+  }, [items, query, showAllConversations]);
 
   // Clamp index
   useEffect(() => {
     setSelectedIndex(0);
+    setShowAllConversations(false);
+    if (listRef.current) listRef.current.scrollTop = 0;
   }, [query]);
 
   // Keyboard navigation
@@ -167,9 +239,10 @@ export function CommandPalette({
 
   // Scroll selected into view
   useEffect(() => {
-    const el = listRef.current?.children[selectedIndex] as HTMLElement | undefined;
+    if (!open) return;
+    const el = listRef.current?.querySelector<HTMLElement>(`[data-command-index="${selectedIndex}"]`);
     el?.scrollIntoView({ block: "nearest" });
-  }, [selectedIndex]);
+  }, [open, selectedIndex]);
 
   // Group filtered items by category
   const grouped = useMemo(() => {
@@ -231,17 +304,24 @@ export function CommandPalette({
                 return (
                   <button
                     key={item.id}
+                    data-command-index={idx}
                     onClick={item.action}
-                    onMouseEnter={() => setSelectedIndex(idx)}
+                    onMouseMove={() => setSelectedIndex(idx)}
                     className={cn(
                       "flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors",
+                      item.id === "show-more-conversations" && "justify-center",
                       idx === selectedIndex ? "bg-white/[0.06]" : "hover:bg-white/[0.03]",
                     )}
                   >
-                    <div className="shrink-0 text-text">
+                    <div className={cn("shrink-0 text-text", item.muted && "text-text-muted")}>
                       {item.icon}
                     </div>
-                    <span className="truncate text-[13px] text-text">{item.label}</span>
+                    {item.badge && (
+                      <div className="-ml-1 shrink-0 opacity-90">
+                        {item.badge}
+                      </div>
+                    )}
+                    <span className={cn("truncate text-[13px]", item.muted ? "text-text-muted" : "text-text")}>{item.label}</span>
                   </button>
                 );
               })}
