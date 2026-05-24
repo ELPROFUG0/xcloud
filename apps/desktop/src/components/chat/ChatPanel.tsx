@@ -282,7 +282,7 @@ export function ChatPanel({ engine, agentId = "main", sessionKey: externalSessio
           >
             <AgentAvatar emoji={currentAgent?.emoji} avatar={currentAgent?.avatar} isMain={currentAgent?.isDefault} />
           </button>
-          <span className="text-[13px] font-medium text-text">{isEmptyChat ? "New chat" : displayName}</span>
+          <span className="text-[13px] font-medium text-text">{isEmptyChat ? "New conversation" : displayName}</span>
           {!isEmptyChat && (
             <span className="text-[13px] font-semibold" style={{ color: "#ffffff" }}>/ {activeSession === "main" ? "Main" : activeSession.split(":").pop() ?? activeSession}</span>
           )}

@@ -4,7 +4,7 @@ import type { BrowserEngine } from "@/lib/engine";
 import type { AgentInfo } from "@/hooks/use-agents";
 import type { SessionInfo } from "@/hooks/use-sessions";
 import type { WorkspaceInfo } from "@/hooks/use-workspaces";
-import { Search, MessageSquarePlus, Download, MoreHorizontal, Pin, Boxes, Plus, ArrowLeft, GitBranch, Link2, UserPlus, CornerDownRight, X, Trash2, Unlink, ChevronRight } from "lucide-react";
+import { Search, Bot, Download, MoreHorizontal, Pin, Boxes, Plus, ArrowLeft, GitBranch, Link2, UserPlus, CornerDownRight, X, Trash2, Unlink, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { EmojiPicker } from "../ui/EmojiPicker";
 import { AgentAvatar } from "../ui/AgentAvatar";
@@ -915,8 +915,8 @@ export function HomeScreen({
       {/* Top actions — padded for macOS traffic lights */}
       <div className={`sidebar-main-actions flex flex-col gap-1 px-3 pb-2 ${isFullscreen ? "pt-12" : "pt-14"}`}>
         <button onClick={onNewChat} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text transition-colors hover:bg-white/6">
-          <MessageSquarePlus className="h-4 w-4" />
-          <span className="text-[13px] font-medium">New chat</span>
+          <Bot className="h-4 w-4" />
+          <span className="text-[13px] font-medium">New agent</span>
         </button>
         <button onClick={onSearch} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-text transition-colors hover:bg-white/6">
           <Search className="h-4 w-4" />

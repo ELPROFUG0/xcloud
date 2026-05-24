@@ -4,7 +4,7 @@ import { useAgents } from "@/hooks/use-agents";
 import type { AgentInfo } from "@/hooks/use-agents";
 import { getWorkspaceAgentId, getWorkspaceDir, useWorkspaces } from "@/hooks/use-workspaces";
 import type { WorkspaceInfo } from "@/hooks/use-workspaces";
-import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, Sparkles, Plug, Brain, MessageCircle, Search, X } from "lucide-react";
+import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, Sparkles, Plug, Brain } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { HomeScreen } from "./home/HomeScreen";
 import { useSessions } from "@/hooks/use-sessions";
@@ -38,24 +38,61 @@ const MIN_WIDTH = 240;
 const MAX_WIDTH = 400;
 const DEFAULT_WIDTH = 280;
 
-const NEW_CHAT_SUGGESTIONS = [
+const NEW_AGENT_CREATION_GUIDE = [
+  "Create a real persistent OpenClaw agent from this request.",
+  "Use the native xcloud_agent_create tool once the agent name and role are clear.",
+  "Ask at most one concise question only if the request is missing a name or a useful role.",
+  "If the request asks for an interface, UI, app, dashboard, preview, or frontend, set createUi: true so the agent gets its own UI.",
+  "Do not stop at a plan or notes; materialize the agent when you have enough context.",
+].join("\n");
+
+const newAgentAvatarModules = import.meta.glob("@/assets/avatars/avatar-*.jpg", { eager: true, query: "?url", import: "default" }) as Record<string, string>;
+const NEW_AGENT_SUGGESTION_AVATARS = Object.values(newAgentAvatarModules).sort();
+const NEW_AGENT_SUGGESTION_TILTS = ["-rotate-[1.25deg]", "rotate-[1deg]", "-rotate-[0.75deg]"];
+const NEW_AGENT_VISIBLE_SUGGESTIONS = 3;
+const NEW_AGENT_SUGGESTION_ROTATE_MS = 5200;
+
+function buildNewAgentPrompt(request?: string) {
+  const trimmed = request?.trim();
+  return `${NEW_AGENT_CREATION_GUIDE}\n\nUser request:\n${trimmed || "Help me define and create a useful new agent."}`;
+}
+
+const NEW_AGENT_SUGGESTIONS = [
   {
-    id: "blank-conversation",
-    icon: MessageCircle,
-    text: "Start with a blank conversation",
-    actionPrompt: undefined,
+    id: "specialist-agent",
+    avatarSlot: 10,
+    text: "Create a specialist agent",
+    actionPrompt: "Create a persistent specialist agent for one clear responsibility. Give it a concise name, define what it should handle, what it should avoid, and how it should report progress.",
   },
   {
-    id: "useful-next-step",
-    icon: Sparkles,
-    text: "Ask this agent to suggest a useful next step",
-    actionPrompt: "Suggest the most useful next step for this agent and help me start it.",
+    id: "agent-with-ui",
+    avatarSlot: 16,
+    text: "Give an agent its own UI",
+    actionPrompt: "Create a persistent agent with its own useful UI/app. The UI should match the agent's job, open automatically in the UI tab, and include the controls or views a real user would expect.",
   },
   {
-    id: "review-capabilities",
-    icon: Search,
-    text: "Review what this agent can do",
-    actionPrompt: "Review your current capabilities, tools, and workspace. Then suggest what I should ask you to do first.",
+    id: "agent-team",
+    avatarSlot: 29,
+    text: "Design a small agent team",
+    actionPrompt: "Create a small team of persistent agents for one project. Define each agent's role, when I should use it, and how the agents should work together without overlapping responsibilities.",
+  },
+  {
+    id: "research-scout",
+    avatarSlot: 4,
+    text: "Build a research scout",
+    actionPrompt: "Create a persistent research scout agent that can investigate topics, compare options, track sources, summarize tradeoffs, and keep useful findings organized for later.",
+  },
+  {
+    id: "workflow-operator",
+    avatarSlot: 23,
+    text: "Automate a workflow",
+    actionPrompt: "Create a persistent workflow operator agent for a repeated process. It should ask for the missing process details, then define steps, checks, reminders, and handoff rules.",
+  },
+  {
+    id: "personal-coach",
+    avatarSlot: 31,
+    text: "Make a personal coach",
+    actionPrompt: "Create a persistent personal coach agent for a personal goal. Give it a practical tone, clear boundaries, progress tracking, and a simple routine for check-ins.",
   },
 ];
 
@@ -324,7 +361,7 @@ async function ensureActiveRunSteering(engine: BrowserEngine) {
   ).catch(() => {});
 }
 
-function NewChatView({
+function NewAgentView({
   agents,
   engine,
   sidebarCollapsed,
@@ -337,26 +374,41 @@ function NewChatView({
   isFullscreen?: boolean;
   onStart: (agentId: string, prompt?: string) => void;
 }) {
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem("dismissedNewChatSuggestions") ?? "[]") as string[];
-      return new Set(saved);
-    } catch {
-      return new Set();
-    }
-  });
+  const defaultBuilderId = useMemo(
+    () => agents.find((agent) => agent.id === MAIN_AGENT_ID)?.id ?? agents.find((agent) => agent.isDefault)?.id ?? agents[0]?.id ?? null,
+    [agents],
+  );
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(defaultBuilderId);
+  const [suggestionOffset, setSuggestionOffset] = useState(0);
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
   const availableAgents = agents.length > 0 ? agents : [];
-  const visibleSuggestions = NEW_CHAT_SUGGESTIONS.filter((item) => !dismissedSuggestions.has(item.id));
+  const visibleSuggestions = useMemo(() => {
+    const count = Math.min(NEW_AGENT_VISIBLE_SUGGESTIONS, NEW_AGENT_SUGGESTIONS.length);
+    return Array.from({ length: count }, (_, index) => NEW_AGENT_SUGGESTIONS[(suggestionOffset + index) % NEW_AGENT_SUGGESTIONS.length]);
+  }, [suggestionOffset]);
 
-  const dismissSuggestion = useCallback((id: string) => {
-    setDismissedSuggestions((prev) => {
-      const next = new Set(prev);
-      next.add(id);
-      localStorage.setItem("dismissedNewChatSuggestions", JSON.stringify([...next]));
-      return next;
-    });
+  useEffect(() => {
+    if (!defaultBuilderId) return;
+    if (!selectedAgentId || !agents.some((agent) => agent.id === selectedAgentId)) {
+      setSelectedAgentId(defaultBuilderId);
+    }
+  }, [agents, defaultBuilderId, selectedAgentId]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setSuggestionOffset((offset) => (offset + NEW_AGENT_VISIBLE_SUGGESTIONS) % NEW_AGENT_SUGGESTIONS.length);
+    }, NEW_AGENT_SUGGESTION_ROTATE_MS);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const startAgentCreation = useCallback((request?: string) => {
+    if (!selectedAgentId) return;
+    onStart(selectedAgentId, buildNewAgentPrompt(request));
+  }, [onStart, selectedAgentId]);
+
+  const prefillAgentPrompt = useCallback((prompt: string) => {
+    window.dispatchEvent(new CustomEvent("xcloud-prefill-prompt", { detail: prompt }));
   }, []);
 
   return (
@@ -365,14 +417,14 @@ function NewChatView({
         className="flex h-9 shrink-0 items-center border-b border-border px-4"
         style={{ paddingLeft: sidebarCollapsed ? (isFullscreen ? 50 : 110) : undefined, transition: "padding-left 150ms ease" }}
       >
-        <span className="text-[13px] font-medium text-text">New chat</span>
+        <span className="text-[13px] font-medium text-text">New agent</span>
       </header>
 
       <div className="flex flex-1 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-[820px] flex-col justify-center px-8 pb-[10vh] pt-8">
+        <div className="mx-auto flex w-full max-w-[760px] flex-col justify-center px-8 pb-[10vh] pt-8">
           <div className="animate-[fadeBlurIn_180ms_ease-out]">
-            <h1 className="text-center text-[28px] font-semibold leading-tight tracking-normal text-text">
-              Choose an agent to chat with
+            <h1 className="mb-7 text-center text-[28px] font-semibold leading-tight tracking-normal text-text">
+              What agent should we create?
             </h1>
 
             {availableAgents.length === 0 && (
@@ -381,57 +433,51 @@ function NewChatView({
               </div>
             )}
 
-            <div className="mt-7">
+            <div className="mb-4 flex flex-wrap justify-center gap-3">
+              {visibleSuggestions.map((item, index) => {
+                const avatar = NEW_AGENT_SUGGESTION_AVATARS.length > 0
+                  ? NEW_AGENT_SUGGESTION_AVATARS[item.avatarSlot % NEW_AGENT_SUGGESTION_AVATARS.length]
+                  : undefined;
+                return (
+                  <button
+                    key={`${suggestionOffset}-${item.id}`}
+                    type="button"
+                    onClick={() => prefillAgentPrompt(item.actionPrompt)}
+                    className={cn(
+                      "group flex h-12 items-center gap-2.5 rounded-[18px] border border-white/[0.07] bg-white/[0.04] px-3.5 text-left text-[12px] font-medium text-text-muted shadow-[0_12px_28px_rgba(0,0,0,0.16)] transition-[background-color,border-color,color,box-shadow,transform] duration-200 ease-out hover:-translate-y-0.5 hover:rotate-0 hover:bg-white/[0.075] hover:text-text",
+                      NEW_AGENT_SUGGESTION_TILTS[index % NEW_AGENT_SUGGESTION_TILTS.length],
+                    )}
+                    style={{ animation: `newAgentSuggestionIn 320ms cubic-bezier(0.2,0.8,0.2,1) ${index * 55}ms both` }}
+                  >
+                    {avatar && (
+                      <img
+                        src={avatar}
+                        alt=""
+                        className="h-7 w-7 shrink-0 rounded-[10px] object-cover ring-1 ring-white/10"
+                      />
+                    )}
+                    <span className="max-w-[170px] truncate">{item.text}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div>
               <ChatInput
-                onSend={(prompt) => {
-                  if (!selectedAgentId) return;
-                  onStart(selectedAgentId, prompt);
-                }}
+                onSend={(prompt) => startAgentCreation(prompt)}
                 disabled={!engine.connected || !selectedAgentId}
                 engine={engine}
                 variant="hero"
-                contextLabel={selectedAgent ? (selectedAgent.name ?? selectedAgent.id) : "Select an agent"}
+                contextLabel={selectedAgent ? (selectedAgent.name ?? selectedAgent.id) : "Select builder"}
                 contextEmoji={selectedAgent?.emoji}
                 contextAvatar={selectedAgent?.avatar}
                 contextIsMain={selectedAgent?.isDefault}
                 agentOptions={availableAgents}
                 selectedAgentId={selectedAgentId}
                 onSelectAgent={setSelectedAgentId}
-                placeholder={selectedAgent ? `Give ${selectedAgent.name ?? selectedAgent.id} a task` : "Select an agent first"}
+                placeholder="Describe the agent you want to create"
               />
             </div>
-
-            {visibleSuggestions.length > 0 && (
-              <div className="mt-4 divide-y divide-white/[0.06]">
-                {visibleSuggestions.map((item) => {
-                  const Icon = item.icon;
-                  return (
-                    <div
-                      key={item.id}
-                      className="group flex items-center gap-2 px-4 py-3 text-text-muted transition-colors hover:text-text"
-                    >
-                      <button
-                        onClick={() => selectedAgentId && onStart(selectedAgentId, item.actionPrompt)}
-                        disabled={!selectedAgentId}
-                        className="flex min-w-0 flex-1 items-center gap-3 text-left text-[13px] disabled:opacity-35"
-                      >
-                        <Icon className="h-4 w-4 shrink-0" />
-                        <span className="truncate">{item.text}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => dismissSuggestion(item.id)}
-                        className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-text-muted/70 opacity-0 transition-all hover:bg-white/[0.14] hover:text-text group-hover:opacity-100"
-                        aria-label="Hide suggestion"
-                        title="Hide suggestion"
-                      >
-                        <X className="h-2.5 w-2.5" />
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
           </div>
         </div>
       </div>
@@ -570,7 +616,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const activeChatSessionKeyRef = useRef<string | null>(null);
   const unreadAgentIds = useMemo(() => new Set([...unreadSessionKeys].map(getAgentIdFromSessionKey)), [unreadSessionKeys]);
   const workingAgentIds = useMemo(() => new Set([...workingSessionKeys].map(getAgentIdFromSessionKey)), [workingSessionKeys]);
-  const activeTerminalKey = showSettings ? "settings" : activeAgentId ? `agent:${currentAgentId}` : hasWorkspaceChat ? `workspace:${activeWorkspace.id}` : showNewChat ? "new-chat" : "workspace";
+  const activeTerminalKey = showSettings ? "settings" : activeAgentId ? `agent:${currentAgentId}` : hasWorkspaceChat ? `workspace:${activeWorkspace.id}` : showNewChat ? "new-agent" : "workspace";
   const activeTerminal = terminalByContext[activeTerminalKey];
   const showTerminal = activeTerminal?.visible ?? false;
   const composioConnectedStorageKey = engineScopedStorageKey("composioConnected", engine);
@@ -1563,7 +1609,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                   appTools={handleAppTool}
                 />
               ) : showNewChat ? (
-                <NewChatView
+                <NewAgentView
                   agents={globalAgents}
                   engine={engine}
                   sidebarCollapsed={sidebarCollapsed}
