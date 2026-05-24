@@ -2,6 +2,31 @@ import { BaseDirectory, mkdir, readDir, readTextFile, remove, writeTextFile } fr
 import type { BrowserEngine } from "@/lib/engine";
 
 export const MAIN_AGENT_ID = "main";
+const MAIN_AGENT_DEFAULT_IDENTITY_MD = `# IDENTITY.md
+
+- **Name:** Main
+- **Role:** Global xCloud main agent for this OpenClaw engine.
+- **Vibe:** Practical, direct, helpful, and context-aware.
+- **Emoji:**
+
+You are the global Main agent for this engine. You coordinate normal chats, agents, tools, automations, channels, integrations, memory, and app work unless the user is explicitly inside a named xCloud workspace.
+`;
+
+const MAIN_AGENT_AGENTS_MARKER_START = "<!-- XCLOUD_MAIN_AGENT_START -->";
+const MAIN_AGENT_AGENTS_MARKER_END = "<!-- XCLOUD_MAIN_AGENT_END -->";
+const MAIN_AGENT_AGENTS_APPEND = `${MAIN_AGENT_AGENTS_MARKER_START}
+
+## xCloud Main Agent
+
+You are the global Main agent for this OpenClaw engine.
+
+- Your agent id is \`main\`.
+- Your display name is \`Main\` unless the user intentionally changes your identity.
+- The OpenClaw "workspace" folder is your durable home directory. Do not introduce yourself as being inside a named xCloud workspace/project unless the current chat is explicitly scoped to one.
+- Named xCloud workspaces are separate project spaces with their own workspace-scoped main agents.
+
+${MAIN_AGENT_AGENTS_MARKER_END}
+`;
 
 export interface OpenClawAgentFile {
   name: string;
@@ -46,10 +71,58 @@ function decodeBase64Utf8(value: string) {
   return new TextDecoder().decode(bytes);
 }
 
+function nodeHeredocCommand(script: string) {
+  return `(node <<'NODE'\n${script}\nNODE\n)`;
+}
+
 function assertSafeHomeRelativePath(path: string) {
   if (!path || path.startsWith("/") || path.includes("\0") || path.split("/").some((part) => part === "..")) {
     throw new Error(`Unsafe home-relative path: ${path}`);
   }
+}
+
+function isPlaceholderIdentity(content: string) {
+  const value = content.trim();
+  return !value
+    || value.includes("_Fill this in during your first conversation._")
+    || value.includes("_(pick something you like)_")
+    || value.includes("_(AI? robot? familiar?")
+    || /^\s*-?\s*\*\*Name:\*\*\s*(?:\r?\n\s*_\(|$)/im.test(value);
+}
+
+export function buildMainAgentDefaultsCommand() {
+  const payload = encodeBase64Utf8(JSON.stringify({
+    identityMd: MAIN_AGENT_DEFAULT_IDENTITY_MD,
+    agentsAppend: MAIN_AGENT_AGENTS_APPEND,
+    markerStart: MAIN_AGENT_AGENTS_MARKER_START,
+  }));
+  return nodeHeredocCommand(`const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const payload = JSON.parse(Buffer.from("${payload}", "base64").toString("utf8"));
+const workspace = path.join(os.homedir(), ".openclaw", "workspace");
+const identityPath = path.join(workspace, "IDENTITY.md");
+const agentsPath = path.join(workspace, "AGENTS.md");
+function isPlaceholderIdentity(content) {
+  const value = String(content || "").trim();
+  return !value
+    || value.includes("_Fill this in during your first conversation._")
+    || value.includes("_(pick something you like)_")
+    || value.includes("_(AI? robot? familiar?")
+    || /^\\s*-?\\s*\\*\\*Name:\\*\\*\\s*(?:\\r?\\n\\s*_\\(|$)/im.test(value);
+}
+fs.mkdirSync(workspace, { recursive: true });
+let identity = "";
+try { identity = fs.readFileSync(identityPath, "utf8"); } catch {}
+if (isPlaceholderIdentity(identity)) {
+  fs.writeFileSync(identityPath, payload.identityMd, "utf8");
+}
+let agents = "";
+try { agents = fs.readFileSync(agentsPath, "utf8"); } catch {}
+if (!agents.includes(payload.markerStart)) {
+  const next = agents.trimEnd() + (agents.trim() ? "\\n\\n" : "") + payload.agentsAppend;
+  fs.writeFileSync(agentsPath, next, "utf8");
+}`);
 }
 
 export async function retryEngineRpc(
@@ -104,6 +177,14 @@ export async function runRemoteEngineShell(engine: BrowserEngine, command: strin
   return runRemoteShell(engine, command, timeoutMs);
 }
 
+export async function ensureRemoteMainAgentDefaults(engine: BrowserEngine) {
+  if (!engine.isRemote) return;
+  const identity = await readOpenClawAgentFile(engine, MAIN_AGENT_ID, "IDENTITY.md", "");
+  const agents = await readOpenClawAgentFile(engine, MAIN_AGENT_ID, "AGENTS.md", "");
+  if (!isPlaceholderIdentity(identity) && agents.includes(MAIN_AGENT_AGENTS_MARKER_START)) return;
+  await runRemoteShell(engine, buildMainAgentDefaultsCommand(), 20_000);
+}
+
 function extractMarkedPayload(output: string, marker: string) {
   const match = output.match(new RegExp(`${marker}_START__([A-Za-z0-9+/=]*)__${marker}_END__`));
   return match?.[1] ? decodeBase64Utf8(match[1]) : "";
@@ -112,8 +193,7 @@ function extractMarkedPayload(output: string, marker: string) {
 async function readRemoteHomeText(engine: BrowserEngine, relativePath: string, fallback: string) {
   assertSafeHomeRelativePath(relativePath);
   const payload = encodeBase64Utf8(JSON.stringify({ relativePath }));
-  const command = `node <<'NODE'
-const fs = require("node:fs");
+  const command = nodeHeredocCommand(`const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const payload = JSON.parse(Buffer.from("${payload}", "base64").toString("utf8"));
@@ -122,8 +202,7 @@ const target = path.resolve(root, payload.relativePath);
 if (!target.startsWith(root + path.sep)) process.exit(64);
 let content = "";
 try { content = fs.readFileSync(target, "utf8"); } catch {}
-process.stdout.write("__XCLOUD_FILE_START__" + Buffer.from(content, "utf8").toString("base64") + "__XCLOUD_FILE_END__");
-NODE`;
+process.stdout.write("__XCLOUD_FILE_START__" + Buffer.from(content, "utf8").toString("base64") + "__XCLOUD_FILE_END__");`);
   try {
     const output = await runRemoteShell(engine, command);
     const content = extractMarkedPayload(output, "XCLOUD_FILE");
@@ -136,8 +215,7 @@ NODE`;
 async function writeRemoteHomeText(engine: BrowserEngine, relativePath: string, content: string) {
   assertSafeHomeRelativePath(relativePath);
   const payload = encodeBase64Utf8(JSON.stringify({ relativePath, content }));
-  const command = `node <<'NODE'
-const fs = require("node:fs");
+  const command = nodeHeredocCommand(`const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const payload = JSON.parse(Buffer.from("${payload}", "base64").toString("utf8"));
@@ -146,8 +224,7 @@ const target = path.resolve(root, payload.relativePath);
 if (!target.startsWith(root + path.sep)) process.exit(64);
 fs.mkdirSync(path.dirname(target), { recursive: true });
 fs.writeFileSync(target, payload.content, "utf8");
-process.stdout.write("__XCLOUD_FILE_START__b2s=__XCLOUD_FILE_END__");
-NODE`;
+process.stdout.write("__XCLOUD_FILE_START__b2s=__XCLOUD_FILE_END__");`);
   await runRemoteShell(engine, command);
 }
 

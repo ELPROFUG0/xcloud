@@ -6,7 +6,7 @@ import { ensureAgentDefaultAvatar, isAgentAvatarOptedOut } from "@/lib/update-id
 import { engineScopedStorageKey } from "@/lib/engine-storage";
 import { getStableDefaultAvatarUrl } from "@/lib/default-avatar";
 import { AGENT_VISUALS_CHANGED_EVENT, getAgentVisualOverride } from "@/lib/agent-visuals";
-import { readOpenClawAgentFile } from "@/lib/openclaw-store";
+import { ensureRemoteMainAgentDefaults, readOpenClawAgentFile } from "@/lib/openclaw-store";
 
 export interface AgentInfo {
   id: string;
@@ -27,6 +27,7 @@ interface AgentIdentityPayload {
 
 const MAIN_AGENT_ID = "main";
 const DELETED_AGENTS_KEY = "xcloudDeletedAgents";
+const seededRemoteMainDefaults = new Set<string>();
 
 function readDeletedAgentIds(storageKey: string) {
   try {
@@ -126,6 +127,12 @@ function normalizeAgentModel(model: string | { primary?: string } | undefined): 
   return undefined;
 }
 
+function normalizeAgentDisplayName(agentId: string, name?: string) {
+  if (agentId !== MAIN_AGENT_ID) return name;
+  if (!name?.trim() || /^assistant$/i.test(name.trim())) return "Main";
+  return name;
+}
+
 function isRenderableRemoteAvatar(avatar?: string) {
   return Boolean(avatar && /^(data:|blob:|https?:\/\/|\/assets\/|\/api\/)/.test(avatar));
 }
@@ -153,6 +160,14 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
 
   const refresh = useCallback(async () => {
     try {
+      if (engine.isRemote && !seededRemoteMainDefaults.has(engine.storageScope)) {
+        try {
+          await ensureRemoteMainAgentDefaults(engine);
+          seededRemoteMainDefaults.add(engine.storageScope);
+        } catch {
+          // Try again on the next refresh; remote engines can still be reconnecting here.
+        }
+      }
       const result = await engine.rpc("agents.list", {}).catch(() => ({ agents: [] }));
       const payload = result as {
         defaultId?: string;
@@ -203,7 +218,7 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
       const defaultId = merged.some((agent) => agent.id === MAIN_AGENT_ID) ? MAIN_AGENT_ID : rawDefaultId;
       const list: AgentInfo[] = merged.filter((a) => !deletedAgentIds.has(a.id)).map((a) => ({
         id: a.id,
-        name: a.identity?.name ?? a.name,
+        name: normalizeAgentDisplayName(a.id, a.identity?.name ?? a.name),
         emoji: a.identity?.emoji ?? a.emoji,
         avatar: a.identity?.avatar ?? a.avatar,
         workspace: a.workspace ?? "",
@@ -233,7 +248,7 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
           : undefined;
         return {
           ...agent,
-          name: identity.name ?? agent.name,
+          name: normalizeAgentDisplayName(agent.id, identity.name ?? agent.name),
           emoji,
           avatar: avatar ?? (isRenderableRemoteAvatar(agent.avatar) ? agent.avatar : !emoji ? getStableDefaultAvatarUrl(`${engine.storageScope}:${agent.id}`) : agent.avatar),
         };
