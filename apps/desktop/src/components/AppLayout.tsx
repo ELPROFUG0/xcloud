@@ -1216,7 +1216,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
 
   const handleImportAgentPackage = useCallback(async () => {
     try {
-      const imported = await importAgentPackage();
+      const imported = await importAgentPackage(engine);
       if (!imported) return;
       await syncAgentsToGatewayConfig(engine, [imported]).catch(() => {});
       await refreshAgents();
