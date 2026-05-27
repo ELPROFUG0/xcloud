@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Cpu, Key, Radio, Sparkles, Plug, Server, Settings2, Brain } from "lucide-react";
+import { Cpu, Key, Radio, Sparkles, Plug, Server, Settings2, Brain, Globe2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { BrowserEngine } from "@/lib/engine";
 import type { AgentInfo } from "@/hooks/use-agents";
@@ -10,6 +10,7 @@ import {
   SkillsSection,
   IntegrationsSection,
   MemorySection,
+  WebSearchSection,
   EngineSection,
   AppearanceSection,
   GeneralSection,
@@ -31,6 +32,7 @@ interface SettingsPanelProps {
 const SECTIONS: { id: Section; label: string; icon: typeof Cpu }[] = [
   { id: "models", label: "Models", icon: Cpu },
   { id: "keys", label: "API Keys", icon: Key },
+  { id: "web-search", label: "Web Search", icon: Globe2 },
   { id: "channels", label: "Channels", icon: Radio },
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "integrations", label: "Integrations", icon: Plug },
@@ -49,6 +51,8 @@ export function SettingsPanel({ engine, section: externalSection, agents, onPrev
         return <ModelsSection engine={engine} />;
       case "keys":
         return <KeysSection engine={engine} onOpenTerminal={onOpenTerminal} />;
+      case "web-search":
+        return <WebSearchSection engine={engine} />;
       case "channels":
         return <ChannelsSection engine={engine} agents={agents} />;
       case "skills":

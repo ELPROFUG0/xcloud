@@ -4,7 +4,7 @@ import { useAgents } from "@/hooks/use-agents";
 import type { AgentInfo } from "@/hooks/use-agents";
 import { getWorkspaceAgentId, getWorkspaceDir, useWorkspaces } from "@/hooks/use-workspaces";
 import type { WorkspaceInfo } from "@/hooks/use-workspaces";
-import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, Sparkles, Plug, Brain } from "lucide-react";
+import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, Sparkles, Plug, Brain, Search } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { HomeScreen } from "./home/HomeScreen";
 import { useSessions } from "@/hooks/use-sessions";
@@ -560,7 +560,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const [showCanvas, setShowCanvas] = useState(() => getCanvasPanelOpen(canvasSurfaceId(MAIN_AGENT_ID)));
   const [showSettings, setShowSettings] = useState(false);
   const [sidebarAnimationKey, setSidebarAnimationKey] = useState(0);
-  const [settingsSection, setSettingsSection] = useState<"models" | "keys" | "channels" | "skills" | "integrations" | "memory" | "appearance" | "engine" | "general">("models");
+  const [settingsSection, setSettingsSection] = useState<"models" | "keys" | "web-search" | "channels" | "skills" | "integrations" | "memory" | "appearance" | "engine" | "general">("models");
   const [showPreview, setShowPreview] = useState(false);
   const [nodeDetail, setNodeDetail] = useState<DetailPanel | null>(null);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
@@ -1344,6 +1344,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                 {([
                   { id: "models" as const, label: "Models", icon: Layers },
                   { id: "keys" as const, label: "API Keys", icon: KeyRound },
+                  { id: "web-search" as const, label: "Web Search", icon: Search },
                   { id: "channels" as const, label: "Channels", icon: Globe },
                   { id: "skills" as const, label: "Skills", icon: Sparkles },
                   { id: "integrations" as const, label: "Integrations", icon: Plug },
