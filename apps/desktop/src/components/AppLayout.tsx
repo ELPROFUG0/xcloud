@@ -20,6 +20,7 @@ import { OnboardingScreen } from "./OnboardingScreen";
 import { getCanvasPanelOpen, setCanvasPanelOpen } from "@/lib/canvas-preferences";
 import { engineScopedStorageKey } from "@/lib/engine-storage";
 import { deleteOpenClawAgent } from "@/lib/openclaw-store";
+import { useAppUpdater } from "@/hooks/use-app-updater";
 const TerminalPanel = lazy(() => import("./terminal/TerminalPanel").then(m => ({ default: m.TerminalPanel })));
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { homeDir } from "@tauri-apps/api/path";
@@ -564,6 +565,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const [showPreview, setShowPreview] = useState(false);
   const [nodeDetail, setNodeDetail] = useState<DetailPanel | null>(null);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
+  const appUpdater = useAppUpdater();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [canvasWidth, setCanvasWidth] = useState(() => {
     const saved = localStorage.getItem("canvasWidth");
@@ -1312,13 +1314,20 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
         </svg>
       </button>
 
-      {!sidebarCollapsed && (
+      {!sidebarCollapsed && appUpdater.hasUpdate && (
         <button
           type="button"
-          className="fixed z-20 rounded-full bg-[#17A8FD] px-3.5 py-0.5 text-[12px] font-semibold text-white transition-all hover:bg-[#0798ED] active:scale-[0.98]"
+          onClick={() => void appUpdater.installUpdate()}
+          disabled={appUpdater.status === "downloading" || appUpdater.status === "installing"}
+          className="fixed z-20 rounded-full bg-[#17A8FD] px-3.5 py-0.5 text-[12px] font-semibold text-white transition-all hover:bg-[#0798ED] active:scale-[0.98] disabled:cursor-default disabled:opacity-80"
           style={{ top: 14, left: isFullscreen ? 54 : 122 }}
+          title={`Install xCloud ${appUpdater.update?.version ?? "update"}`}
         >
-          Update
+          {appUpdater.status === "downloading"
+            ? `${appUpdater.downloadProgress || 0}%`
+            : appUpdater.status === "installing"
+              ? "Restarting"
+              : "Update"}
         </button>
       )}
 
