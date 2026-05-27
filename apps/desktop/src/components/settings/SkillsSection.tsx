@@ -10,66 +10,43 @@ interface SkillsSectionProps {
   engine: BrowserEngine;
 }
 
+function extractJsonObject(output: string) {
+  const start = output.indexOf("{");
+  const end = output.lastIndexOf("}");
+  if (start < 0 || end <= start) return "{}";
+  return output.slice(start, end + 1);
+}
+
+function parseSkillsList(jsonOutput: string) {
+  const json = JSON.parse(extractJsonObject(jsonOutput));
+  const list = Array.isArray(json.skills) ? json.skills : [];
+  return list.map((skill: Record<string, unknown>) => ({
+    name: typeof skill.name === "string" ? skill.name : "",
+    description: typeof skill.description === "string" ? skill.description.slice(0, 120) : "",
+    emoji: typeof skill.emoji === "string" ? skill.emoji : "",
+    author: typeof skill.author === "string" ? skill.author : "",
+    version: typeof skill.version === "string" ? skill.version : "",
+    installed: skill.eligible === true,
+  })).filter((skill: SkillInfo) => skill.name);
+}
+
 export function SkillsSection({ engine: _engine }: SkillsSectionProps) {
   const [skills, setSkills] = useState<SkillInfo[]>(skillsCache);
   const [skillsLoading, setSkillsLoading] = useState(false);
   const [skillsFilter, setSkillsFilter] = useState<"all" | "ready" | "setup">("all");
 
-  // Load skills by reading SKILL.md files directly (instant, no CLI overhead)
   useEffect(() => {
     if (skillsCache.length > 0) { setSkills(skillsCache); return; }
     setSkillsLoading(true);
 
-    // Read bundled + workspace skills directly from disk
-    invoke<string>("run_shell", {
-      cmd: `for d in $(find ~/.openclaw/workspace/skills/ ~/.openclaw/skills/ -maxdepth 1 -mindepth 1 -type d 2>/dev/null); do [ -f "$d/SKILL.md" ] && echo "===DIR:$(basename $d)===" && head -12 "$d/SKILL.md"; done`,
-    }).then((output) => {
-      const parsed: SkillInfo[] = [];
-      const seen = new Set<string>();
-      const blocks = output.split(/===DIR:([^=]+)===/);
-
-      for (let i = 1; i < blocks.length; i += 2) {
-        const dirName = blocks[i]!.trim();
-        const content = blocks[i + 1] ?? "";
-        const name = content.match(/^name:\s*(.+)/m)?.[1]?.trim().replace(/["']/g, "") ?? dirName;
-        const desc = content.match(/description:\s*["']?([^"'\n|]+)/m)?.[1]?.trim() ?? "";
-        const emoji = content.match(/emoji.*?["']([^"']+)["']/)?.[1] ?? content.match(/"emoji":\s*"([^"]+)"/)?.[1] ?? "";
-        const author = content.match(/^author:\s*(.+)/m)?.[1]?.trim() ?? "";
-        const version = content.match(/^version:\s*(.+)/m)?.[1]?.trim() ?? "";
-        if (!seen.has(name)) {
-          seen.add(name);
-          parsed.push({ name, description: desc.slice(0, 120), emoji, author, version, installed: false });
-        }
-      }
-
-      // Show skills immediately, then check eligibility in background
+    invoke<string>("xcloud_run", { args: ["skills", "list", "--json"] }).then((jsonOutput) => {
+      const parsed = parseSkillsList(jsonOutput);
       skillsCache = parsed;
-      setSkills([...parsed]);
+      setSkills(parsed);
       setSkillsLoading(false);
-
-      // Check eligibility via bundled openclaw in background
-      invoke<string>("xcloud_run", { args: ["skills", "list", "--json"] }).catch(() => "{}").then((jsonOutput) => {
-        try {
-          const json = JSON.parse(jsonOutput);
-          const list = json.skills ?? [];
-          const eligibleSet = new Set<string>();
-          const emojiMap = new Map<string, string>();
-          const descMap = new Map<string, string>();
-          for (const s of list as Array<{ name: string; eligible?: boolean; emoji?: string; description?: string }>) {
-            if (s.eligible) eligibleSet.add(s.name);
-            if (s.emoji) emojiMap.set(s.name, s.emoji);
-            if (s.description) descMap.set(s.name, s.description);
-          }
-          for (const s of parsed) {
-            s.installed = eligibleSet.has(s.name);
-            if (emojiMap.has(s.name)) s.emoji = emojiMap.get(s.name);
-            if (!s.description && descMap.has(s.name)) s.description = descMap.get(s.name)!.slice(0, 120);
-          }
-          skillsCache = [...parsed];
-          setSkills([...parsed]);
-        } catch { /* keep as-is */ }
-      }).catch(() => {});
-    }).catch(() => setSkillsLoading(false));
+    }).catch(() => {
+      setSkillsLoading(false);
+    });
   }, []);
 
   const readyCount = skills.filter(s => s.installed).length;
