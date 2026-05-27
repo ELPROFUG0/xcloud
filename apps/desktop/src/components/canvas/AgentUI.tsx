@@ -86,13 +86,53 @@ async function readEngineShellFile(engine: BrowserEngine, path: string, fallback
   return runEngineShell(engine, `cat ${engineShellPath(engine, path)} 2>/dev/null || true`).catch(() => fallback);
 }
 
-async function probeDevServer(engine: BrowserEngine, port: number) {
-  const status = await runEngineShell(
+function isValidPort(port?: number): port is number {
+  return typeof port === "number" && Number.isInteger(port) && port > 0 && port <= 65535;
+}
+
+async function probeDevServer(engine: BrowserEngine, port: number, options?: { requireDevServer?: boolean }) {
+  if (!isValidPort(port)) return false;
+  const response = await runEngineShell(
     engine,
-    `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:${port} 2>/dev/null || echo "0"`,
+    `curl -s -i --max-time 3 http://127.0.0.1:${port}/ 2>/dev/null | head -80 || true`,
+    8_000,
+  ).catch(() => "");
+  const status = response.match(/^HTTP\/[0-9.]+\s+(\d+)/m)?.[1] ?? "0";
+  if (!httpStatusOk(status)) return false;
+  if (!options?.requireDevServer) return true;
+
+  const lower = response.toLowerCase();
+  return !lower.includes("server: simplehttp") && !lower.includes("python");
+}
+
+async function findAvailablePort(engine: BrowserEngine, preferredPort?: number) {
+  const start = isValidPort(preferredPort) ? preferredPort : 3100 + Math.floor(Math.random() * 900);
+  const result = await runEngineShell(
+    engine,
+    `START=${start}
+END=$((START + 900))
+PORT="$START"
+while [ "$PORT" -le "$END" ]; do
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -ti tcp:$PORT -sTCP:LISTEN >/dev/null 2>&1 || { echo "$PORT"; exit 0; }
+  elif command -v nc >/dev/null 2>&1; then
+    nc -z 127.0.0.1 "$PORT" >/dev/null 2>&1 || { echo "$PORT"; exit 0; }
+  else
+    curl -s --max-time 1 "http://127.0.0.1:$PORT/" >/dev/null 2>&1 || { echo "$PORT"; exit 0; }
+  fi
+  PORT=$((PORT + 1))
+done
+echo 0`,
     8_000,
   ).catch(() => "0");
-  return httpStatusOk(status);
+  const port = Number(result.trim().split(/\s+/).at(-1));
+  return isValidPort(port) ? port : 3100 + Math.floor(Math.random() * 900);
+}
+
+function devServerCommand(script: string, port: number, host: string) {
+  const env = `HOST=${host} PORT=${port}`;
+  if (script === "dev") return `${env} npm run ${script} -- --host ${host} --port ${port}`;
+  return `${env} npm run ${script}`;
 }
 
 async function hasUiProject(engine: BrowserEngine, path: string) {
@@ -1139,42 +1179,40 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
     const cleanPath = trimTrailingSlash(path);
     await ensureRealtimeBridge(engine, cleanPath).catch(() => {});
 
-    // Check if already running on saved port
-    if (savedPort) {
-      const running = await probeDevServer(engine, savedPort);
-      if (running) {
-        setDevServerUrl(previewUrlForPort(engine, savedPort));
-        setDevServerLoading(false);
-        return;
-      }
-    }
-
     try {
       const pkgStr = await readEngineShellFile(engine, `${cleanPath}/package.json`, "");
       if (pkgStr) {
         const pkg = JSON.parse(pkgStr);
         const script = pkg.scripts?.dev ? "dev" : pkg.scripts?.start ? "start" : null;
         if (script) {
-          const port = savedPort ?? (3100 + Math.floor(Math.random() * 900));
+          if (savedPort) {
+            const running = await probeDevServer(engine, savedPort, { requireDevServer: true });
+            if (running) {
+              setDevServerUrl(previewUrlForPort(engine, savedPort));
+              setDevServerLoading(false);
+              return;
+            }
+          }
+
+          const port = await findAvailablePort(engine, savedPort);
+          const host = engine.isRemote ? "0.0.0.0" : "127.0.0.1";
+          const runScript = devServerCommand(script, port, host);
           if (engine.isRemote) {
             const safeAgentId = _agentId.replace(/[^a-z0-9_-]/gi, "-");
             const logPath = `"$HOME/.openclaw/logs/xcloud-ui-${safeAgentId}-${port}.log"`;
-            const runScript = script === "dev"
-              ? `HOST=0.0.0.0 PORT=${port} npm run ${script} -- --host 0.0.0.0 --port ${port} || HOST=0.0.0.0 PORT=${port} npm run ${script}`
-              : `HOST=0.0.0.0 PORT=${port} npm run ${script}`;
             await runEngineShell(
               engine,
               `cd ${engineShellPath(engine, cleanPath)} && mkdir -p "$HOME/.openclaw/logs" && nohup sh -lc ${shellQuote(runScript)} > ${logPath} 2>&1 & echo $!`,
               8_000,
             ).catch(() => {});
           } else {
-            await invoke("spawn_shell", { cmd: `cd ${shellQuote(cleanPath)} && PORT=${port} npm run ${script}` }).catch(() => {});
+            await invoke("spawn_shell", { cmd: `cd ${shellQuote(cleanPath)} && ${runScript}` }).catch(() => {});
           }
           await saveConfig(path, port);
 
           let retries = 0;
           while (retries < 30) {
-            if (await probeDevServer(engine, port)) {
+            if (await probeDevServer(engine, port, { requireDevServer: true })) {
               setDevServerUrl(previewUrlForPort(engine, port));
               setDevServerLoading(false);
               return;
@@ -1182,6 +1220,8 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
             retries++;
             await delay(1000);
           }
+          setDevServerLoading(false);
+          return;
         }
       }
 
@@ -1283,7 +1323,8 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
 
     let running = false;
     if (nextPort) {
-      running = await probeDevServer(engine, nextPort);
+      const pkgContent = await readEngineShellFile(engine, `${nextRepoPath}/package.json`, "");
+      running = await probeDevServer(engine, nextPort, { requireDevServer: Boolean(pkgContent.trim()) });
       if (running) setDevServerUrl(previewUrlForPort(engine, nextPort));
     }
 
