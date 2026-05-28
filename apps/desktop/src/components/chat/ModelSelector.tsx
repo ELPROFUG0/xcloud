@@ -13,7 +13,8 @@ import {
   Venice, Kluster, Straico, SpeedAI, WorkersAI, VertexAI, Spark,
   Vercel, ByteDance, Volcengine, Wenxin, Baidu, BaiduCloud, Tencent, TencentCloud,
   Huawei, HuaweiCloud, SenseNova, Tiangong, ChatGLM, InternLM, Grok, Microsoft,
-  IBM, Apple, Snowflake, Nova, PaLM, Dbrx, Antigravity,
+  IBM, Apple, Snowflake, Nova, PaLM, Dbrx, Antigravity, Codex, GeminiCLI,
+  KiloCode, XiaomiMiMo, ZAI,
 } from "@lobehub/icons";
 import type { ModelInfo } from "@/lib/engine";
 
@@ -32,21 +33,23 @@ export const PROVIDER_ICONS: Record<string, any> = {
   inference: Inference, baseten: Baseten, centml: CentML, friendli: Friendli,
   parasail: Parasail, ppio: PPIO, venice: Venice, kluster: Kluster, straico: Straico,
   "speed-ai": SpeedAI, "workers-ai": WorkersAI, anyscale: Anyscale,
-  minimax: Minimax, moonshot: Moonshot, baichuan: Baichuan, yi: Yi, zhipu: Zhipu,
+  minimax: Minimax, "minimax-cn": Minimax, moonshot: Moonshot, baichuan: Baichuan, yi: Yi, zhipu: Zhipu,
   qwen: Qwen, "alibaba-cloud": AlibabaCloud, alibabacloud: AlibabaCloud, kimi: Kimi,
   doubao: Doubao, stepfun: Stepfun, "silicon-cloud": SiliconCloud, siliconcloud: SiliconCloud,
   spark: Spark, stability: Stability, inception: Inception, inflection: Inflection,
   ai21: Ai21, voyage: Voyage, jina: Jina, upstage: Upstage,
   "lm-studio": LmStudio, lmstudio: LmStudio,
   vercel: Vercel, "vercel-ai-gateway": Vercel, bytedance: ByteDance, byteplus: ByteDance,
-  "byteplus-plan": ByteDance, volcengine: Volcengine, wenxin: Wenxin, qianfan: Wenxin,
+  "byteplus-plan": ByteDance, volcengine: Volcengine, "volcengine-plan": Volcengine, wenxin: Wenxin, qianfan: Wenxin,
   baidu: Baidu, "baidu-cloud": BaiduCloud, tencent: Tencent, "tencent-cloud": TencentCloud,
   "tencent-tokenhub": Tencent, huawei: Huawei, "huawei-cloud": HuaweiCloud,
   sensenova: SenseNova, tiangong: Tiangong, chatglm: ChatGLM, internlm: InternLM,
   grok: Grok, microsoft: Microsoft, ibm: IBM, apple: Apple, snowflake: Snowflake,
   nova: Nova, palm: PaLM, dbrx: Dbrx, "google-antigravity": Antigravity,
+  "google-gemini-cli": GeminiCLI,
   "kimi-coding": Kimi, "opencode-go": OpenCode, "stepfun-plan": Stepfun,
-  opencode: OpenCode, openclaw: OpenClaw, claude: Claude, codex: OpenAI,
+  opencode: OpenCode, openclaw: OpenClaw, claude: Claude, codex: Codex,
+  "openai-codex": Codex, kilocode: KiloCode, xiaomi: XiaomiMiMo, zai: ZAI,
 };
 
 export const PROVIDER_NAMES: Record<string, string> = {
@@ -54,6 +57,8 @@ export const PROVIDER_NAMES: Record<string, string> = {
   "azure-openai-responses": "Azure OpenAI", mistral: "Mistral", groq: "Groq", deepseek: "DeepSeek",
   fireworks: "Fireworks", openrouter: "OpenRouter", "github-copilot": "GitHub Copilot", xai: "xAI",
   cerebras: "Cerebras", huggingface: "Hugging Face", ollama: "Ollama",
+  "google-gemini-cli": "Gemini CLI", kilocode: "KiloCode", xiaomi: "Xiaomi MiMo", zai: "Z.ai",
+  "minimax-cn": "MiniMax CN", "volcengine-plan": "Volcengine Plan", qianfan: "Qianfan",
 };
 
 const MONOCHROME_DARK_PROVIDER_COLORS: Record<string, string> = {
@@ -108,7 +113,17 @@ function formatModelName(raw: string): string {
 
 export function ProviderIcon({ provider, size = 18, color = false }: { provider: string; size?: number; color?: boolean }) {
   const Icon = PROVIDER_ICONS[provider];
-  if (!Icon) return <div style={{ width: size, height: size }} />;
+  if (!Icon) {
+    const label = fmtProvider(provider).slice(0, 2).toUpperCase();
+    return (
+      <div
+        className="flex shrink-0 items-center justify-center rounded-full bg-white/10 text-[8px] font-semibold text-text-muted"
+        style={{ width: size, height: size, fontSize: Math.max(7, Math.round(size * 0.42)) }}
+      >
+        {label}
+      </div>
+    );
+  }
   const primaryColor = typeof Icon.colorPrimary === "string" ? Icon.colorPrimary : undefined;
   const iconColor = color
     ? (MONOCHROME_DARK_PROVIDER_COLORS[provider] ?? (colorIsTooDarkForTheme(primaryColor) ? "#FFFFFF" : primaryColor))
