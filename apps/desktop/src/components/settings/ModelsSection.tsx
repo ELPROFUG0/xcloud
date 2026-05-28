@@ -30,12 +30,18 @@ const PROVIDER_LOGOS: Record<string, string> = {
 };
 
 const PROVIDER_NAMES: Record<string, string> = {
-  anthropic: "Anthropic", openai: "OpenAI", google: "Google", "amazon-bedrock": "AWS Bedrock",
+  anthropic: "Anthropic", openai: "OpenAI API", google: "Google", "amazon-bedrock": "AWS Bedrock",
   "azure-openai-responses": "Azure OpenAI", mistral: "Mistral", groq: "Groq", deepseek: "DeepSeek",
   fireworks: "Fireworks", openrouter: "OpenRouter", "github-copilot": "GitHub Copilot", xai: "xAI",
   cerebras: "Cerebras", huggingface: "Hugging Face", ollama: "Ollama", minimax: "MiniMax",
   "google-vertex": "Google Vertex", codex: "OpenAI Codex", "openai-codex": "OpenAI Codex",
   opencode: "OpenCode", "vercel-ai-gateway": "Vercel AI", volcengine: "Volcengine",
+};
+
+const PROVIDER_DESCRIPTIONS: Record<string, string> = {
+  openai: "Requires an OpenAI API key.",
+  "openai-codex": "Uses your ChatGPT/Codex access, not an OpenAI API key.",
+  codex: "Uses your ChatGPT/Codex access, not an OpenAI API key.",
 };
 
 const fmtProvider = (id: string) =>
@@ -79,12 +85,19 @@ export function ModelsSection({ engine }: ModelsSectionProps) {
             <ChevronLeft className="h-4 w-4" />
           </button>
         )}
-        <h3 className="text-base font-semibold">
-          {selectedProvider ? fmtProvider(selectedProvider) : "Models"}
-        </h3>
-        {selectedProvider && (
-          <span className="text-xs text-text-muted">{selectedModels.length} models</span>
-        )}
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="text-base font-semibold">
+              {selectedProvider ? fmtProvider(selectedProvider) : "Models"}
+            </h3>
+            {selectedProvider && (
+              <span className="text-xs text-text-muted">{selectedModels.length} models</span>
+            )}
+          </div>
+          {selectedProvider && PROVIDER_DESCRIPTIONS[selectedProvider] && (
+            <p className="mt-0.5 text-xs text-text-muted">{PROVIDER_DESCRIPTIONS[selectedProvider]}</p>
+          )}
+        </div>
       </div>
 
       {/* Search */}
@@ -121,9 +134,16 @@ export function ModelsSection({ engine }: ModelsSectionProps) {
                 >
                   <div className="flex items-center gap-2">
                     {hasActive ? <Check className="h-3.5 w-3.5 text-accent" /> : <div className="h-3.5 w-3.5" />}
-                    <span className={cn("text-[13px]", hasActive ? "text-accent font-medium" : "text-text")}>
-                      {fmtProvider(group.provider)}
-                    </span>
+                    <div className="min-w-0">
+                      <span className={cn("block text-[13px]", hasActive ? "text-accent font-medium" : "text-text")}>
+                        {fmtProvider(group.provider)}
+                      </span>
+                      {PROVIDER_DESCRIPTIONS[group.provider] && (
+                        <span className="block truncate text-[10px] text-text-muted">
+                          {PROVIDER_DESCRIPTIONS[group.provider]}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <span className="text-[11px] text-text-muted">{group.models.length}</span>
                 </button>

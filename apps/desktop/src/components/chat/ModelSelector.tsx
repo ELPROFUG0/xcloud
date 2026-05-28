@@ -53,12 +53,18 @@ export const PROVIDER_ICONS: Record<string, any> = {
 };
 
 export const PROVIDER_NAMES: Record<string, string> = {
-  anthropic: "Anthropic", openai: "OpenAI", "openai-codex": "OpenAI Codex", codex: "OpenAI Codex", google: "Google", "amazon-bedrock": "AWS Bedrock",
+  anthropic: "Anthropic", openai: "OpenAI API", "openai-codex": "OpenAI Codex", codex: "OpenAI Codex", google: "Google", "amazon-bedrock": "AWS Bedrock",
   "azure-openai-responses": "Azure OpenAI", mistral: "Mistral", groq: "Groq", deepseek: "DeepSeek",
   fireworks: "Fireworks", openrouter: "OpenRouter", "github-copilot": "GitHub Copilot", xai: "xAI",
   cerebras: "Cerebras", huggingface: "Hugging Face", ollama: "Ollama",
   "google-gemini-cli": "Gemini CLI", kilocode: "KiloCode", xiaomi: "Xiaomi MiMo", zai: "Z.ai",
   "minimax-cn": "MiniMax CN", "volcengine-plan": "Volcengine Plan", qianfan: "Qianfan",
+};
+
+const PROVIDER_DESCRIPTIONS: Record<string, string> = {
+  openai: "Requires an OpenAI API key.",
+  "openai-codex": "Uses your ChatGPT/Codex access, not an OpenAI API key.",
+  codex: "Uses your ChatGPT/Codex access, not an OpenAI API key.",
 };
 
 const MONOCHROME_DARK_PROVIDER_COLORS: Record<string, string> = {
@@ -372,10 +378,17 @@ export function ModelSelector({ open, closing = false, onClose, providers, curre
         <div className="flex-1 overflow-y-auto hide-scrollbar p-1.5">
           {/* Provider header when no search */}
           {!search.trim() && activeProvider && activeProvider !== "__favorites" && (
-            <div className="flex items-center gap-2 px-2 pb-2">
-              <ProviderIcon provider={activeProvider} size={14} />
-              <span className="text-xs font-medium text-text">{fmtProvider(activeProvider)}</span>
-              <span className="text-[10px] text-text-muted">{displayModels.length} models</span>
+            <div className="px-2 pb-2">
+              <div className="flex items-center gap-2">
+                <ProviderIcon provider={activeProvider} size={14} />
+                <span className="text-xs font-medium text-text">{fmtProvider(activeProvider)}</span>
+                <span className="text-[10px] text-text-muted">{displayModels.length} models</span>
+              </div>
+              {PROVIDER_DESCRIPTIONS[activeProvider] && (
+                <p className="mt-1 pl-5 text-[10px] leading-snug text-text-muted/80">
+                  {PROVIDER_DESCRIPTIONS[activeProvider]}
+                </p>
+              )}
             </div>
           )}
 

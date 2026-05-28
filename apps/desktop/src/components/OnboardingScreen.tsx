@@ -38,7 +38,7 @@ interface ProviderOption {
 
 const PROVIDERS: ProviderOption[] = [
   { id: "anthropic", name: "Anthropic", logo: anthropicLogo, authChoice: "anthropic-api-key", keyFlag: "--anthropic-api-key", placeholder: "sk-ant-..." },
-  { id: "openai", name: "OpenAI", logo: openaiLogo, authChoice: "openai-api-key", keyFlag: "--openai-api-key", placeholder: "sk-..." },
+  { id: "openai", name: "OpenAI API", logo: openaiLogo, authChoice: "openai-api-key", keyFlag: "--openai-api-key", placeholder: "sk-..." },
   { id: "gemini", name: "Google Gemini", logo: googleLogo, authChoice: "gemini-api-key", keyFlag: "--gemini-api-key", placeholder: "AIza..." },
   { id: "deepseek", name: "DeepSeek", logo: deepseekLogo, authChoice: "deepseek-api-key", keyFlag: "--deepseek-api-key", placeholder: "sk-..." },
   { id: "openrouter", name: "OpenRouter", logo: openrouterLogo, authChoice: "openrouter-api-key", keyFlag: "--openrouter-api-key", placeholder: "sk-or-..." },

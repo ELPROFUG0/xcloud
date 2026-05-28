@@ -8,7 +8,7 @@ export interface ProviderConfig {
 /** Known providers and their API key environment variable names */
 export const PROVIDERS: ProviderConfig[] = [
   { id: "anthropic", name: "Anthropic", envKey: "ANTHROPIC_API_KEY", placeholder: "sk-ant-..." },
-  { id: "openai", name: "OpenAI", envKey: "OPENAI_API_KEY", placeholder: "sk-..." },
+  { id: "openai", name: "OpenAI API", envKey: "OPENAI_API_KEY", placeholder: "sk-..." },
   { id: "google", name: "Google (Gemini)", envKey: "GEMINI_API_KEY", placeholder: "AIza..." },
   { id: "google-vertex", name: "Google Vertex", envKey: "GOOGLE_APPLICATION_CREDENTIALS", placeholder: "/path/to/service-account.json" },
   { id: "mistral", name: "Mistral", envKey: "MISTRAL_API_KEY", placeholder: "..." },

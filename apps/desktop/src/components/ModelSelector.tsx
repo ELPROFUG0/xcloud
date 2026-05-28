@@ -10,7 +10,7 @@ interface ModelSelectorProps {
 
 const PROVIDER_NAMES: Record<string, string> = {
   anthropic: "Anthropic",
-  openai: "OpenAI",
+  openai: "OpenAI API",
   google: "Google",
   "google-vertex": "Google Vertex",
   "google-antigravity": "Google Antigravity",
@@ -42,6 +42,12 @@ const PROVIDER_NAMES: Record<string, string> = {
   "byteplus-plan": "BytePlus Plan",
   "kimi-coding": "Kimi Coding",
   zai: "ZAI",
+};
+
+const PROVIDER_DESCRIPTIONS: Record<string, string> = {
+  openai: "Requires an OpenAI API key.",
+  "openai-codex": "Uses your ChatGPT/Codex access, not an OpenAI API key.",
+  codex: "Uses your ChatGPT/Codex access, not an OpenAI API key.",
 };
 
 function formatProvider(id: string): string {
@@ -213,11 +219,18 @@ export function ModelSelector({ engine }: ModelSelectorProps) {
                         hasActiveModel && "bg-accent/5",
                       )}
                     >
-                      <div className="flex items-center gap-2">
+                      <div className="flex min-w-0 items-center gap-2">
                         {hasActiveModel && <Check className="h-3 w-3 text-accent" />}
-                        <span className={cn("font-medium", hasActiveModel && "text-accent")}>
-                          {formatProvider(group.provider)}
-                        </span>
+                        <div className="min-w-0">
+                          <span className={cn("block font-medium", hasActiveModel && "text-accent")}>
+                            {formatProvider(group.provider)}
+                          </span>
+                          {PROVIDER_DESCRIPTIONS[group.provider] && (
+                            <span className="block truncate text-[10px] text-text-muted">
+                              {PROVIDER_DESCRIPTIONS[group.provider]}
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-text-muted">{group.models.length}</span>

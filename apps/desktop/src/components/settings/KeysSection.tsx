@@ -318,7 +318,7 @@ export function KeysSection({ engine, onOpenTerminal }: KeysSectionProps) {
             <p className="text-xs text-text-muted mb-3 uppercase tracking-wider font-semibold">Subscriptions</p>
             {[
               { id: "github-copilot-login", name: "GitHub Copilot", provider: "github-copilot", logo: githubLogo, cmdArgs: ["models", "auth", "login-github-copilot"], description: remoteEngine ? "Use Copilot on this engine" : "Use your Copilot subscription" },
-              { id: "codex-login", name: "OpenAI Codex", provider: "openai-codex", logo: openaiLogo, cmdArgs: ["models", "auth", "login", "--provider", "openai-codex"], description: remoteEngine ? "Use Codex on this engine" : "Use your Codex subscription" },
+              { id: "codex-login", name: "OpenAI Codex", provider: "openai-codex", logo: openaiLogo, cmdArgs: ["models", "auth", "login", "--provider", "openai-codex"], description: remoteEngine ? "Use Codex on this engine" : "Uses your ChatGPT/Codex access" },
             ].map((item) => (
               <div key={item.id} className="flex items-center justify-between border-b border-border/50 py-3.5 last:border-0">
                 <div className="flex items-center gap-3 min-w-0 mr-4">
