@@ -5,6 +5,7 @@
   "description": "IDE de agentes de IA — Agent Studio",
   "scripts": {
     "poc": "tsx scripts/poc-websocket.ts",
+    "remote:assets": "bash scripts/prepare-remote-setup-assets.sh",
     "test": "pnpm -r test",
     "build": "pnpm -r build"
   },

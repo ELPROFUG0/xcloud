@@ -14,6 +14,8 @@ import cloudServerLogo from "@/assets/engine/cloud-server.png";
 import macMiniLogo from "@/assets/engine/mac-mini.svg";
 import localDesktopLogo from "@/assets/engine/local-desktop.svg";
 
+const REMOTE_SETUP_SCRIPT_URL = "https://xcloud.dev/setup-remote.sh";
+
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
@@ -219,14 +221,25 @@ function buildRemoteSetupCommand(access: "lan" | "ssh" = "ssh") {
   ].join("; ");
   const printConnection = access === "lan"
     ? [
-        "IP=$(hostname -I 2>/dev/null | awk '{print $1}' || ipconfig getifaddr en0)",
+        "IP=$(hostname -I 2>/dev/null | awk '{print $1}' || ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || hostname)",
         "echo \"URL: ws://$IP:18789\"",
+        "echo \"\"",
+        "echo \"Paste this in xCloud:\"",
+        "echo \"xcloud://engine?mode=mac-mini&url=ws://$IP:18789&token=$TOKEN\"",
       ]
     : [
+        "USER_NAME=$(id -un 2>/dev/null || echo root)",
         "HOST=$(hostname -I 2>/dev/null | awk '{print $1}' || hostname)",
         "echo \"Host: $HOST\"",
-        "echo \"SSH tunnel: ssh -N -L 18790:127.0.0.1:18789 root@$HOST\"",
+        "echo \"SSH user: $USER_NAME\"",
+        "echo \"SSH port: 22\"",
+        "echo \"Remote port: 18789\"",
+        "echo \"Local tunnel port: 18790\"",
+        "echo \"SSH tunnel: ssh -N -L 18790:127.0.0.1:18789 $USER_NAME@$HOST\"",
         "echo \"URL: ws://127.0.0.1:18790\"",
+        "echo \"\"",
+        "echo \"Paste this in xCloud:\"",
+        "echo \"xcloud://engine?mode=vps&host=$HOST&user=$USER_NAME&sshPort=22&remotePort=18789&localPort=18790&token=$TOKEN\"",
       ];
   return [
     "unset npm_config_prefix",
@@ -247,21 +260,13 @@ function buildRemoteSetupCommand(access: "lan" | "ssh" = "ssh") {
   ].join(" && ");
 }
 
-const DISPLAY_REMOTE_SETUP_COMMAND = [
-  "# installs Node/npm when missing",
-  "npm install -g openclaw@latest",
-  "# installs the xCloud remote runtime plugins",
-  "openclaw onboard --gateway-bind loopback ...",
-  "openclaw gateway restart",
-  "echo SSH tunnel, URL, and Token",
-].join("\n");
+function buildHostedRemoteSetupCommand(access: "lan" | "ssh" = "ssh") {
+  return `curl -fsSL ${REMOTE_SETUP_SCRIPT_URL} | bash -s -- --${access}`;
+}
 
-const DISPLAY_REMOTE_HELPER_UPDATE_COMMAND = [
-  "# for an engine that is already connected",
-  "install/update xCloud remote runtime plugins",
-  "openclaw gateway restart",
-  "keep current URL and Token",
-].join("\n");
+function buildHostedRemoteUpdateCommand() {
+  return `curl -fsSL ${REMOTE_SETUP_SCRIPT_URL} | bash -s -- --update-only`;
+}
 
 interface EngineSectionProps {
   engine: BrowserEngine;
@@ -294,6 +299,73 @@ function normalizePort(value: string | number | null | undefined, fallback: numb
 
 function localTunnelUrl(port: string | number | null | undefined) {
   return `ws://127.0.0.1:${normalizePort(port, 18790)}`;
+}
+
+type RemoteConnectionPaste = {
+  mode: Exclude<EngineMode, "local">;
+  url?: string;
+  token: string;
+  host?: string;
+  user?: string;
+  sshPort?: number;
+  remotePort?: number;
+  localPort?: number;
+};
+
+function lineValue(input: string, label: string) {
+  const match = input.match(new RegExp(`^\\s*${label}\\s*:\\s*(.+?)\\s*$`, "im"));
+  return match?.[1]?.trim() ?? "";
+}
+
+function parseRemoteConnectionPaste(input: string, fallbackMode: Exclude<EngineMode, "local">): RemoteConnectionPaste {
+  const value = input.trim();
+  if (!value) throw new Error("Paste the connection block from your remote engine.");
+
+  const uriMatch = value.match(/xcloud:\/\/engine\?[^\s]+/i);
+  const rawUri = uriMatch?.[0] ?? (value.startsWith("xcloud://engine?") ? value : "");
+  if (rawUri) {
+    const parsed = new URL(rawUri);
+    const params = parsed.searchParams;
+    const rawMode = params.get("mode");
+    const mode: Exclude<EngineMode, "local"> = rawMode === "vps" ? "vps" : "mac-mini";
+    const token = params.get("token")?.trim() ?? "";
+    if (!token) throw new Error("The connection string is missing a token.");
+    const localPort = normalizePort(params.get("localPort"), 18790);
+    const remotePort = normalizePort(params.get("remotePort"), 18789);
+    return {
+      mode,
+      url: params.get("url") ? normalizeGatewayUrl(params.get("url") ?? "") : localTunnelUrl(localPort),
+      token,
+      host: params.get("host")?.trim() || "",
+      user: params.get("user")?.trim() || "root",
+      sshPort: normalizePort(params.get("sshPort"), 22),
+      remotePort,
+      localPort,
+    };
+  }
+
+  const token = normalizeGatewayToken(lineValue(value, "Token"));
+  if (!token) throw new Error("The connection block is missing Token.");
+
+  const host = lineValue(value, "Host");
+  const user = lineValue(value, "SSH user") || "root";
+  const sshPort = normalizePort(lineValue(value, "SSH port"), 22);
+  const remotePort = normalizePort(lineValue(value, "Remote port"), 18789);
+  const localPort = normalizePort(lineValue(value, "Local tunnel port"), 18790);
+  const url = normalizeGatewayUrl(lineValue(value, "URL"));
+  const hasSsh = Boolean(host || /SSH tunnel\s*:/i.test(value));
+  const mode = hasSsh ? "vps" : fallbackMode;
+
+  return {
+    mode,
+    url: hasSsh ? localTunnelUrl(localPort) : url,
+    token,
+    host,
+    user,
+    sshPort,
+    remotePort,
+    localPort,
+  };
 }
 
 function inferSshHostFromGatewayUrl(url: string) {
@@ -395,8 +467,62 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
   const [vpsTunnelPort, setVpsTunnelPort] = useState(() => localStorage.getItem("engineVpsTunnelPort") ?? "18790");
   const [engineSaved, setEngineSaved] = useState(false);
   const [engineStatus, setEngineStatus] = useState<{ running: boolean; port: number; pid: number | null; managed: boolean } | null>(null);
-  const [copiedScript, setCopiedScript] = useState<"setup" | "helper" | null>(null);
+  const [copiedScript, setCopiedScript] = useState<"setup" | "setup-standalone" | "helper" | "helper-standalone" | null>(null);
   const [selectedEngineView, setSelectedEngineView] = useState<EngineMode | null>(null);
+  const [connectionPaste, setConnectionPaste] = useState("");
+  const [connectionPasteStatus, setConnectionPasteStatus] = useState<{ type: "ok" | "error"; message: string } | null>(null);
+
+  const applyRemoteConnection = async (parsed: RemoteConnectionPaste) => {
+    const prefix = parsed.mode === "mac-mini" ? "engineMacMini" : "engineVps";
+    const nextUrl = parsed.mode === "vps"
+      ? localTunnelUrl(parsed.localPort)
+      : normalizeGatewayUrl(parsed.url ?? "");
+    const nextToken = normalizeGatewayToken(parsed.token);
+    if (!nextUrl || !nextToken) throw new Error("Connection block needs URL and Token.");
+
+    localStorage.setItem(`${prefix}Url`, nextUrl);
+    localStorage.setItem(`${prefix}Token`, nextToken);
+
+    if (parsed.mode === "mac-mini") {
+      setMacMiniUrl(nextUrl);
+      setMacMiniToken(nextToken);
+    } else {
+      const host = (parsed.host || inferSshHostFromGatewayUrl(parsed.url ?? "")).trim();
+      if (!host) throw new Error("SSH connection block needs Host.");
+      const user = (parsed.user || "root").trim() || "root";
+      const sshPort = normalizePort(parsed.sshPort, 22);
+      const localPort = normalizePort(parsed.localPort, 18790);
+      localStorage.setItem("engineVpsSshHost", host);
+      localStorage.setItem("engineVpsSshUser", user);
+      localStorage.setItem("engineVpsSshPort", String(sshPort));
+      localStorage.setItem("engineVpsTunnelPort", String(localPort));
+      setVpsUrl(nextUrl);
+      setVpsToken(nextToken);
+      setVpsSshHost(host);
+      setVpsSshUser(user);
+      setVpsSshPort(String(sshPort));
+      setVpsTunnelPort(String(localPort));
+    }
+
+    setEngineModeState(parsed.mode);
+    setSelectedEngineView(parsed.mode);
+    localStorage.setItem("engineMode", parsed.mode);
+    await writeGatewayModeToOpenClawConfig(parsed.mode, nextUrl, nextToken).catch(() => {});
+    window.dispatchEvent(new CustomEvent("xcloud-engine-config-changed"));
+  };
+
+  const pasteAndConnect = async () => {
+    try {
+      const fallbackMode: Exclude<EngineMode, "local"> = selectedEngineView === "vps" ? "vps" : "mac-mini";
+      const parsed = parseRemoteConnectionPaste(connectionPaste, fallbackMode);
+      await applyRemoteConnection(parsed);
+      setConnectionPaste("");
+      setConnectionPasteStatus({ type: "ok", message: `Connected config saved for ${ENGINE_VIEW_LABELS[parsed.mode].label}.` });
+      setTimeout(() => setConnectionPasteStatus(null), 3500);
+    } catch (error) {
+      setConnectionPasteStatus({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    }
+  };
 
   useEffect(() => {
     invoke<{ running: boolean; port: number; pid: number | null; managed: boolean }>("engine_status")
@@ -518,12 +644,50 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
           const setToken = isMini ? setMacMiniToken : setVpsToken;
           const installCmd = buildRemoteSetupCommand(isMini ? "lan" : "ssh");
           const helperUpdateCmd = buildRemoteHelperUpdateCommand();
+          const hostedInstallCmd = buildHostedRemoteSetupCommand(isMini ? "lan" : "ssh");
+          const hostedHelperUpdateCmd = buildHostedRemoteUpdateCommand();
           const canSave = isMini ? Boolean(url.trim() && token.trim()) : Boolean(vpsSshHost.trim() && token.trim());
 
           return (
             <div>
               <div className="flex justify-center py-4">
                 <img src={isMini ? macMiniLogo : cloudServerLogo} alt="" className="h-16 w-16 object-contain" />
+              </div>
+
+              <div className="mb-4 rounded-xl border border-border/50 bg-container/70 p-3">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-[13px] font-medium text-text">Paste connection block</h4>
+                    <p className="text-xs text-text-muted">
+                      Run the setup command on the host, paste the xCloud link or URL/token block here, then connect.
+                    </p>
+                  </div>
+                </div>
+                <textarea
+                  value={connectionPaste}
+                  onChange={(e) => {
+                    setConnectionPaste(e.target.value);
+                    setConnectionPasteStatus(null);
+                  }}
+                  placeholder="xcloud://engine?mode=mac-mini&url=ws://192.168.1.50:18789&token=..."
+                  rows={3}
+                  className="w-full resize-none rounded-xl bg-[#262626] px-3 py-2 text-[11px] font-mono leading-relaxed text-text placeholder:text-text-muted focus:outline-none"
+                />
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <span className={cn(
+                    "min-h-4 text-[11px]",
+                    connectionPasteStatus?.type === "ok" ? "text-emerald-400" : "text-red-400",
+                  )}>
+                    {connectionPasteStatus?.message ?? ""}
+                  </span>
+                  <button
+                    onClick={() => void pasteAndConnect()}
+                    disabled={!connectionPaste.trim()}
+                    className="shrink-0 rounded-xl bg-text px-4 py-1.5 text-xs font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-30"
+                  >
+                    Paste & connect
+                  </button>
+                </div>
               </div>
 
               <div className="flex items-center justify-between border-b border-border/50 py-3">
@@ -627,10 +791,12 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
                     : "Use this on any VPS or server that can run OpenClaw. xCloud opens the SSH tunnel automatically after you paste the SSH host and token."}
                 </p>
                 <div className="flex items-center gap-2">
-                  <pre className="flex-1 min-w-0 rounded-xl bg-[#262626] px-3 py-2.5 text-[11px] font-mono text-text-muted leading-relaxed overflow-x-auto">{DISPLAY_REMOTE_SETUP_COMMAND}</pre>
+                  <pre className="flex-1 min-w-0 rounded-xl bg-[#262626] px-3 py-2.5 text-[11px] font-mono text-text-muted leading-relaxed overflow-x-auto">
+                    {[hostedInstallCmd, "", "# prints an xcloud://engine link", "# paste that link here and connect"].join("\n")}
+                  </pre>
                   <button
                     onClick={() => {
-                      navigator.clipboard.writeText(installCmd);
+                      navigator.clipboard.writeText(hostedInstallCmd);
                       setCopiedScript("setup");
                       setTimeout(() => setCopiedScript(null), 2000);
                     }}
@@ -639,6 +805,26 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
                     {copiedScript === "setup" ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
                   </button>
                 </div>
+                <details className="mt-3 group">
+                  <summary className="cursor-pointer list-none text-xs text-text-muted hover:text-text">
+                    Standalone fallback
+                  </summary>
+                  <div className="mt-2 flex items-center gap-2">
+                    <pre className="flex-1 min-w-0 rounded-xl bg-[#202020] px-3 py-2.5 text-[11px] font-mono text-text-muted leading-relaxed overflow-x-auto">
+                      {"# use this only before the hosted setup script is published\n# copies the full installer inline"}
+                    </pre>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(installCmd);
+                        setCopiedScript("setup-standalone");
+                        setTimeout(() => setCopiedScript(null), 2000);
+                      }}
+                      className="shrink-0 flex h-9 w-9 items-center justify-center rounded-xl bg-[#262626] text-text-muted hover:text-text transition-colors"
+                    >
+                      {copiedScript === "setup-standalone" ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </details>
               </div>
 
               {/* Helper repair */}
@@ -648,10 +834,12 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
                   Use this when this {title.toLowerCase()} is already connected. It keeps the current URL and token.
                 </p>
                 <div className="flex items-center gap-2">
-                  <pre className="flex-1 min-w-0 rounded-xl bg-[#262626] px-3 py-2.5 text-[11px] font-mono text-text-muted leading-relaxed overflow-x-auto">{DISPLAY_REMOTE_HELPER_UPDATE_COMMAND}</pre>
+                  <pre className="flex-1 min-w-0 rounded-xl bg-[#262626] px-3 py-2.5 text-[11px] font-mono text-text-muted leading-relaxed overflow-x-auto">
+                    {[hostedHelperUpdateCmd, "", "# repairs plugins and restarts gateway", "# keeps your existing token"].join("\n")}
+                  </pre>
                   <button
                     onClick={() => {
-                      navigator.clipboard.writeText(helperUpdateCmd);
+                      navigator.clipboard.writeText(hostedHelperUpdateCmd);
                       setCopiedScript("helper");
                       setTimeout(() => setCopiedScript(null), 2000);
                     }}
@@ -660,6 +848,26 @@ export function EngineSection({ engine: _engine }: EngineSectionProps) {
                     {copiedScript === "helper" ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
                   </button>
                 </div>
+                <details className="mt-3 group">
+                  <summary className="cursor-pointer list-none text-xs text-text-muted hover:text-text">
+                    Standalone fallback
+                  </summary>
+                  <div className="mt-2 flex items-center gap-2">
+                    <pre className="flex-1 min-w-0 rounded-xl bg-[#202020] px-3 py-2.5 text-[11px] font-mono text-text-muted leading-relaxed overflow-x-auto">
+                      {"# use this only before the hosted setup script is published\n# copies the full repair command inline"}
+                    </pre>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(helperUpdateCmd);
+                        setCopiedScript("helper-standalone");
+                        setTimeout(() => setCopiedScript(null), 2000);
+                      }}
+                      className="shrink-0 flex h-9 w-9 items-center justify-center rounded-xl bg-[#262626] text-text-muted hover:text-text transition-colors"
+                    >
+                      {copiedScript === "helper-standalone" ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </details>
               </div>
 
               {/* Save */}

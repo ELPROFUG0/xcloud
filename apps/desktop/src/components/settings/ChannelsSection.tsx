@@ -7,6 +7,7 @@ import { ShowQr } from "@/components/ui/show-qr";
 import type { ChannelField, ChannelConfig } from "./types";
 import { invoke } from "@tauri-apps/api/core";
 import { QRCodeSVG } from "qrcode.react";
+import { runRemoteEngineShell } from "@/lib/openclaw-store";
 
 import telegramLogo from "@/assets/channels/telegram.svg";
 import whatsappLogo from "@/assets/channels/whatsapp.svg";
@@ -134,6 +135,12 @@ const DISCORD_BOT_PERMISSIONS = "274878024704";
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
+type ChannelHealth = {
+  state: "idle" | "checking" | "connected" | "disconnected" | "degraded" | "unknown";
+  message: string;
+  checkedAt?: number;
+};
+
 function isWhatsAppLoginProviderUnavailable(error: unknown) {
   return error instanceof Error && error.message.toLowerCase().includes("web login provider is not available");
 }
@@ -178,6 +185,93 @@ function buildChannelPatch(values: Record<string, string>, enabled: boolean) {
     channelConfig.allowFrom = parseAllowFrom(values.allowFrom, "open");
   }
   return channelConfig;
+}
+
+function extractJsonObject(output: string) {
+  const start = output.indexOf("{");
+  const end = output.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(output.slice(start, end + 1)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function textFromUnknown(value: unknown) {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  return String(value);
+}
+
+function inferChannelHealth(payload: Record<string, unknown> | null, rawOutput: string): ChannelHealth {
+  if (!payload) {
+    return {
+      state: "unknown",
+      message: rawOutput.trim() || "Could not read channel status.",
+      checkedAt: Date.now(),
+    };
+  }
+
+  const error = textFromUnknown(payload.error);
+  const reachable = payload.gatewayReachable;
+  const configuredChannels = Array.isArray(payload.configuredChannels) ? payload.configuredChannels.map(String) : [];
+  const rawStatus = [
+    payload.status,
+    payload.state,
+    payload.health,
+    payload.telegram,
+    payload.channel,
+  ].map(textFromUnknown).join(" ").toLowerCase();
+  const serialized = JSON.stringify(payload).toLowerCase();
+
+  if (reachable === false || error) {
+    return {
+      state: "disconnected",
+      message: error || "Gateway is not reachable.",
+      checkedAt: Date.now(),
+    };
+  }
+  if (serialized.includes("unauthorized") || serialized.includes("invalid token") || serialized.includes("401")) {
+    return {
+      state: "disconnected",
+      message: "Telegram rejected the bot token.",
+      checkedAt: Date.now(),
+    };
+  }
+  if (serialized.includes("409") || serialized.includes("conflict") || serialized.includes("terminated by other getupdates")) {
+    return {
+      state: "disconnected",
+      message: "Telegram polling conflict. This bot token is probably running in another engine.",
+      checkedAt: Date.now(),
+    };
+  }
+  if (rawStatus.includes("degraded") || rawStatus.includes("warning")) {
+    return {
+      state: "degraded",
+      message: "Telegram is configured, but OpenClaw reported a warning.",
+      checkedAt: Date.now(),
+    };
+  }
+  if (serialized.includes("telegram") && (serialized.includes("connected") || serialized.includes("ok") || serialized.includes("healthy") || serialized.includes("running"))) {
+    return {
+      state: "connected",
+      message: "Telegram bot is responding from this engine.",
+      checkedAt: Date.now(),
+    };
+  }
+  if (configuredChannels.includes("telegram")) {
+    return {
+      state: "unknown",
+      message: "Telegram is configured. Run a live check if messages are not answered.",
+      checkedAt: Date.now(),
+    };
+  }
+  return {
+    state: "disconnected",
+    message: "Telegram is not configured in this engine.",
+    checkedAt: Date.now(),
+  };
 }
 
 function getMainAgentId(agents: AgentInfo[]) {
@@ -284,6 +378,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
   const [selectedTelegramAgentId, setSelectedTelegramAgentId] = useState<string>("");
   const [channelEnabled, setChannelEnabled] = useState<Record<string, boolean>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [telegramHealth, setTelegramHealth] = useState<ChannelHealth>({ state: "idle", message: "Not checked yet." });
 
   useEffect(() => {
     let cancelled = false;
@@ -485,6 +580,37 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
     }
   }, [telegramPairingCode]);
 
+  const checkTelegramHealth = useCallback(async () => {
+    setTelegramHealth({ state: "checking", message: "Checking Telegram on this engine..." });
+    try {
+      const command = "openclaw channels status --channel telegram --probe --timeout 5000 --json";
+      const output = engine.isRemote
+        ? await runRemoteEngineShell(engine, command, 12_000)
+        : await invoke<string>("xcloud_run", { args: ["channels", "status", "--channel", "telegram", "--probe", "--timeout", "5000", "--json"] });
+      setTelegramHealth(inferChannelHealth(extractJsonObject(output), output));
+    } catch (error) {
+      setTelegramHealth({
+        state: "disconnected",
+        message: error instanceof Error ? error.message : String(error),
+        checkedAt: Date.now(),
+      });
+    }
+  }, [engine]);
+
+  useEffect(() => {
+    if (selectedChannel !== "telegram") return;
+    const hasAnyTelegramBot = Object.values(telegramAgentBots).some((botToken) => botToken.trim());
+    if (!hasAnyTelegramBot) {
+      setTelegramHealth({ state: "idle", message: "Not checked yet." });
+      return;
+    }
+    void checkTelegramHealth();
+    const interval = window.setInterval(() => {
+      void checkTelegramHealth();
+    }, 45_000);
+    return () => window.clearInterval(interval);
+  }, [checkTelegramHealth, selectedChannel, telegramAgentBots]);
+
   const startWhatsAppQrLogin = useCallback(async (force = false) => {
     setWhatsAppLoginRunning(true);
     setWhatsAppLoginOutput("");
@@ -621,6 +747,22 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
             ? telegramAgentBots[selectedTelegramAgent.id] ?? ""
             : "";
           const selectedTelegramConnected = Boolean(selectedTelegramBotToken.trim());
+          const telegramHealthColor = telegramHealth.state === "connected"
+            ? "bg-emerald-400"
+            : telegramHealth.state === "checking"
+              ? "bg-amber-300"
+              : telegramHealth.state === "idle" || telegramHealth.state === "unknown"
+                ? "bg-text-muted/40"
+                : "bg-red-400";
+          const telegramHealthLabel = telegramHealth.state === "checking"
+            ? "Checking"
+            : telegramHealth.state === "connected"
+              ? "Live"
+              : telegramHealth.state === "degraded"
+                ? "Warning"
+                : telegramHealth.state === "disconnected"
+                  ? "Offline"
+                  : "Not checked";
           const configuredTelegramAgentCount = Object.entries(telegramAgentBots)
             .filter(([agentId, botToken]) => agents.some((agent) => agent.id === agentId) && botToken.trim())
             .length;
@@ -664,10 +806,18 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                     <div className="flex items-start gap-3">
                       <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#262626] text-[11px] font-medium text-text-muted">2</div>
                       <div className="min-w-0 flex-1">
-                        <h4 className="text-sm font-semibold text-text">Connect a bot to an agent</h4>
-                        <p className="mt-1 text-xs leading-relaxed text-text-muted">
-                          Select the agent this bot belongs to, then paste the BotFather token for that agent.
-                        </p>
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <h4 className="text-sm font-semibold text-text">Connect a bot to an agent</h4>
+                            <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                              Select the agent this bot belongs to, then paste the BotFather token for that agent.
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2 rounded-xl bg-[#262626] px-2.5 py-1.5">
+                            <span className={cn("h-2 w-2 rounded-full", telegramHealthColor)} />
+                            <span className="text-[11px] font-medium text-text-muted">{telegramHealthLabel}</span>
+                          </div>
+                        </div>
                         {agents.length === 0 ? (
                           <div className="mt-3 flex h-9 items-center rounded-xl bg-[#262626] px-3 text-sm text-text-muted">
                             No agents loaded yet.
@@ -731,16 +881,30 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                               <span className="text-[10px] text-text-muted">
                                 {configuredTelegramAgentCount} agent{configuredTelegramAgentCount === 1 ? "" : "s"} connected
                               </span>
-                              <button
-                                onClick={() => {
-                                  const target = nextUnconnectedTelegramAgent ?? agents[0];
-                                  if (target) setSelectedTelegramAgentId(target.id);
-                                }}
-                                className="h-9 rounded-xl bg-[#262626] px-3 text-sm text-text-muted transition-colors hover:text-text"
-                              >
-                                Connect another agent
-                              </button>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => void checkTelegramHealth()}
+                                  disabled={telegramHealth.state === "checking" || !selectedTelegramConnected}
+                                  className="h-9 rounded-xl bg-[#262626] px-3 text-sm text-text-muted transition-colors hover:text-text disabled:opacity-40"
+                                >
+                                  {telegramHealth.state === "checking" ? "Checking..." : "Check live status"}
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    const target = nextUnconnectedTelegramAgent ?? agents[0];
+                                    if (target) setSelectedTelegramAgentId(target.id);
+                                  }}
+                                  className="h-9 rounded-xl bg-[#262626] px-3 text-sm text-text-muted transition-colors hover:text-text"
+                                >
+                                  Connect another agent
+                                </button>
+                              </div>
                             </div>
+                            {telegramHealth.state !== "idle" && (
+                              <div className="rounded-xl bg-black/20 px-3 py-2 text-[11px] leading-relaxed text-text-muted">
+                                {telegramHealth.message}
+                              </div>
+                            )}
 
                             <div className="border-t border-border/50 pt-3">
                               <button
