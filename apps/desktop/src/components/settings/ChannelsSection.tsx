@@ -141,6 +141,17 @@ type ChannelHealth = {
   checkedAt?: number;
 };
 
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+async function runOpenClawCli(engine: BrowserEngine, args: string[], timeoutMs = 12_000) {
+  if (engine.isRemote) {
+    return runRemoteEngineShell(engine, ["openclaw", ...args].map(shellQuote).join(" "), timeoutMs);
+  }
+  return invoke<string>("xcloud_run", { args });
+}
+
 function isWhatsAppLoginProviderUnavailable(error: unknown) {
   return error instanceof Error && error.message.toLowerCase().includes("web login provider is not available");
 }
@@ -552,14 +563,14 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
     setTelegramPairingRunning(true);
     setTelegramPairingOutput("");
     try {
-      const output = await invoke<string>("xcloud_run", { args: ["pairing", "list", channelId, "--json"] });
+      const output = await runOpenClawCli(engine, ["pairing", "list", channelId, "--json"]);
       setTelegramPairingOutput(output.trim() || `No pending ${channelId} pairing requests.`);
     } catch (error) {
       setTelegramPairingOutput(error instanceof Error ? error.message : String(error));
     } finally {
       setTelegramPairingRunning(false);
     }
-  }, []);
+  }, [engine]);
 
   const approvePairing = useCallback(async (channelId: "telegram" | "whatsapp" | "discord") => {
     const code = telegramPairingCode.trim();
@@ -570,7 +581,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
     setTelegramPairingRunning(true);
     setTelegramPairingOutput("");
     try {
-      const output = await invoke<string>("xcloud_run", { args: ["pairing", "approve", channelId, code, "--notify"] });
+      const output = await runOpenClawCli(engine, ["pairing", "approve", channelId, code, "--notify"]);
       setTelegramPairingOutput(output.trim() || `${channelId} user approved.`);
       setTelegramPairingCode("");
     } catch (error) {
@@ -578,15 +589,12 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
     } finally {
       setTelegramPairingRunning(false);
     }
-  }, [telegramPairingCode]);
+  }, [engine, telegramPairingCode]);
 
   const checkTelegramHealth = useCallback(async () => {
     setTelegramHealth({ state: "checking", message: "Checking Telegram on this engine..." });
     try {
-      const command = "openclaw channels status --channel telegram --probe --timeout 5000 --json";
-      const output = engine.isRemote
-        ? await runRemoteEngineShell(engine, command, 12_000)
-        : await invoke<string>("xcloud_run", { args: ["channels", "status", "--channel", "telegram", "--probe", "--timeout", "5000", "--json"] });
+      const output = await runOpenClawCli(engine, ["channels", "status", "--probe", "--timeout", "5000", "--json"]);
       setTelegramHealth(inferChannelHealth(extractJsonObject(output), output));
     } catch (error) {
       setTelegramHealth({
@@ -627,9 +635,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
       } catch (error) {
         if (!isWhatsAppLoginProviderUnavailable(error)) throw error;
         setWhatsAppLoginOutput("Preparing WhatsApp...");
-        await invoke<string>("xcloud_run", {
-          args: ["channels", "add", "--channel", "whatsapp", "--account", "default", "--name", "WhatsApp"],
-        });
+        await runOpenClawCli(engine, ["channels", "add", "--channel", "whatsapp", "--account", "default", "--name", "WhatsApp"]);
         setChannelEnabled((prev) => ({ ...prev, whatsapp: true }));
         for (let attempt = 0; attempt < 6; attempt += 1) {
           await sleep(1_000);
