@@ -1514,6 +1514,42 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
           )}
         </div>
 
+        {agentImportProgress && (
+          <div className="shrink-0 px-3 pb-2" style={{ minWidth: panelWidth }}>
+            <div className="rounded-xl border border-white/10 bg-white/[0.045] p-3 shadow-lg">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/8">
+                  {agentImportProgress.phase === "done" ? (
+                    <div className="h-3 w-3 rounded-full bg-emerald-400 shadow-[0_0_16px_rgba(52,211,153,0.65)]" />
+                  ) : (
+                    <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate text-[12px] font-medium text-text">Importing agent</p>
+                    <span className="text-[10px] font-medium text-text-muted">
+                      {Math.round((agentImportProgress.progress ?? 0.08) * 100)}%
+                    </span>
+                  </div>
+                  <p className="mt-0.5 truncate text-[11px] text-text-muted">
+                    {agentImportProgress.message}
+                  </p>
+                </div>
+              </div>
+              <div className="relative mt-3 h-1 overflow-hidden rounded-full bg-white/10">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-300"
+                  style={{ width: `${Math.max(6, Math.min(100, Math.round((agentImportProgress.progress ?? 0.08) * 100)))}%` }}
+                />
+                {agentImportProgress.phase !== "done" && (
+                  <div className="absolute inset-0 animate-[xcloudProgressShimmer_1.05s_linear_infinite] bg-[linear-gradient(90deg,transparent,rgba(255,255,255,0.28),transparent)]" />
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Sidebar footer — hidden when settings open or detail open */}
         <div className="shrink-0 px-3 pb-3.5 pt-1.5" style={{ minWidth: panelWidth, display: showSettings || nodeDetail ? "none" : undefined }}>
           <div className="flex items-center justify-between">
@@ -1783,43 +1819,6 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
             Close Preview
           </button>
           <OnboardingScreen onComplete={() => setShowOnboardingPreview(false)} preview />
-        </div>
-      )}
-
-      {agentImportProgress && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 backdrop-blur-sm">
-          <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-panel/95 p-4 shadow-2xl ring-1 ring-black/30">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/8">
-                {agentImportProgress.phase === "done" ? (
-                  <div className="h-3.5 w-3.5 rounded-full bg-emerald-400 shadow-[0_0_18px_rgba(52,211,153,0.65)]" />
-                ) : (
-                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white" />
-                )}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm font-medium text-text">Importing agent</p>
-                  <span className="text-[11px] font-medium text-text-muted">
-                    {Math.round((agentImportProgress.progress ?? 0.08) * 100)}%
-                  </span>
-                </div>
-                <p className="mt-0.5 truncate text-xs text-text-muted">
-                  {agentImportProgress.message}
-                </p>
-              </div>
-            </div>
-            <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/10">
-              <div
-                className="h-full rounded-full bg-primary transition-all duration-300"
-                style={{ width: `${Math.max(6, Math.min(100, Math.round((agentImportProgress.progress ?? 0.08) * 100)))}%` }}
-              />
-            </div>
-            <div className="mt-2 flex items-center justify-between text-[10px] uppercase tracking-[0.16em] text-text-muted/70">
-              <span>{agentImportProgress.phase}</span>
-              {agentImportProgress.agentName && <span className="max-w-[160px] truncate normal-case tracking-normal">{agentImportProgress.agentName}</span>}
-            </div>
-          </div>
         </div>
       )}
 
