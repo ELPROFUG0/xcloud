@@ -6,7 +6,7 @@ import { ensureAgentDefaultAvatar, isAgentAvatarOptedOut } from "@/lib/update-id
 import { engineScopedStorageKey } from "@/lib/engine-storage";
 import { getStableDefaultAvatarUrl } from "@/lib/default-avatar";
 import { AGENT_VISUALS_CHANGED_EVENT, getAgentVisualOverride } from "@/lib/agent-visuals";
-import { ensureRemoteMainAgentDefaults, readOpenClawAgentFile } from "@/lib/openclaw-store";
+import { ensureRemoteMainAgentDefaults, readOpenClawAgentFile, readOpenClawConfig } from "@/lib/openclaw-store";
 
 export interface AgentInfo {
   id: string;
@@ -106,6 +106,22 @@ async function readLocalConfigAgents() {
   }
 }
 
+function getConfigAgentList(config: LocalConfig | Record<string, unknown>) {
+  const agentsConfig = (config.agents && typeof config.agents === "object" ? config.agents : {}) as { list?: unknown };
+  return Array.isArray(agentsConfig.list)
+    ? agentsConfig.list.filter((agent): agent is LocalConfigAgent => Boolean(agent) && typeof agent === "object" && typeof (agent as LocalConfigAgent).id === "string")
+    : [];
+}
+
+async function readRemoteConfigAgents(engine: BrowserEngine) {
+  try {
+    const { config } = await readOpenClawConfig(engine);
+    return getConfigAgentList(config);
+  } catch {
+    return [];
+  }
+}
+
 function agentsEqual(a: AgentInfo[], b: AgentInfo[]) {
   if (a.length !== b.length) return false;
   return a.every((agent, index) => {
@@ -182,7 +198,7 @@ export function useAgents(engine: BrowserEngine): UseAgentsReturn {
         }>;
       };
 
-      const localAgents = engine.isRemote ? [] : await readLocalConfigAgents();
+      const localAgents = engine.isRemote ? await readRemoteConfigAgents(engine) : await readLocalConfigAgents();
       const deletedAgentIds = readDeletedAgentIds(deletedAgentsKey);
       const merged = [...(payload.agents ?? [])];
       const seenIds = new Set(merged.map((agent) => agent.id));

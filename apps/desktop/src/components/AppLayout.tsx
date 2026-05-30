@@ -9,7 +9,7 @@ import { cn } from "@/lib/cn";
 import { HomeScreen } from "./home/HomeScreen";
 import { useSessions } from "@/hooks/use-sessions";
 import type { AppToolHandler } from "@/hooks/use-chat";
-import { exportAgentPackage, importAgentPackage } from "@/lib/agent-package";
+import { exportAgentPackage, importAgentPackage, type AgentImportProgress } from "@/lib/agent-package";
 import { ChatPanel } from "./chat/ChatPanel";
 import { ChatInput } from "./chat/ChatInput";
 import { AgentCanvas, type DetailPanel } from "./canvas/AgentCanvas";
@@ -580,6 +580,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const [canvasOrbs, setCanvasOrbs] = useState(() => localStorage.getItem("canvasUseOrbs") === "true");
   const [showOnboardingPreview, setShowOnboardingPreview] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [agentImportProgress, setAgentImportProgress] = useState<AgentImportProgress | null>(null);
   const [unreadSessionKeys, setUnreadSessionKeys] = useState<Set<string>>(() => new Set());
   const [workingSessionKeys, setWorkingSessionKeys] = useState<Set<string>>(() => new Set());
   const [agentActivityAt, setAgentActivityAt] = useState<Record<string, number>>({});
@@ -1218,8 +1219,20 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
 
   const handleImportAgentPackage = useCallback(async () => {
     try {
-      const imported = await importAgentPackage(engine);
-      if (!imported) return;
+      const imported = await importAgentPackage(engine, {
+        onProgress: setAgentImportProgress,
+      });
+      if (!imported) {
+        setAgentImportProgress(null);
+        return;
+      }
+      setAgentImportProgress({
+        phase: "registering",
+        message: "Refreshing agent list...",
+        progress: 0.96,
+        agentId: imported.id,
+        agentName: imported.name,
+      });
       await syncAgentsToGatewayConfig(engine, [imported]).catch(() => {});
       await refreshAgents();
       setActiveAgentId(imported.id);
@@ -1229,8 +1242,16 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
       setShowSettings(false);
       setShowPreview(false);
       setShowCanvas(getCanvasPanelOpen(canvasSurfaceId(imported.id)));
-      window.alert(`Agent imported: ${imported.name}`);
+      setAgentImportProgress({
+        phase: "done",
+        message: `${imported.name} is ready.`,
+        progress: 1,
+        agentId: imported.id,
+        agentName: imported.name,
+      });
+      window.setTimeout(() => setAgentImportProgress(null), 1200);
     } catch (error) {
+      setAgentImportProgress(null);
       const message = error instanceof Error ? error.message : String(error);
       window.alert(`Could not import agent package:\n${message}`);
     }
@@ -1762,6 +1783,43 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
             Close Preview
           </button>
           <OnboardingScreen onComplete={() => setShowOnboardingPreview(false)} preview />
+        </div>
+      )}
+
+      {agentImportProgress && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-panel/95 p-4 shadow-2xl ring-1 ring-black/30">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/8">
+                {agentImportProgress.phase === "done" ? (
+                  <div className="h-3.5 w-3.5 rounded-full bg-emerald-400 shadow-[0_0_18px_rgba(52,211,153,0.65)]" />
+                ) : (
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium text-text">Importing agent</p>
+                  <span className="text-[11px] font-medium text-text-muted">
+                    {Math.round((agentImportProgress.progress ?? 0.08) * 100)}%
+                  </span>
+                </div>
+                <p className="mt-0.5 truncate text-xs text-text-muted">
+                  {agentImportProgress.message}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/10">
+              <div
+                className="h-full rounded-full bg-primary transition-all duration-300"
+                style={{ width: `${Math.max(6, Math.min(100, Math.round((agentImportProgress.progress ?? 0.08) * 100)))}%` }}
+              />
+            </div>
+            <div className="mt-2 flex items-center justify-between text-[10px] uppercase tracking-[0.16em] text-text-muted/70">
+              <span>{agentImportProgress.phase}</span>
+              {agentImportProgress.agentName && <span className="max-w-[160px] truncate normal-case tracking-normal">{agentImportProgress.agentName}</span>}
+            </div>
+          </div>
         </div>
       )}
 

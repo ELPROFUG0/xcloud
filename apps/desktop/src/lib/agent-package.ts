@@ -79,6 +79,20 @@ export type ImportedAgentPackage = {
   model?: { primary?: string };
 };
 
+export type AgentImportProgressPhase = "selecting" | "unpacking" | "packing" | "preparing" | "uploading" | "extracting" | "registering" | "done";
+
+export type AgentImportProgress = {
+  phase: AgentImportProgressPhase;
+  message: string;
+  progress?: number;
+  agentId?: string;
+  agentName?: string;
+};
+
+export type AgentImportOptions = {
+  onProgress?: (progress: AgentImportProgress) => void;
+};
+
 function shellQuote(value: string) {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
@@ -322,6 +336,7 @@ async function importAgentPackageToRemote(
   engine: BrowserEngine,
   manifest: AgentPackageManifest,
   stage: string,
+  options: AgentImportOptions = {},
 ): Promise<ImportedAgentPackage> {
   const existingAgents = await readRemoteConfigAgents(engine);
   const existingIds = new Set(existingAgents.map((agent) => agent.id).filter(Boolean));
@@ -335,6 +350,13 @@ async function importAgentPackageToRemote(
   let localArchive = "";
 
   try {
+    options.onProgress?.({
+      phase: "packing",
+      message: `Packing ${agentName} for the remote engine...`,
+      progress: 0.16,
+      agentId,
+      agentName,
+    });
     localArchive = await createLocalImportArchive(stage, agentId);
     const archiveBytes = await readFile(localArchive, { baseDir: BaseDirectory.Home });
     const maxArchiveBytes = 150 * 1024 * 1024;
@@ -343,19 +365,47 @@ async function importAgentPackageToRemote(
     }
 
     const base64 = uint8ToBase64(archiveBytes);
+    options.onProgress?.({
+      phase: "preparing",
+      message: "Preparing the remote engine...",
+      progress: 0.24,
+      agentId,
+      agentName,
+    });
     await runRemoteEngineShell(
       engine,
       `mkdir -p "$HOME/.openclaw/tmp" && rm -f ${engineHomePath(archivePath)} ${engineHomePath(archiveB64Path)}`,
       20_000,
     );
 
-    const chunkSize = 96_000;
+    const chunkSize = 48_000;
     const chunks = Math.ceil(base64.length / chunkSize);
     for (let index = 0; index < chunks; index += 1) {
+      options.onProgress?.({
+        phase: "uploading",
+        message: `Uploading package ${index + 1}/${chunks}...`,
+        progress: 0.24 + (index / Math.max(chunks, 1)) * 0.5,
+        agentId,
+        agentName,
+      });
       await appendRemoteBase64Chunk(engine, archiveB64Path, base64.slice(index * chunkSize, (index + 1) * chunkSize), index === 0);
+      options.onProgress?.({
+        phase: "uploading",
+        message: `Uploading package ${index + 1}/${chunks}...`,
+        progress: 0.24 + ((index + 1) / Math.max(chunks, 1)) * 0.5,
+        agentId,
+        agentName,
+      });
     }
 
     const decodeScript = "const fs=require('node:fs');const input=fs.readFileSync(process.argv[1],'utf8').replace(/\\s+/g,'');fs.writeFileSync(process.argv[2],Buffer.from(input,'base64'));";
+    options.onProgress?.({
+      phase: "extracting",
+      message: "Extracting agent files on the remote engine...",
+      progress: 0.8,
+      agentId,
+      agentName,
+    });
     await runRemoteEngineShell(
       engine,
       `set -e
@@ -379,6 +429,13 @@ rm -f ${engineHomePath(archivePath)} ${engineHomePath(archiveB64Path)}`,
       120_000,
     );
 
+    options.onProgress?.({
+      phase: "registering",
+      message: "Registering agent and UI config...",
+      progress: 0.9,
+      agentId,
+      agentName,
+    });
     const importedAgent: ImportedAgentPackage = {
       id: agentId,
       name: agentName,
@@ -403,6 +460,7 @@ rm -f ${engineHomePath(archivePath)} ${engineHomePath(archiveB64Path)}`,
 async function importAgentPackageToLocal(
   manifest: AgentPackageManifest,
   stage: string,
+  options: AgentImportOptions = {},
 ): Promise<ImportedAgentPackage> {
   const home = (await homeDir()).replace(/\/$/, "");
   const config = await readLocalConfig();
@@ -414,6 +472,13 @@ async function importAgentPackageToLocal(
   const agentName = manifest.agent.name || agentId;
   const workspacePath = `${home}/.openclaw/workspace/${agentId}`;
 
+  options.onProgress?.({
+    phase: "registering",
+    message: `Copying ${agentName} into local OpenClaw...`,
+    progress: 0.58,
+    agentId,
+    agentName,
+  });
   await runShell(`
 set -e
 rm -rf ${shellQuote(workspacePath)}
@@ -453,7 +518,12 @@ fi
   return importedAgent;
 }
 
-export async function importAgentPackage(engine: BrowserEngine): Promise<ImportedAgentPackage | null> {
+export async function importAgentPackage(engine: BrowserEngine, options: AgentImportOptions = {}): Promise<ImportedAgentPackage | null> {
+  options.onProgress?.({
+    phase: "selecting",
+    message: "Choose an agent package to import...",
+    progress: 0.04,
+  });
   const selected = await openDialog({
     title: "Import agent package",
     multiple: false,
@@ -465,6 +535,11 @@ export async function importAgentPackage(engine: BrowserEngine): Promise<Importe
   const tempRoot = (await tempDir()).replace(/\/$/, "");
   const stage = `${tempRoot}/xcloud-agent-import-${Date.now()}`;
   try {
+    options.onProgress?.({
+      phase: "unpacking",
+      message: "Reading package manifest...",
+      progress: 0.08,
+    });
     await runShell(`
 set -e
 rm -rf ${shellQuote(stage)}
@@ -482,8 +557,8 @@ unzip -q ${shellQuote(selected)} -d ${shellQuote(stage)}
     }
 
     return engine.isRemote
-      ? await importAgentPackageToRemote(engine, manifest, stage)
-      : await importAgentPackageToLocal(manifest, stage);
+      ? await importAgentPackageToRemote(engine, manifest, stage, options)
+      : await importAgentPackageToLocal(manifest, stage, options);
   } finally {
     await runShell(`rm -rf ${shellQuote(stage)}`).catch(() => "");
   }
