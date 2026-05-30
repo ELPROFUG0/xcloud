@@ -1101,12 +1101,15 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
   const [localSourcePath, setLocalSourcePath] = useState<string | null>(null);
   const [devServerUrl, setDevServerUrl] = useState<string | null>(null);
   const [devServerLoading, setDevServerLoading] = useState(false);
+  const [devServerError, setDevServerError] = useState<string | null>(null);
   const [uiView, setUiView] = useState<"menu" | "create" | "preview">("menu");
   const [hasProject, setHasProject] = useState(false);
   const [autoOpenRevision, setAutoOpenRevision] = useState(0);
   const [repoSyncState, setRepoSyncState] = useState<RepoSyncState>({ status: "idle" });
   const [home, setHome] = useState<string>("");
   const lastConfigSignatureRef = useRef("");
+  const autoStartAttemptRef = useRef<{ key: string; count: number } | null>(null);
+  const devServerStartRequestRef = useRef(0);
 
   const uiWsPath = wsPath;
   const remoteConfigStorageKey = agentUiConfigStorageKey(_agentId, engine);
@@ -1176,7 +1179,26 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
 
   // Start dev server
   const startDevServer = useCallback(async (path: string, savedPort?: number) => {
+    const requestId = ++devServerStartRequestRef.current;
     const cleanPath = trimTrailingSlash(path);
+    setDevServerError(null);
+
+    const finishOk = (url: string) => {
+      if (devServerStartRequestRef.current !== requestId) return true;
+      setDevServerUrl(url);
+      setDevServerError(null);
+      setDevServerLoading(false);
+      return true;
+    };
+
+    const finishError = (message: string) => {
+      if (devServerStartRequestRef.current !== requestId) return false;
+      setDevServerUrl(null);
+      setDevServerError(message);
+      setDevServerLoading(false);
+      return false;
+    };
+
     await ensureRealtimeBridge(engine, cleanPath).catch(() => {});
 
     try {
@@ -1188,9 +1210,7 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
           if (savedPort) {
             const running = await probeDevServer(engine, savedPort, { requireDevServer: true });
             if (running) {
-              setDevServerUrl(previewUrlForPort(engine, savedPort));
-              setDevServerLoading(false);
-              return;
+              return finishOk(previewUrlForPort(engine, savedPort));
             }
           }
 
@@ -1213,15 +1233,12 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
           let retries = 0;
           while (retries < 30) {
             if (await probeDevServer(engine, port, { requireDevServer: true })) {
-              setDevServerUrl(previewUrlForPort(engine, port));
-              setDevServerLoading(false);
-              return;
+              return finishOk(previewUrlForPort(engine, port));
             }
             retries++;
             await delay(1000);
           }
-          setDevServerLoading(false);
-          return;
+          return finishError(`The ${script} server did not respond on port ${port}.`);
         }
       }
 
@@ -1248,21 +1265,20 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
         let retries = 0;
         while (retries < 20) {
           if (await probeDevServer(engine, port)) {
-            setDevServerUrl(previewUrlForPort(engine, port, "/index.html"));
-            setDevServerLoading(false);
-            return;
+            return finishOk(previewUrlForPort(engine, port, "/index.html"));
           }
           retries++;
           await delay(500);
         }
+        return finishError(`Static preview did not respond on port ${port}.`);
       }
-      setDevServerLoading(false);
-    } catch {
-      setDevServerLoading(false);
+      return finishError("No runnable UI was found. Add a dev/start script or an index.html file.");
+    } catch (error) {
+      return finishError(error instanceof Error ? error.message : String(error));
     }
   }, [_agentId, engine, saveConfig]);
 
-  const loadSavedConfig = useCallback(async (initial = false) => {
+  const loadSavedConfig = useCallback(async () => {
     if (!configIdentity) return;
     let content = await readOpenClawAgentFile(engine, _agentId, "ui-config.json", "{}");
     if (engine.isRemote && (!content || content.trim() === "{}")) {
@@ -1302,13 +1318,15 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
     }
     const nextPort = Number.isFinite(Number(config.port)) ? Number(config.port) : undefined;
     const signature = nextRepoPath ? `${nextRepoPath}:${config.localSourcePath ?? ""}:${nextPort ?? ""}:${config.updatedAt ?? ""}:${config.openInPreview ? "open" : ""}` : "";
-    const changed = lastConfigSignatureRef.current !== signature;
-    lastConfigSignatureRef.current = signature;
+    if (lastConfigSignatureRef.current !== signature) {
+      lastConfigSignatureRef.current = signature;
+    }
 
     if (!nextRepoPath) {
       setRepoPath(null);
       cacheLocalSourcePath(null);
       setDevServerUrl(null);
+      setDevServerError(null);
       setHasProject(false);
       setUiView("menu");
       return;
@@ -1330,9 +1348,8 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
 
     const autoOpenKey = `xcloud-ui-auto-open:${configIdentity}:${config.updatedAt ?? signature}`;
     const requestedAutoOpen = config.openInPreview === true && !sessionStorage.getItem(autoOpenKey);
-    const shouldOpen = requestedAutoOpen || (!initial && changed);
-    if (shouldOpen) {
-      if (requestedAutoOpen) sessionStorage.setItem(autoOpenKey, "1");
+    if (requestedAutoOpen) {
+      sessionStorage.setItem(autoOpenKey, "1");
       setUiView("preview");
       setAutoOpenRevision((value) => value + 1);
       if (!running && !devServerUrl && !devServerLoading) {
@@ -1345,9 +1362,9 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
   useEffect(() => {
     if (!configIdentity) return;
     lastConfigSignatureRef.current = "";
-    void loadSavedConfig(true);
+    void loadSavedConfig();
     const timer = window.setInterval(() => {
-      void loadSavedConfig(false);
+      void loadSavedConfig();
     }, 1500);
     return () => window.clearInterval(timer);
   }, [configIdentity, loadSavedConfig]);
@@ -1355,18 +1372,24 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
   useEffect(() => {
     const syncBlocksAutoStart = engine.isRemote && !["idle", "ready"].includes(repoSyncState.status);
     if (uiView !== "preview" || !repoPath || !hasProject || devServerUrl || devServerLoading || syncBlocksAutoStart) return;
-    const timer = window.setInterval(() => {
+    const attemptKey = `${engine.storageScope}:${repoPath}`;
+    const previousAttempt = autoStartAttemptRef.current?.key === attemptKey ? autoStartAttemptRef.current.count : 0;
+    if (previousAttempt >= 1) return;
+    autoStartAttemptRef.current = { key: attemptKey, count: previousAttempt + 1 };
+    const timer = window.setTimeout(() => {
       setDevServerLoading(true);
       void startDevServer(repoPath);
-    }, 3000);
-    return () => window.clearInterval(timer);
-  }, [devServerLoading, devServerUrl, engine.isRemote, hasProject, repoPath, repoSyncState.status, startDevServer, uiView]);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [devServerLoading, devServerUrl, engine.isRemote, engine.storageScope, hasProject, repoPath, repoSyncState.status, startDevServer, uiView]);
 
   const openRemoteUiWorkspace = useCallback(async () => {
     const path = `${agentWorkspacePath(_agentId)}/ui`;
+    autoStartAttemptRef.current = null;
     setRepoPath(path);
     await saveConfig(path);
     await ensureRealtimeBridge(engine, path).catch(() => {});
+    setDevServerError(null);
     setDevServerLoading(true);
     setUiView("preview");
     await startDevServer(path);
@@ -1392,7 +1415,9 @@ export function useAgentUI(_agentId: string, wsPath: string, engine: BrowserEngi
       }
 
       setDevServerUrl(null);
+      setDevServerError(null);
       setDevServerLoading(true);
+      autoStartAttemptRef.current = null;
       setUiView("preview");
 
       setRepoSyncState({ status: "packing", sourcePath, targetPath, message: "Packing local repo..." });
@@ -1469,7 +1494,9 @@ rm -f ${engineShellPath(engine, archivePath)} ${engineShellPath(engine, archiveB
       cacheLocalSourcePath(sourcePath);
       setHasProject(await hasUiProject(engine, targetPath));
       setDevServerUrl(null);
+      setDevServerError(null);
       setDevServerLoading(true);
+      autoStartAttemptRef.current = null;
       setRepoSyncState({ status: "installing", sourcePath, targetPath, message: "Starting remote preview..." });
       await startDevServer(targetPath);
       setRepoSyncState({ status: "ready", sourcePath, targetPath, message: "Repo synced to remote engine." });
@@ -1587,8 +1614,10 @@ rm -f ${engineShellPath(engine, archivePath)} ${engineShellPath(engine, archiveB
     cacheLocalSourcePath(null);
     await saveConfig(path, undefined, { localSourcePath: null });
     await ensureRealtimeBridge(engine, path);
+    setDevServerError(null);
     setDevServerLoading(true);
     setUiView("preview");
+    autoStartAttemptRef.current = null;
     await startDevServer(path);
   }, [cacheLocalSourcePath, engine, getCachedLocalSourcePath, saveConfig, startDevServer, syncLocalRepoPathToRemote]);
 
@@ -1597,6 +1626,8 @@ rm -f ${engineShellPath(engine, archivePath)} ${engineShellPath(engine, archiveB
     setRepoPath(null);
     cacheLocalSourcePath(null);
     setDevServerUrl(null);
+    setDevServerError(null);
+    autoStartAttemptRef.current = null;
     setUiView("menu");
     localStorage.removeItem(remoteConfigStorageKey);
     await writeOpenClawAgentFile(engine, _agentId, "ui-config.json", "{}\n").catch(() => {});
@@ -1609,14 +1640,18 @@ rm -f ${engineShellPath(engine, archivePath)} ${engineShellPath(engine, archiveB
   // Launch preview (from menu or tab switch)
   const launchPreview = useCallback(() => {
     if (!repoPath) return;
+    setDevServerError(null);
+    autoStartAttemptRef.current = null;
     if (devServerUrl) {
+      setUiView("preview");
+    } else if (devServerLoading) {
       setUiView("preview");
     } else {
       setUiView("preview");
       setDevServerLoading(true);
       startDevServer(repoPath);
     }
-  }, [repoPath, devServerUrl, startDevServer]);
+  }, [repoPath, devServerUrl, devServerLoading, startDevServer]);
 
   // Create UI — scaffold and open editor
   const createUI = useCallback(async (editor: string) => {
@@ -1626,6 +1661,8 @@ rm -f ${engineShellPath(engine, archivePath)} ${engineShellPath(engine, archiveB
     cacheLocalSourcePath(null);
     await saveConfig(uiPath, undefined, { localSourcePath: null });
     await ensureRealtimeBridge(engine, uiPath);
+    setDevServerError(null);
+    autoStartAttemptRef.current = null;
 
     if (engine.isRemote) {
       setUiView("preview");
@@ -1653,7 +1690,7 @@ rm -f ${engineShellPath(engine, archivePath)} ${engineShellPath(engine, archiveB
 
   return {
     agentId: _agentId,
-    repoPath, localSourcePath, devServerUrl, devServerLoading, uiView, hasProject, autoOpenRevision,
+    repoPath, localSourcePath, devServerUrl, devServerLoading, devServerError, uiView, hasProject, autoOpenRevision,
     engineIsRemote: engine.isRemote,
     repoSyncState,
     setUiView, selectRepo, disconnectRepo, launchPreview, createUI,
@@ -1816,7 +1853,7 @@ function CreateDropdown({ label, options, onSelect }: {
 
 /** Main UI tab content */
 export function AgentUIContent({
-  agentId, uiView, repoPath, localSourcePath, devServerUrl, devServerLoading, hasProject,
+  agentId, uiView, repoPath, localSourcePath, devServerUrl, devServerLoading, devServerError, hasProject,
   engineIsRemote, repoSyncState,
   setUiView, selectRepo, disconnectRepo, launchPreview, createUI,
   openRemoteUiWorkspace, applyRemoteChangesToLocal, clearRepoSyncState,
@@ -1825,11 +1862,13 @@ export function AgentUIContent({
   const menuRef = useRef<HTMLDivElement>(null);
   const uiToolsRef = useRef<XCloudUiToolDefinition[]>([]);
   const loadFinishTimerRef = useRef<number | null>(null);
+  const loadTimeoutTimerRef = useRef<number | null>(null);
   const menuCloseTimerRef = useRef<number | null>(null);
   const shareTunnelRef = useRef<ShareTunnelState>({ status: "idle" });
   const [browserMenuOpen, setBrowserMenuOpen] = useState(false);
   const [browserMenuClosing, setBrowserMenuClosing] = useState(false);
   const [previewLoadPhase, setPreviewLoadPhase] = useState<"idle" | "loading" | "finishing">("idle");
+  const [previewLoadError, setPreviewLoadError] = useState<string | null>(null);
   const [shareTunnel, setShareTunnel] = useState<ShareTunnelState>({ status: "idle" });
   const [shareCopied, setShareCopied] = useState(false);
   const pendingUiToolCallsRef = useRef(new Map<string, {
@@ -1841,6 +1880,28 @@ export function AgentUIContent({
     if (!devServerUrl) return;
     iframeRef.current?.contentWindow?.postMessage(message, getTargetOrigin(devServerUrl));
   }, [devServerUrl]);
+
+  const clearPreviewLoadTimers = useCallback(() => {
+    if (loadFinishTimerRef.current !== null) {
+      window.clearTimeout(loadFinishTimerRef.current);
+      loadFinishTimerRef.current = null;
+    }
+    if (loadTimeoutTimerRef.current !== null) {
+      window.clearTimeout(loadTimeoutTimerRef.current);
+      loadTimeoutTimerRef.current = null;
+    }
+  }, []);
+
+  const startPreviewLoadWatchdog = useCallback(() => {
+    clearPreviewLoadTimers();
+    setPreviewLoadError(null);
+    setPreviewLoadPhase("loading");
+    loadTimeoutTimerRef.current = window.setTimeout(() => {
+      setPreviewLoadPhase("idle");
+      setPreviewLoadError("Preview is taking too long to load. Refresh it or open it in your browser to inspect the app.");
+      loadTimeoutTimerRef.current = null;
+    }, 12_000);
+  }, [clearPreviewLoadTimers]);
 
   const runUiAction = useCallback((request: {
     instruction?: string;
@@ -2091,20 +2152,22 @@ export function AgentUIContent({
   }, [browserMenuClosing, browserMenuOpen]);
 
   useEffect(() => {
-    if (loadFinishTimerRef.current !== null) {
-      window.clearTimeout(loadFinishTimerRef.current);
-      loadFinishTimerRef.current = null;
-    }
     if (uiView === "preview" && devServerUrl) {
-      setPreviewLoadPhase("loading");
-    } else {
-      setPreviewLoadPhase("idle");
+      startPreviewLoadWatchdog();
+      return clearPreviewLoadTimers;
     }
-  }, [devServerUrl, uiView]);
+    clearPreviewLoadTimers();
+    setPreviewLoadPhase("idle");
+    setPreviewLoadError(null);
+    return undefined;
+  }, [clearPreviewLoadTimers, devServerUrl, startPreviewLoadWatchdog, uiView]);
 
   useEffect(() => () => {
     if (loadFinishTimerRef.current !== null) {
       window.clearTimeout(loadFinishTimerRef.current);
+    }
+    if (loadTimeoutTimerRef.current !== null) {
+      window.clearTimeout(loadTimeoutTimerRef.current);
     }
     if (menuCloseTimerRef.current !== null) {
       window.clearTimeout(menuCloseTimerRef.current);
@@ -2144,7 +2207,8 @@ export function AgentUIContent({
   const shouldMaskPreview = devServerLoading || previewLoadPhase === "loading";
 
   const finishPreviewLoad = () => {
-    if (loadFinishTimerRef.current !== null) window.clearTimeout(loadFinishTimerRef.current);
+    clearPreviewLoadTimers();
+    setPreviewLoadError(null);
     setPreviewLoadPhase("finishing");
     loadFinishTimerRef.current = window.setTimeout(() => {
       setPreviewLoadPhase("idle");
@@ -2155,7 +2219,7 @@ export function AgentUIContent({
   const refreshPreview = () => {
     const iframe = document.querySelector<HTMLIFrameElement>(".ui-preview-iframe");
     if (iframe && devServerUrl) {
-      setPreviewLoadPhase("loading");
+      startPreviewLoadWatchdog();
       iframe.src = devServerUrl;
     }
   };
@@ -2591,17 +2655,38 @@ true`,
           ) : (
             <div className="flex h-full items-center justify-center">
               <div className="text-center px-8">
-                <p className="text-xs text-text-muted">No dev server detected</p>
+                <p className={`text-xs ${devServerError ? "text-red-300/90" : "text-text-muted"}`}>
+                  {devServerError ?? "No dev server detected"}
+                </p>
                 <p className="mt-1 text-[10px] text-text-muted">
                   Add a <code className="text-accent">dev</code> script to package.json or include an index.html
                 </p>
+                {repoPath && (
+                  <button
+                    onClick={launchPreview}
+                    className="mt-4 rounded-lg border border-border/80 px-3 py-1.5 text-[11px] text-text-muted transition-colors hover:border-white/20 hover:text-text"
+                  >
+                    Try Again
+                  </button>
+                )}
                 <button
                   onClick={disconnectRepo}
-                  className="mt-4 text-[11px] text-red-400/70 hover:text-red-400 transition-colors"
+                  className="ml-3 mt-4 text-[11px] text-red-400/70 hover:text-red-400 transition-colors"
                 >
                   Disconnect
                 </button>
               </div>
+            </div>
+          )}
+          {previewLoadError && devServerUrl && !devServerLoading && (
+            <div className="absolute left-3 right-3 top-3 z-20 flex items-center gap-3 rounded-xl border border-border/80 bg-[#111111]/90 px-3 py-2 shadow-2xl backdrop-blur">
+              <span className="min-w-0 flex-1 text-[11px] text-text-muted">{previewLoadError}</span>
+              <button
+                onClick={refreshPreview}
+                className="shrink-0 rounded-lg border border-border/80 px-2.5 py-1 text-[11px] text-text-muted transition-colors hover:border-white/20 hover:text-text"
+              >
+                Refresh
+              </button>
             </div>
           )}
           {shouldMaskPreview && (
