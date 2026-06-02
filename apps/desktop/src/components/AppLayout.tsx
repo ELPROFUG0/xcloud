@@ -184,6 +184,13 @@ function isWorkspaceOwnedAgent(agent: AgentInfo, workspaces: WorkspaceInfo[]) {
   ));
 }
 
+function agentBelongsToWorkspace(agentId: string, workspace: WorkspaceInfo) {
+  if (agentId === getWorkspaceAgentId(workspace.id)) return true;
+  if (workspace.agentIds.includes(agentId)) return true;
+  if (agentId.startsWith("workspace-")) return false;
+  return workspaceAgentPrefixes(workspace).some((prefix) => agentId.startsWith(`${prefix}-`));
+}
+
 function getAgentIdFromSessionKey(sessionKey: string) {
   if (sessionKey === MAIN_AGENT_ID || sessionKey.startsWith(`${MAIN_AGENT_ID}:`)) return MAIN_AGENT_ID;
   const parts = sessionKey.split(":");
@@ -993,11 +1000,21 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     document.body.style.userSelect = "none";
   }, [terminalHeight]);
 
+  const getWorkspaceIdForAgent = useCallback((agentId: string) => {
+    return workspaces.find((workspace) => agentBelongsToWorkspace(agentId, workspace))?.id ?? null;
+  }, [workspaces]);
+
+  const setWorkspaceContextForAgent = useCallback((agentId: string) => {
+    const workspaceId = getWorkspaceIdForAgent(agentId);
+    if (workspaceId !== activeWorkspaceId) triggerSidebarAnimation();
+    setActiveWorkspaceId(workspaceId);
+  }, [activeWorkspaceId, getWorkspaceIdForAgent, triggerSidebarAnimation]);
+
   const handleSelectAgent = useCallback((id: string) => {
     if (!agents.some((agent) => agent.id === id)) return;
     clearUnreadForAgent(id);
     setActiveAgentId(id);
-    setActiveWorkspaceId(null);
+    setWorkspaceContextForAgent(id);
     setActiveSessionKey(getPreferredAgentSession(id));
     setShowNewChat(false);
     setInitialChatPrompt(undefined);
@@ -1006,7 +1023,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setShowPreview(false);
     setShowCanvas(false);
     setCanvasExpanded(false);
-  }, [agents, clearUnreadForAgent, getPreferredAgentSession]);
+  }, [agents, clearUnreadForAgent, getPreferredAgentSession, setWorkspaceContextForAgent]);
 
   const handleSelectWorkspace = useCallback((id: string) => {
     const coordinatorId = getWorkspaceAgentId(id);
@@ -1289,7 +1306,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     if (!agents.some((agent) => agent.id === agentId)) return;
     clearUnreadForSession(sessionKey);
     setActiveAgentId(agentId);
-    setActiveWorkspaceId(null);
+    setWorkspaceContextForAgent(agentId);
     setActiveSessionKey(sessionKey);
     setShowNewChat(false);
     setInitialChatPrompt(undefined);
@@ -1298,7 +1315,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setShowPreview(false);
     setShowCanvas(false);
     setCanvasExpanded(false);
-  }, [agents, clearUnreadForSession]);
+  }, [agents, clearUnreadForSession, setWorkspaceContextForAgent]);
 
   const handleNewChat = useCallback(() => {
     setShowNewChat(true);
@@ -1316,7 +1333,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const handleStartNewChat = useCallback((agentId: string, prompt?: string) => {
     const id = crypto.randomUUID().slice(0, 8);
     setActiveAgentId(agentId);
-    setActiveWorkspaceId(null);
+    setWorkspaceContextForAgent(agentId);
     setActiveSessionKey(agentId === "main" ? `main:${id}` : `agent:${agentId}:${id}`);
     setInitialChatPrompt(prompt?.trim() || undefined);
     setInitialChatPromptHidden(false);
@@ -1325,7 +1342,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setShowPreview(false);
     setShowCanvas(false);
     setCanvasExpanded(false);
-  }, []);
+  }, [setWorkspaceContextForAgent]);
 
   useEffect(() => {
     function handleWorkspaceRequest(e: Event) {
@@ -1692,7 +1709,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                   titleName={hasWorkspaceChat ? activeWorkspace!.name : undefined}
                   workspaceName={hasWorkspaceChat || isWorkspaceCoordinatorActive ? activeWorkspace!.name : undefined}
                   agents={chatAgentOptions}
-                  onSwitchAgent={(id) => setActiveAgentId(id)}
+                  onSwitchAgent={handleSelectAgent}
                   onSessionChange={setActiveSessionKey}
                   sidebarCollapsed={sidebarCollapsed}
                   isFullscreen={isFullscreen}

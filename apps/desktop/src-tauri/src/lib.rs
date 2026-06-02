@@ -4,7 +4,11 @@ mod pty;
 
 use std::process::Command as StdCommand;
 use std::path::PathBuf;
-use tauri::Manager;
+use tauri::{
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager,
+};
 
 #[tauri::command]
 async fn run_shell(cmd: String) -> Result<String, String> {
@@ -107,13 +111,67 @@ pub fn run() {
                     .expect("Failed to apply vibrancy");
             }
 
+            let show_item = MenuItem::with_id(app, "show", "Show xCloud", true, None::<&str>)?;
+            let hide_item = MenuItem::with_id(app, "hide", "Hide xCloud", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit xCloud", true, None::<&str>)?;
+            let separator = PredefinedMenuItem::separator(app)?;
+            let menu = Menu::with_items(app, &[&show_item, &hide_item, &separator, &quit_item])?;
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
+
+            TrayIconBuilder::new()
+                .icon(tray_icon)
+                .icon_as_template(false)
+                .tooltip("xCloud")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        if let Some(window) = tray.app_handle().get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "hide" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.hide();
+                        }
+                    }
+                    "quit" => {
+                        let state = app.state::<engine::EngineProcess>();
+                        engine::cleanup(&state);
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .build(app)?;
+
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                let app = window.app_handle();
-                let state = app.state::<engine::EngineProcess>();
-                engine::cleanup(&state);
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                tauri::WindowEvent::Destroyed => {
+                    let app = window.app_handle();
+                    let state = app.state::<engine::EngineProcess>();
+                    engine::cleanup(&state);
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
