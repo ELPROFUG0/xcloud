@@ -59,7 +59,9 @@ export function LiveWaveform({
 
     async function start() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
+        const mediaDevices = navigator.mediaDevices;
+        if (!mediaDevices?.getUserMedia) return;
+        const stream = await mediaDevices.getUserMedia({
           audio: deviceId ? { deviceId: { exact: deviceId } } : true,
         });
         if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }

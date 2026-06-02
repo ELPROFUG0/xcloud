@@ -189,7 +189,9 @@ export function ChatInput({
 
   // Load mic devices
   useEffect(() => {
-    navigator.mediaDevices.enumerateDevices().then((list) => {
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.enumerateDevices) return;
+    mediaDevices.enumerateDevices().then((list) => {
       const inputs = list.filter(d => d.kind === "audioinput").map(d => ({
         deviceId: d.deviceId,
         label: d.label ? d.label.replace(/\s*\([^)]*\)/g, "").trim() : `Mic ${d.deviceId.slice(0, 8)}`,
@@ -276,6 +278,10 @@ export function ChatInput({
       if (typeof MediaRecorder === "undefined") {
         throw new Error("MediaRecorder is not available in this WebView");
       }
+      const mediaDevices = navigator.mediaDevices;
+      if (!mediaDevices?.getUserMedia) {
+        throw new Error("Microphone capture is not available in this WebView");
+      }
 
       const status = await invoke<AudioStatus>("local_speech_status").catch(() => null);
       setSpeechModelDownloaded(status?.modelDownloaded ?? null);
@@ -287,17 +293,19 @@ export function ChatInput({
         setPreparingSpeech(false);
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: selectedMic ? { deviceId: { exact: selectedMic } } : true });
+      const stream = await mediaDevices.getUserMedia({ audio: selectedMic ? { deviceId: { exact: selectedMic } } : true });
       recordingStreamRef.current = stream;
 
       // Reload devices with labels
-      const list = await navigator.mediaDevices.enumerateDevices();
-      const inputs = list.filter(d => d.kind === "audioinput").map(d => ({
-        deviceId: d.deviceId,
-        label: d.label ? d.label.replace(/\s*\([^)]*\)/g, "").trim() : `Mic ${d.deviceId.slice(0, 8)}`,
-      }));
-      setMicDevices(inputs);
-      if (inputs[0] && !selectedMic) setSelectedMic(inputs[0].deviceId);
+      if (mediaDevices.enumerateDevices) {
+        const list = await mediaDevices.enumerateDevices();
+        const inputs = list.filter(d => d.kind === "audioinput").map(d => ({
+          deviceId: d.deviceId,
+          label: d.label ? d.label.replace(/\s*\([^)]*\)/g, "").trim() : `Mic ${d.deviceId.slice(0, 8)}`,
+        }));
+        setMicDevices(inputs);
+        if (inputs[0] && !selectedMic) setSelectedMic(inputs[0].deviceId);
+      }
 
       const format = getRecordingFormat();
       const recorder = format ? new MediaRecorder(stream, { mimeType: format }) : new MediaRecorder(stream);

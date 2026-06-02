@@ -595,6 +595,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const draggingCanvas = useRef(false);
   const draggingTerminal = useRef(false);
   const previousTerminalKeyRef = useRef<string | null>(null);
+  const previousCanvasSurfaceRef = useRef<string | null>(null);
   const ensuringWorkspaceIdsRef = useRef(new Set<string>());
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
   const workspaceAgents = getWorkspaceAgents(activeWorkspace);
@@ -626,28 +627,38 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
 
   useEffect(() => {
     if (!hasCanvasSurface) {
+      previousCanvasSurfaceRef.current = null;
+      setShowCanvas(false);
       setCanvasExpanded(false);
       return;
     }
-    setShowCanvas(getCanvasPanelOpen(canvasSurfaceId(currentAgentId)));
+    const surfaceId = canvasSurfaceId(currentAgentId);
+    if (previousCanvasSurfaceRef.current !== surfaceId) {
+      previousCanvasSurfaceRef.current = surfaceId;
+      setShowCanvas(false);
+      setCanvasExpanded(false);
+      setNodeDetail(null);
+      return;
+    }
+    setShowCanvas((open) => open && getCanvasPanelOpen(surfaceId));
     setCanvasExpanded(false);
   }, [currentAgentId, engineStorageScope, hasCanvasSurface]);
 
   useEffect(() => {
-    if (!hasCanvasSurface) return;
+    if (!hasCanvasSurface || !showCanvas) return;
     setMountedCanvasAgentIds((ids) => ids.includes(currentAgentId) ? ids : [...ids, currentAgentId]);
-  }, [currentAgentId, hasCanvasSurface]);
+  }, [currentAgentId, hasCanvasSurface, showCanvas]);
 
   useEffect(() => {
     const knownAgentIds = new Set(agents.map((agent) => agent.id));
-    setMountedCanvasAgentIds((ids) => ids.filter((id) => id === currentAgentId || knownAgentIds.has(id)));
-  }, [agents, currentAgentId]);
+    setMountedCanvasAgentIds((ids) => ids.filter((id) => knownAgentIds.has(id)));
+  }, [agents]);
 
   const renderedCanvasAgentIds = useMemo(() => {
     const ids = mountedCanvasAgentIds.filter((id, index, list) => list.indexOf(id) === index);
-    if (hasCanvasSurface && !ids.includes(currentAgentId)) ids.push(currentAgentId);
+    if (hasCanvasSurface && showCanvas && !ids.includes(currentAgentId)) ids.push(currentAgentId);
     return ids;
-  }, [currentAgentId, hasCanvasSurface, mountedCanvasAgentIds]);
+  }, [currentAgentId, hasCanvasSurface, mountedCanvasAgentIds, showCanvas]);
 
   const getPreferredAgentSession = useCallback((agentId: string) => {
     return getAgentSessions(agentId)[0]?.key ?? getDefaultSessionKeyForAgent(agentId);
@@ -655,6 +666,14 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
 
   useEffect(() => {
     if (!activeAgentId || showNewChat || showSettings) return;
+    if (!agents.some((agent) => agent.id === activeAgentId)) {
+      setActiveAgentId(null);
+      setActiveSessionKey(null);
+      setShowCanvas(false);
+      setCanvasExpanded(false);
+      setNodeDetail(null);
+      return;
+    }
     const latestSession = getAgentSessions(activeAgentId)[0]?.key;
     if (!latestSession) return;
 
@@ -664,7 +683,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
       if (current && current !== defaultSession && current !== legacyWorkspaceSession) return current;
       return current === latestSession ? current : latestSession;
     });
-  }, [activeAgentId, activeWorkspaceCoordinatorId, getAgentSessions, showNewChat, showSettings]);
+  }, [activeAgentId, activeWorkspaceCoordinatorId, agents, getAgentSessions, showNewChat, showSettings]);
 
   const triggerSidebarAnimation = useCallback(() => {
     setSidebarAnimationKey((key) => key + 1);
@@ -975,16 +994,19 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   }, [terminalHeight]);
 
   const handleSelectAgent = useCallback((id: string) => {
+    if (!agents.some((agent) => agent.id === id)) return;
     clearUnreadForAgent(id);
     setActiveAgentId(id);
+    setActiveWorkspaceId(null);
     setActiveSessionKey(getPreferredAgentSession(id));
     setShowNewChat(false);
     setInitialChatPrompt(undefined);
     setInitialChatPromptHidden(false);
     setShowSettings(false);
     setShowPreview(false);
-    setShowCanvas(getCanvasPanelOpen(canvasSurfaceId(id)));
-  }, [clearUnreadForAgent, engineStorageScope, getPreferredAgentSession]);
+    setShowCanvas(false);
+    setCanvasExpanded(false);
+  }, [agents, clearUnreadForAgent, getPreferredAgentSession]);
 
   const handleSelectWorkspace = useCallback((id: string) => {
     const coordinatorId = getWorkspaceAgentId(id);
@@ -998,7 +1020,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setInitialChatPromptHidden(false);
     setShowSettings(false);
     setShowPreview(false);
-    setShowCanvas(getCanvasPanelOpen(canvasSurfaceId(coordinatorId)));
+    setShowCanvas(false);
     setCanvasExpanded(false);
   }, [clearUnreadForAgent, engineStorageScope, getPreferredAgentSession, triggerSidebarAnimation]);
 
@@ -1013,7 +1035,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setInitialChatPromptHidden(false);
     setShowSettings(false);
     setShowPreview(false);
-    setShowCanvas(getCanvasPanelOpen(canvasSurfaceId(coordinatorId)));
+    setShowCanvas(false);
     setCanvasExpanded(false);
   }, [clearUnreadForAgent, engineStorageScope, getPreferredAgentSession]);
 
@@ -1029,9 +1051,11 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const handleCreateWorkspace = useCallback((name: string) => {
     const workspace = createWorkspace(name);
     if (!workspace) return;
-    void ensureWorkspaceCoordinator(workspace).finally(() => {
-      handleSelectWorkspace(workspace.id);
-    });
+    void ensureWorkspaceCoordinator(workspace)
+      .catch(() => {})
+      .finally(() => {
+        handleSelectWorkspace(workspace.id);
+      });
   }, [createWorkspace, ensureWorkspaceCoordinator, handleSelectWorkspace]);
 
   const handleCreateAgentInWorkspace = useCallback((workspaceId: string) => {
@@ -1046,6 +1070,8 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setShowNewChat(false);
     setShowSettings(false);
     setShowPreview(false);
+    setShowCanvas(false);
+    setCanvasExpanded(false);
   }, [getPreferredAgentSession, workspaces]);
 
   const handleDeleteWorkspace = useCallback((workspaceId: string) => {
@@ -1178,6 +1204,14 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     const agent = agents.find((item) => item.id === agentId);
     if (!agent || agent.isDefault || agent.id === MAIN_AGENT_ID) return;
 
+    if (activeAgentId === agentId) {
+      setActiveAgentId(null);
+      setActiveSessionKey(null);
+      setShowCanvas(false);
+      setCanvasExpanded(false);
+      setNodeDetail(null);
+    }
+    setMountedCanvasAgentIds((ids) => ids.filter((id) => id !== agentId));
     markAgentDeleted(agentId, engine);
     removeAgentFromWorkspaces(agentId);
     setTerminalByContext((prev) => {
@@ -1194,13 +1228,6 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
 
     await deleteOpenClawAgent(engine, agentId).catch(() => {});
     if (!engine.isRemote) await removeAgentFromLocalConfig(agentId).catch(() => {});
-
-    if (activeAgentId === agentId) {
-      setActiveAgentId(null);
-      setActiveSessionKey(null);
-      setShowCanvas(false);
-      setNodeDetail(null);
-    }
     setTimeout(() => void refreshAgents(), 300);
     setTimeout(() => void refreshAgents(), 1400);
   }, [activeAgentId, agents, engine, refreshAgents, removeAgentFromWorkspaces]);
@@ -1241,7 +1268,8 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
       setShowNewChat(false);
       setShowSettings(false);
       setShowPreview(false);
-      setShowCanvas(getCanvasPanelOpen(canvasSurfaceId(imported.id)));
+      setShowCanvas(false);
+      setCanvasExpanded(false);
       setAgentImportProgress({
         phase: "done",
         message: `${imported.name} is ready.`,
@@ -1258,6 +1286,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   }, [engine, engineStorageScope, getPreferredAgentSession, refreshAgents]);
 
   const handleSelectSession = useCallback((agentId: string, sessionKey: string) => {
+    if (!agents.some((agent) => agent.id === agentId)) return;
     clearUnreadForSession(sessionKey);
     setActiveAgentId(agentId);
     setActiveWorkspaceId(null);
@@ -1267,8 +1296,9 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setInitialChatPromptHidden(false);
     setShowSettings(false);
     setShowPreview(false);
-    setShowCanvas(getCanvasPanelOpen(canvasSurfaceId(agentId)));
-  }, [clearUnreadForSession, engineStorageScope]);
+    setShowCanvas(false);
+    setCanvasExpanded(false);
+  }, [agents, clearUnreadForSession]);
 
   const handleNewChat = useCallback(() => {
     setShowNewChat(true);
@@ -1293,9 +1323,9 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
     setShowNewChat(false);
     setShowSettings(false);
     setShowPreview(false);
-    setShowCanvas(getCanvasPanelOpen(canvasSurfaceId(agentId)));
+    setShowCanvas(false);
     setCanvasExpanded(false);
-  }, [engineStorageScope]);
+  }, []);
 
   useEffect(() => {
     function handleWorkspaceRequest(e: Event) {

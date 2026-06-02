@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { Component, type ErrorInfo, type ReactNode, useState, useEffect, useRef } from "react";
 import { BrowserEngine } from "@/lib/engine";
 import { AppLayout } from "@/components/AppLayout";
 import { invoke } from "@tauri-apps/api/core";
@@ -241,7 +241,78 @@ function formatStartupError(error: unknown, mode?: RemoteEngineMode | null) {
   return message;
 }
 
-export default function App() {
+interface AppErrorBoundaryState {
+  error: string | null;
+  stack: string | null;
+  componentStack: string | null;
+}
+
+class AppErrorBoundary extends Component<{ children: ReactNode }, AppErrorBoundaryState> {
+  state: AppErrorBoundaryState = {
+    error: null,
+    stack: null,
+    componentStack: null,
+  };
+
+  static getDerivedStateFromError(error: unknown): Partial<AppErrorBoundaryState> {
+    return {
+      error: getErrorMessage(error) || "The app hit an unexpected render error.",
+      stack: error instanceof Error ? error.stack ?? null : null,
+    };
+  }
+
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    const payload = {
+      message: getErrorMessage(error),
+      stack: error instanceof Error ? error.stack ?? null : null,
+      componentStack: info.componentStack ?? null,
+      createdAt: new Date().toISOString(),
+    };
+    this.setState({ componentStack: info.componentStack ?? null });
+    try {
+      localStorage.setItem("xcloud:last-render-error", JSON.stringify(payload));
+    } catch {
+      // Ignore storage failures; the visible error screen is the important part.
+    }
+    console.error("[xCloud] render error", payload);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+
+    return (
+      <div className="flex h-full items-center justify-center bg-bg px-6 text-text">
+        <div className="w-full max-w-2xl rounded-2xl border border-white/10 bg-white/[0.04] p-5 shadow-2xl">
+          <div className="text-sm font-semibold">xCloud hit a production render error</div>
+          <div className="mt-2 rounded-xl bg-black/30 p-3 font-mono text-[11px] leading-relaxed text-text-muted">
+            {this.state.error}
+          </div>
+          {(this.state.stack || this.state.componentStack) && (
+            <pre className="mt-3 max-h-64 overflow-auto rounded-xl bg-black/30 p-3 text-left font-mono text-[10px] leading-relaxed text-text-muted">
+              {[this.state.stack, this.state.componentStack].filter(Boolean).join("\n\n")}
+            </pre>
+          )}
+          <div className="mt-4 flex gap-2">
+            <button
+              className="rounded-xl bg-white/10 px-4 py-2 text-xs font-medium text-text transition-colors hover:bg-white/15"
+              onClick={() => window.location.reload()}
+            >
+              Reload
+            </button>
+            <button
+              className="rounded-xl bg-white/5 px-4 py-2 text-xs font-medium text-text-muted transition-colors hover:bg-white/10 hover:text-text"
+              onClick={() => this.setState({ error: null, stack: null, componentStack: null })}
+            >
+              Try without reload
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+}
+
+function AppContent() {
   const [appState, setAppState] = useState<AppState>({ kind: "checking" });
   const engineRef = useRef<BrowserEngine | null>(null);
   const [connectAttempt, setConnectAttempt] = useState(0);
@@ -254,6 +325,44 @@ export default function App() {
   const [engineEditTunnelPort, setEngineEditTunnelPort] = useState("18790");
   const [approvingPairing, setApprovingPairing] = useState(false);
   const [settingUpSshKey, setSettingUpSshKey] = useState(false);
+
+  useEffect(() => {
+    const saveRuntimeError = (payload: Record<string, unknown>) => {
+      try {
+        localStorage.setItem("xcloud:last-runtime-error", JSON.stringify({
+          ...payload,
+          createdAt: new Date().toISOString(),
+        }));
+      } catch {
+        // Ignore storage failures; console output still helps during release-mode testing.
+      }
+    };
+    const onError = (event: ErrorEvent) => {
+      saveRuntimeError({
+        type: "error",
+        message: event.message,
+        filename: event.filename,
+        lineno: event.lineno,
+        colno: event.colno,
+        stack: event.error instanceof Error ? event.error.stack : null,
+      });
+      console.error("[xCloud] runtime error", event.error ?? event.message);
+    };
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      saveRuntimeError({
+        type: "unhandledrejection",
+        message: getErrorMessage(event.reason),
+        stack: event.reason instanceof Error ? event.reason.stack : null,
+      });
+      console.error("[xCloud] unhandled rejection", event.reason);
+    };
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onUnhandledRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onUnhandledRejection);
+    };
+  }, []);
 
   // Initial check: does config exist?
   useEffect(() => {
@@ -869,4 +978,12 @@ export default function App() {
         </div>
       );
   }
+}
+
+export default function App() {
+  return (
+    <AppErrorBoundary>
+      <AppContent />
+    </AppErrorBoundary>
+  );
 }

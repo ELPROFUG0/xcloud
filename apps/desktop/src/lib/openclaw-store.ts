@@ -190,7 +190,11 @@ function extractMarkedPayload(output: string, marker: string) {
   return match?.[1] ? decodeBase64Utf8(match[1]) : "";
 }
 
-async function readRemoteHomeText(engine: BrowserEngine, relativePath: string, fallback: string) {
+export async function readEngineHomeText(engine: BrowserEngine, relativePath: string, fallback = "") {
+  if (!engine.isRemote) {
+    return readTextFile(relativePath, { baseDir: BaseDirectory.Home }).catch(() => fallback);
+  }
+
   assertSafeHomeRelativePath(relativePath);
   const payload = encodeBase64Utf8(JSON.stringify({ relativePath }));
   const command = nodeHeredocCommand(`const fs = require("node:fs");
@@ -212,7 +216,14 @@ process.stdout.write("__XCLOUD_FILE_START__" + Buffer.from(content, "utf8").toSt
   }
 }
 
-async function writeRemoteHomeText(engine: BrowserEngine, relativePath: string, content: string) {
+export async function writeEngineHomeText(engine: BrowserEngine, relativePath: string, content: string) {
+  if (!engine.isRemote) {
+    const parent = relativePath.split("/").slice(0, -1).join("/");
+    if (parent) await mkdir(parent, { baseDir: BaseDirectory.Home, recursive: true }).catch(() => {});
+    await writeTextFile(relativePath, content, { baseDir: BaseDirectory.Home });
+    return;
+  }
+
   assertSafeHomeRelativePath(relativePath);
   const payload = encodeBase64Utf8(JSON.stringify({ relativePath, content }));
   const command = nodeHeredocCommand(`const fs = require("node:fs");
@@ -255,7 +266,7 @@ export async function readOpenClawAgentFile(
       if (!file || file.missing) return fallback;
       return typeof file.content === "string" ? file.content : fallback;
     } catch {
-      return readRemoteHomeText(engine, `${getAgentWorkspaceDir(agentId)}/${name}`, fallback);
+      return readEngineHomeText(engine, `${getAgentWorkspaceDir(agentId)}/${name}`, fallback);
     }
   }
 
@@ -273,7 +284,7 @@ export async function writeOpenClawAgentFile(
     try {
       await retryEngineRpc(engine, "agents.files.set", { agentId, name, content });
     } catch {
-      await writeRemoteHomeText(engine, `${getAgentWorkspaceDir(agentId)}/${name}`, content);
+      await writeEngineHomeText(engine, `${getAgentWorkspaceDir(agentId)}/${name}`, content);
     }
     return;
   }

@@ -5,8 +5,10 @@ import { BaseDirectory, mkdir, readTextFile, remove, writeTextFile } from "@taur
 import { engineScopedStorageKey } from "@/lib/engine-storage";
 import {
   deleteOpenClawAgent,
+  readEngineHomeText,
   readOpenClawAgentFile,
   upsertOpenClawAgent,
+  writeEngineHomeText,
   writeOpenClawAgentFile,
 } from "@/lib/openclaw-store";
 
@@ -19,6 +21,7 @@ export interface WorkspaceInfo {
 }
 
 const STORAGE_KEY = "xcloudWorkspaces";
+const DURABLE_WORKSPACES_PATH = ".openclaw/xcloud-workspaces.json";
 const MEMORY_PLACEHOLDER = "Write what this workspace is about here.";
 const GOALS_PLACEHOLDER = "- Define the purpose of this workspace.";
 const GLOBAL_WORKSPACES_START = "<!-- UNICORE_WORKSPACES_START -->";
@@ -35,18 +38,88 @@ export function getWorkspaceDir(workspaceId: string) {
   return `.openclaw/workspace/${getWorkspaceAgentId(workspaceId)}`;
 }
 
+function normalizeWorkspace(value: unknown): WorkspaceInfo | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  const name = typeof record.name === "string" ? record.name.trim() : "";
+  if (!id || !name) return null;
+  const agentIds = Array.isArray(record.agentIds)
+    ? Array.from(new Set(record.agentIds.map(String).filter(Boolean)))
+    : [];
+  const createdAt = typeof record.createdAt === "number" && Number.isFinite(record.createdAt)
+    ? record.createdAt
+    : Date.now();
+  const updatedAt = typeof record.updatedAt === "number" && Number.isFinite(record.updatedAt)
+    ? record.updatedAt
+    : createdAt;
+  return { id, name, agentIds, createdAt, updatedAt };
+}
+
+function normalizeWorkspaces(value: unknown): WorkspaceInfo[] {
+  const raw = Array.isArray(value)
+    ? value
+    : value && typeof value === "object" && Array.isArray((value as { workspaces?: unknown }).workspaces)
+      ? (value as { workspaces: unknown[] }).workspaces
+      : [];
+  const seen = new Set<string>();
+  return raw
+    .map(normalizeWorkspace)
+    .filter((workspace): workspace is WorkspaceInfo => {
+      if (!workspace || seen.has(workspace.id)) return false;
+      seen.add(workspace.id);
+      return true;
+    });
+}
+
+function mergeWorkspaces(primary: WorkspaceInfo[], secondary: WorkspaceInfo[]) {
+  const byId = new Map<string, WorkspaceInfo>();
+  for (const workspace of [...secondary, ...primary]) {
+    const existing = byId.get(workspace.id);
+    if (!existing) {
+      byId.set(workspace.id, workspace);
+      continue;
+    }
+    byId.set(workspace.id, {
+      ...existing,
+      ...workspace,
+      agentIds: Array.from(new Set([...existing.agentIds, ...workspace.agentIds])),
+      createdAt: Math.min(existing.createdAt, workspace.createdAt),
+      updatedAt: Math.max(existing.updatedAt, workspace.updatedAt),
+    });
+  }
+  return Array.from(byId.values()).sort((a, b) => a.createdAt - b.createdAt);
+}
+
 function readWorkspaces(storageKey: string): WorkspaceInfo[] {
   try {
-    const parsed = JSON.parse(localStorage.getItem(storageKey) ?? "[]") as WorkspaceInfo[];
-    return Array.isArray(parsed) ? parsed : [];
+    return normalizeWorkspaces(JSON.parse(localStorage.getItem(storageKey) ?? "[]"));
   } catch {
     return [];
   }
 }
 
-function writeWorkspaces(storageKey: string, workspaces: WorkspaceInfo[]) {
+function writeCachedWorkspaces(storageKey: string, workspaces: WorkspaceInfo[]) {
   localStorage.setItem(storageKey, JSON.stringify(workspaces));
-  window.dispatchEvent(new CustomEvent("xcloud-workspaces-changed"));
+}
+
+async function readDurableWorkspaces(engine: BrowserEngine) {
+  const raw = await readEngineHomeText(engine, DURABLE_WORKSPACES_PATH, "");
+  if (!raw.trim()) return [];
+  try {
+    return normalizeWorkspaces(JSON.parse(raw));
+  } catch {
+    return [];
+  }
+}
+
+async function writeDurableWorkspaces(engine: BrowserEngine, workspaces: WorkspaceInfo[]) {
+  const payload = {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    workspaces,
+  };
+  await writeEngineHomeText(engine, DURABLE_WORKSPACES_PATH, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
 function slugifyName(name: string) {
@@ -83,6 +156,34 @@ function workspaceAgentPrefixes(workspace: WorkspaceInfo) {
 function isWorkspaceSpecialistAgent(agent: AgentInfo, workspace: WorkspaceInfo) {
   if (agent.isDefault || agent.id.startsWith("workspace-")) return false;
   return workspaceAgentPrefixes(workspace).some((prefix) => agent.id.startsWith(`${prefix}-`));
+}
+
+function workspaceNameFromCoordinator(agent: AgentInfo, workspaceId: string) {
+  const raw = (agent.name ?? workspaceId)
+    .replace(/\s+Main$/i, "")
+    .replace(/^workspace[-_\s]+/i, "")
+    .trim();
+  return raw || workspaceId.replace(/^workspace-/, "").replace(/-/g, " ");
+}
+
+function inferWorkspacesFromAgents(agents: AgentInfo[]) {
+  const now = Date.now();
+  return agents
+    .filter((agent) => agent.id.startsWith("workspace-"))
+    .map((agent) => {
+      const id = agent.id.replace(/^workspace-/, "");
+      const name = workspaceNameFromCoordinator(agent, id);
+      const agentIds = agents
+        .filter((candidate) => isWorkspaceSpecialistAgent(candidate, { id, name, agentIds: [], createdAt: now, updatedAt: now }))
+        .map((candidate) => candidate.id);
+      return {
+        id,
+        name,
+        agentIds,
+        createdAt: now,
+        updatedAt: now,
+      };
+    });
 }
 
 function formatAgentLine(agent: AgentInfo) {
@@ -463,28 +564,52 @@ export function useWorkspaces(agents: AgentInfo[], engine: BrowserEngine) {
   const storageKey = engineScopedStorageKey(STORAGE_KEY, engine);
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>(() => readWorkspaces(storageKey));
   const remoteSyncKeysRef = useRef(new Set<string>());
+  const hydratedScopesRef = useRef(new Set<string>());
 
   const persist = useCallback((updater: (prev: WorkspaceInfo[]) => WorkspaceInfo[]) => {
     setWorkspaces((prev) => {
       const next = updater(prev);
-      writeWorkspaces(storageKey, next);
+      writeCachedWorkspaces(storageKey, next);
+      void writeDurableWorkspaces(engine, next).catch(() => {});
       return next;
     });
-  }, [storageKey]);
+  }, [engine, storageKey]);
 
   useEffect(() => {
     const refresh = () => setWorkspaces(readWorkspaces(storageKey));
     window.addEventListener("storage", refresh);
-    window.addEventListener("xcloud-workspaces-changed", refresh);
     return () => {
       window.removeEventListener("storage", refresh);
-      window.removeEventListener("xcloud-workspaces-changed", refresh);
     };
   }, [storageKey]);
 
   useEffect(() => {
     setWorkspaces(readWorkspaces(storageKey));
   }, [storageKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const scope = engine.storageScope;
+    const hydrationKey = `${scope}:${agents.map((agent) => `${agent.id}:${agent.name ?? ""}`).sort().join("|")}`;
+    if (hydratedScopesRef.current.has(hydrationKey)) return;
+    hydratedScopesRef.current.add(hydrationKey);
+
+    (async () => {
+      const cached = readWorkspaces(storageKey);
+      const durable = await readDurableWorkspaces(engine);
+      const inferred = inferWorkspacesFromAgents(agents);
+      const merged = mergeWorkspaces(mergeWorkspaces(durable, cached), inferred);
+      if (cancelled || merged.length === 0) return;
+      setWorkspaces((current) => {
+        const next = mergeWorkspaces(merged, current);
+        writeCachedWorkspaces(storageKey, next);
+        void writeDurableWorkspaces(engine, next).catch(() => {});
+        return next;
+      });
+    })().catch(() => {});
+
+    return () => { cancelled = true; };
+  }, [agents, engine, storageKey]);
 
   const createWorkspace = useCallback((name: string, agentIds: string[] = []) => {
     const trimmed = name.trim();
@@ -504,7 +629,8 @@ export function useWorkspaces(agents: AgentInfo[], engine: BrowserEngine) {
       updatedAt: now,
     };
     const next = [...prev, created];
-    writeWorkspaces(storageKey, next);
+    writeCachedWorkspaces(storageKey, next);
+    void writeDurableWorkspaces(engine, next).catch(() => {});
     setWorkspaces(next);
     if (engine.isRemote) {
       void syncRemoteWorkspaceFiles(engine, created, agents.filter((agent) => cleanAgentIds.includes(agent.id))).catch(() => {});
@@ -635,8 +761,9 @@ export function useWorkspaces(agents: AgentInfo[], engine: BrowserEngine) {
     });
     if (!changed) return;
     setWorkspaces(next);
-    writeWorkspaces(storageKey, next);
-  }, [agents, storageKey, workspaces]);
+    writeCachedWorkspaces(storageKey, next);
+    void writeDurableWorkspaces(engine, next).catch(() => {});
+  }, [agents, engine, storageKey, workspaces]);
 
   return {
     workspaces,

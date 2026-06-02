@@ -618,7 +618,9 @@ export const MicrophoneWaveform = ({
 
     const setupMicrophone = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
+        const mediaDevices = navigator.mediaDevices;
+        if (!mediaDevices?.getUserMedia) return;
+        const stream = await mediaDevices.getUserMedia({
           audio: true,
         })
         streamRef.current = stream
@@ -839,7 +841,9 @@ export const LiveMicrophoneWaveform = ({
 
     const setupMicrophone = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
+        const mediaDevices = navigator.mediaDevices;
+        if (!mediaDevices?.getUserMedia) return;
+        const stream = await mediaDevices.getUserMedia({
           audio: true,
         })
         streamRef.current = stream
@@ -1460,7 +1464,9 @@ export const RecordingWaveform = ({
 
     const setupMicrophone = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
+        const mediaDevices = navigator.mediaDevices;
+        if (!mediaDevices?.getUserMedia) return;
+        const stream = await mediaDevices.getUserMedia({
           audio: true,
         })
         streamRef.current = stream

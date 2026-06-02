@@ -34,7 +34,9 @@ export function MicSelector({ disabled, className }: MicSelectorProps) {
 
   // Load devices without permission on mount
   useEffect(() => {
-    navigator.mediaDevices.enumerateDevices().then((list) => {
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.enumerateDevices) return;
+    mediaDevices.enumerateDevices().then((list) => {
       const inputs = list
         .filter(d => d.kind === "audioinput")
         .map(d => ({
@@ -49,20 +51,24 @@ export function MicSelector({ disabled, className }: MicSelectorProps) {
   // Request permission and reload devices with labels
   const requestPermission = useCallback(async () => {
     if (hasPermission || loading) return;
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.getUserMedia) return;
     setLoading(true);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach(t => t.stop());
       setHasPermission(true);
-      const list = await navigator.mediaDevices.enumerateDevices();
-      const inputs = list
-        .filter(d => d.kind === "audioinput")
-        .map(d => ({
-          deviceId: d.deviceId,
-          label: d.label ? d.label.replace(/\s*\([^)]*\)/g, "").trim() : `Microphone ${d.deviceId.slice(0, 8)}`,
-        }));
-      setDevices(inputs);
-      if (inputs[0] && !selectedDevice) setSelectedDevice(inputs[0].deviceId);
+      if (mediaDevices.enumerateDevices) {
+        const list = await mediaDevices.enumerateDevices();
+        const inputs = list
+          .filter(d => d.kind === "audioinput")
+          .map(d => ({
+            deviceId: d.deviceId,
+            label: d.label ? d.label.replace(/\s*\([^)]*\)/g, "").trim() : `Microphone ${d.deviceId.slice(0, 8)}`,
+          }));
+        setDevices(inputs);
+        if (inputs[0] && !selectedDevice) setSelectedDevice(inputs[0].deviceId);
+      }
     } catch {}
     setLoading(false);
   }, [hasPermission, loading, selectedDevice]);
