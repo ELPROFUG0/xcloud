@@ -14,7 +14,7 @@ import cloudServerLogo from "@/assets/engine/cloud-server.png";
 import macMiniLogo from "@/assets/engine/mac-mini.svg";
 import localDesktopLogo from "@/assets/engine/local-desktop.svg";
 
-const REMOTE_SETUP_SCRIPT_URL = "https://xcloud.dev/setup-remote.sh";
+const REMOTE_SETUP_SCRIPT_URL = "https://xcloud.so/setup-remote.sh";
 
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;

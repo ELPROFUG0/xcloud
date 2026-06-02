@@ -2,22 +2,22 @@
 # xCloud remote engine setup.
 #
 # Host this file at:
-#   https://xcloud.dev/setup-remote.sh
+#   https://xcloud.so/setup-remote.sh
 #
 # Usage:
-#   curl -fsSL https://xcloud.dev/setup-remote.sh | bash -s -- --lan
-#   curl -fsSL https://xcloud.dev/setup-remote.sh | bash -s -- --ssh
-#   curl -fsSL https://xcloud.dev/setup-remote.sh | bash -s -- --update-only
+#   curl -fsSL https://xcloud.so/setup-remote.sh | bash -s -- --lan
+#   curl -fsSL https://xcloud.so/setup-remote.sh | bash -s -- --ssh
+#   curl -fsSL https://xcloud.so/setup-remote.sh | bash -s -- --update-only
 #
 # Optional:
-#   XCLOUD_REMOTE_ASSET_BASE_URL=https://xcloud.dev/openclaw-extensions/unicore-workspace
+#   XCLOUD_REMOTE_ASSET_BASE_URL=https://xcloud.so/openclaw-extensions/unicore-workspace
 
 set -euo pipefail
 
 ACCESS="lan"
 UPDATE_ONLY="0"
 TOKEN="${XCLOUD_ENGINE_TOKEN:-}"
-ASSET_BASE_URL="${XCLOUD_REMOTE_ASSET_BASE_URL:-https://xcloud.dev/openclaw-extensions/unicore-workspace}"
+ASSET_BASE_URL="${XCLOUD_REMOTE_ASSET_BASE_URL:-https://xcloud.so/openclaw-extensions/unicore-workspace}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -39,7 +39,21 @@ while [ "$#" -gt 0 ]; do
       ASSET_BASE_URL="${1:-}"
       ;;
     -h|--help)
-      sed -n '1,20p' "$0"
+      cat <<'HELP'
+xCloud remote engine setup
+
+Usage:
+  curl -fsSL https://xcloud.so/setup-remote.sh | bash -s -- --lan
+  curl -fsSL https://xcloud.so/setup-remote.sh | bash -s -- --ssh
+  curl -fsSL https://xcloud.so/setup-remote.sh | bash -s -- --update-only
+
+Options:
+  --lan, --mac-mini       Bind the OpenClaw gateway to LAN for a nearby Mac/PC.
+  --ssh, --host, --vps    Bind to loopback for SSH tunnel use.
+  --update-only, --repair Update xCloud helper files without re-onboarding.
+  --token TOKEN           Reuse a specific gateway token.
+  --asset-base-url URL    Override where plugin assets are downloaded from.
+HELP
       exit 0
       ;;
     *)

@@ -12,6 +12,8 @@ use std::time::Duration;
 use tauri::{Emitter, Manager};
 
 const DEFAULT_PORT: u16 = 18789;
+const GATEWAY_STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
+const GATEWAY_STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(300);
 const UNICORE_WORKSPACE_PLUGIN_ID: &str = "unicore-workspace";
 const WORKSPACE_AGENT_CREATE_TOOL: &str = "workspace_agent_create";
 const XCLOUD_CONTEXT_TOOL: &str = "xcloud_context";
@@ -309,14 +311,23 @@ fn json_collect_strings(json_str: &str, key: &str) -> Vec<String> {
 
 // ─── Path Resolution ──────────────────────────────────────────────────────────
 
+fn bundled_node_name() -> &'static str {
+    match std::env::consts::ARCH {
+        "x86_64" => "node-x86_64-apple-darwin",
+        _ => "node-aarch64-apple-darwin",
+    }
+}
+
 /// Resolve the bundled Node.js binary and OpenClaw entry point.
 /// In production: from Tauri resource_dir (app bundle).
 /// In dev: from src-tauri/resources/.
 /// NO system fallback — the app is self-contained.
 fn resolve_paths(resource_dir: &Option<PathBuf>) -> Result<(PathBuf, PathBuf), String> {
+    let node_name = bundled_node_name();
+
     // Production: Tauri resource_dir
     if let Some(res) = resource_dir {
-        let node_bin = res.join("node-aarch64-apple-darwin");
+        let node_bin = res.join(node_name);
         let openclaw_mjs = res.join("openclaw").join("openclaw.mjs");
         if node_bin.exists() && openclaw_mjs.exists() {
             return Ok((node_bin, openclaw_mjs));
@@ -325,7 +336,7 @@ fn resolve_paths(resource_dir: &Option<PathBuf>) -> Result<(PathBuf, PathBuf), S
 
     // Dev mode: CARGO_MANIFEST_DIR/resources/
     let dev_resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
-    let dev_node = dev_resources.join("node-aarch64-apple-darwin");
+    let dev_node = dev_resources.join(node_name);
     let dev_openclaw = dev_resources.join("openclaw").join("openclaw.mjs");
     if dev_node.exists() && dev_openclaw.exists() {
         return Ok((dev_node, dev_openclaw));
@@ -868,9 +879,11 @@ pub async fn engine_ensure_running(
         *child_guard = Some(child);
     }
 
-    // Wait for port (up to 30s for first run when plugins install)
-    for _ in 0..100 {
-        std::thread::sleep(Duration::from_millis(300));
+    // First launch can stage bundled plugin dependencies before the gateway starts listening.
+    let startup_checks =
+        (GATEWAY_STARTUP_TIMEOUT.as_millis() / GATEWAY_STARTUP_POLL_INTERVAL.as_millis()) as usize;
+    for _ in 0..startup_checks {
+        std::thread::sleep(GATEWAY_STARTUP_POLL_INTERVAL);
 
         {
             let mut child_guard = state.child.lock().unwrap();
@@ -913,7 +926,12 @@ pub async fn engine_ensure_running(
         }
     }
 
-    Err(format!("OpenClaw started (pid {}) but port {} not available after 30s", pid, port))
+    Err(format!(
+        "OpenClaw started (pid {}) but port {} was not available after {}s",
+        pid,
+        port,
+        GATEWAY_STARTUP_TIMEOUT.as_secs()
+    ))
 }
 
 /// Auto-approve all pending device pairing requests (called internally, not via invoke)

@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "prepare:sidecar": "bash scripts/prepare-sidecar.sh",
+    "build:mac:universal": "pnpm prepare:sidecar && tauri build --target universal-apple-darwin",
+    "release:mac": "bash scripts/release-macos.sh"
   },
   "dependencies": {
     "@ag-ui/client": "0.0.53",

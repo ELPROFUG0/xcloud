@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Prepare the static files that xCloud remote setup expects under xcloud.dev.
+# Prepare the static files that xCloud remote setup expects under xcloud.so.
 #
 # Upload the generated directory so these URLs exist:
-#   https://xcloud.dev/setup-remote.sh
-#   https://xcloud.dev/openclaw-extensions/unicore-workspace/openclaw.plugin.json
-#   https://xcloud.dev/openclaw-extensions/unicore-workspace/package.json
-#   https://xcloud.dev/openclaw-extensions/unicore-workspace/index.js
+#   https://xcloud.so/setup-remote.sh
+#   https://xcloud.so/openclaw-extensions/unicore-workspace/openclaw.plugin.json
+#   https://xcloud.so/openclaw-extensions/unicore-workspace/package.json
+#   https://xcloud.so/openclaw-extensions/unicore-workspace/index.js
 
 set -euo pipefail
 

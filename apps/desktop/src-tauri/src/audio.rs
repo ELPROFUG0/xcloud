@@ -1,14 +1,26 @@
-use fluidaudio_rs::FluidAudio;
 use serde::Serialize;
+
+#[cfg(feature = "local-speech")]
+use fluidaudio_rs::FluidAudio;
+#[cfg(feature = "local-speech")]
 use std::fs;
+#[cfg(feature = "local-speech")]
 use std::path::PathBuf;
+#[cfg(feature = "local-speech")]
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "local-speech")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(feature = "local-speech")]
 pub struct AudioState {
     transcriber: Arc<Mutex<Option<FluidAudio>>>,
 }
 
+#[cfg(not(feature = "local-speech"))]
+#[derive(Default)]
+pub struct AudioState;
+
+#[cfg(feature = "local-speech")]
 impl Default for AudioState {
     fn default() -> Self {
         Self {
@@ -35,16 +47,19 @@ pub struct AudioStatus {
     pub model_path: String,
 }
 
+#[cfg(feature = "local-speech")]
 fn home_dir() -> Result<PathBuf, String> {
     std::env::var("HOME")
         .map(PathBuf::from)
         .map_err(|_| "HOME not set".to_string())
 }
 
+#[cfg(feature = "local-speech")]
 fn model_dir() -> Result<PathBuf, String> {
     Ok(home_dir()?.join("Library/Application Support/FluidAudio/Models/parakeet-tdt-0.6b-v3-coreml"))
 }
 
+#[cfg(feature = "local-speech")]
 fn model_downloaded() -> bool {
     let Ok(dir) = model_dir() else {
         return false;
@@ -61,6 +76,7 @@ fn model_downloaded() -> bool {
     .all(|asset| dir.join(asset).exists())
 }
 
+#[cfg(feature = "local-speech")]
 fn ensure_transcriber(transcriber: &Arc<Mutex<Option<FluidAudio>>>) -> Result<(), String> {
     let mut guard = transcriber
         .lock()
@@ -76,6 +92,7 @@ fn ensure_transcriber(transcriber: &Arc<Mutex<Option<FluidAudio>>>) -> Result<()
     Ok(())
 }
 
+#[cfg(feature = "local-speech")]
 fn safe_extension(extension: &str) -> &str {
     match extension {
         "aac" | "m4a" | "mp3" | "mp4" | "wav" | "webm" => extension,
@@ -83,6 +100,7 @@ fn safe_extension(extension: &str) -> &str {
     }
 }
 
+#[cfg(feature = "local-speech")]
 #[tauri::command]
 pub fn local_speech_status(state: tauri::State<'_, AudioState>) -> Result<AudioStatus, String> {
     let ready = state
@@ -99,6 +117,17 @@ pub fn local_speech_status(state: tauri::State<'_, AudioState>) -> Result<AudioS
     })
 }
 
+#[cfg(not(feature = "local-speech"))]
+#[tauri::command]
+pub fn local_speech_status(_state: tauri::State<'_, AudioState>) -> Result<AudioStatus, String> {
+    Ok(AudioStatus {
+        ready: false,
+        model_downloaded: false,
+        model_path: String::new(),
+    })
+}
+
+#[cfg(feature = "local-speech")]
 #[tauri::command]
 pub async fn prepare_local_speech(
     state: tauri::State<'_, AudioState>,
@@ -116,6 +145,15 @@ pub async fn prepare_local_speech(
     })
 }
 
+#[cfg(not(feature = "local-speech"))]
+#[tauri::command]
+pub async fn prepare_local_speech(
+    _state: tauri::State<'_, AudioState>,
+) -> Result<AudioStatus, String> {
+    Err("Local speech is not available in this build.".to_string())
+}
+
+#[cfg(feature = "local-speech")]
 #[tauri::command]
 pub fn transcribe_audio(
     state: tauri::State<'_, AudioState>,
@@ -125,6 +163,17 @@ pub fn transcribe_audio(
     transcribe_audio_blocking(state.transcriber.clone(), bytes, extension)
 }
 
+#[cfg(not(feature = "local-speech"))]
+#[tauri::command]
+pub fn transcribe_audio(
+    _state: tauri::State<'_, AudioState>,
+    _bytes: Vec<u8>,
+    _extension: String,
+) -> Result<TranscriptionResult, String> {
+    Err("Local speech is not available in this build.".to_string())
+}
+
+#[cfg(feature = "local-speech")]
 #[tauri::command]
 pub async fn transcribe_audio_background(
     state: tauri::State<'_, AudioState>,
@@ -139,6 +188,17 @@ pub async fn transcribe_audio_background(
     .map_err(|e| format!("Audio transcription task failed: {}", e))?
 }
 
+#[cfg(not(feature = "local-speech"))]
+#[tauri::command]
+pub async fn transcribe_audio_background(
+    _state: tauri::State<'_, AudioState>,
+    _bytes: Vec<u8>,
+    _extension: String,
+) -> Result<TranscriptionResult, String> {
+    Err("Local speech is not available in this build.".to_string())
+}
+
+#[cfg(feature = "local-speech")]
 fn transcribe_audio_blocking(
     transcriber: Arc<Mutex<Option<FluidAudio>>>,
     bytes: Vec<u8>,

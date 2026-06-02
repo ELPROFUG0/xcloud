@@ -53,14 +53,18 @@
     ],
     "resources": {
       "resources/node-aarch64-apple-darwin": "node-aarch64-apple-darwin",
+      "resources/node-x86_64-apple-darwin": "node-x86_64-apple-darwin",
       "resources/openclaw": "openclaw"
+    },
+    "macOS": {
+      "entitlements": "Entitlements.plist"
     }
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMxQkI5MTJBRkEzMkE2RDMKUldUVHBqTDZLcEc3TVd5OUt3Q3JzcXVwNDFERGk4LzVUbnFXaGsyMWpVWE50MU90aW4xVERDQWUK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIwRURERTJCOERBNTYzMEYKUldRUFk2V05LOTd0SU9FVUJsY29YdVJQRVN2UGVQeXVPMk5xY1ROam5xSEZZOFJOaElHSzNUaEUK",
       "endpoints": [
-        "https://updates.xcloud.dev/{{target}}/{{arch}}/{{current_version}}"
+        "https://updates.xcloud.so/api/updates/{{target}}/{{arch}}/{{current_version}}"
       ]
     }
   }

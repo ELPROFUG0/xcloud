@@ -17,6 +17,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+default = []
+local-speech = ["dep:fluidaudio-rs"]
+
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-opener = "2"
@@ -31,6 +35,6 @@ portable-pty = "0.8"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSGeometry"] }
 objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSButton", "NSControl", "NSView", "NSResponder"] }
-fluidaudio-rs = { version = "0.1.0", default-features = false, features = ["asr"] }
+fluidaudio-rs = { version = "0.14.1", default-features = false, features = ["asr"], optional = true }
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"

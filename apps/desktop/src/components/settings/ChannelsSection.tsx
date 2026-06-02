@@ -106,6 +106,8 @@ const CHANNELS: ChannelConfig[] = [
   },
 ];
 
+const SUPPORTED_CHANNEL_IDS = new Set(["telegram", "whatsapp", "discord"]);
+
 const TELEGRAM_DM_POLICIES = [
   {
     id: "pairing",
@@ -710,20 +712,33 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
           <div className="space-y-1">
             {CHANNELS.map((ch) => {
               const enabled = channelEnabled[ch.id] ?? false;
+              const supported = SUPPORTED_CHANNEL_IDS.has(ch.id);
               return (
                 <button
                   key={ch.id}
-                  onClick={() => setSelectedChannel(ch.id)}
-                  className="flex w-full items-center justify-between rounded-lg bg-container px-4 py-3.5 text-left transition-colors hover:bg-surface-hover"
+                  onClick={() => {
+                    if (supported) setSelectedChannel(ch.id);
+                  }}
+                  disabled={!supported}
+                  className={cn(
+                    "flex w-full items-center justify-between rounded-lg bg-container px-4 py-3.5 text-left transition-colors",
+                    supported ? "hover:bg-surface-hover" : "cursor-not-allowed opacity-55",
+                  )}
                 >
                   <div className="flex items-center gap-3">
-                    <img src={ch.logo} alt={ch.name} className="h-5 w-5" />
+                    <img src={ch.logo} alt={ch.name} className={cn("h-5 w-5", !supported && "grayscale")} />
                     <span className="text-sm font-medium text-text">{ch.name}</span>
                   </div>
-                  <div className={cn(
-                    "h-2 w-2 rounded-full shrink-0",
-                    enabled ? "bg-emerald-400" : "bg-text-muted/30",
-                  )} />
+                  {supported ? (
+                    <div className={cn(
+                      "h-2 w-2 rounded-full shrink-0",
+                      enabled ? "bg-emerald-400" : "bg-text-muted/30",
+                    )} />
+                  ) : (
+                    <span className="rounded-full bg-text-muted/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-text-muted">
+                      Soon
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -741,6 +756,7 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
           const isTelegram = ch.id === "telegram";
           const isWhatsApp = ch.id === "whatsapp";
           const isDiscord = ch.id === "discord";
+          const supported = SUPPORTED_CHANNEL_IDS.has(ch.id);
           const hasTelegramCredential = Object.values(telegramAgentBots).some((botToken) => botToken.trim());
           const hasDiscordCredential = Boolean((values.token ?? "").trim());
           const discordInviteUrl = discordApplicationId.trim()
@@ -791,7 +807,18 @@ export function ChannelsSection({ engine, agents = [] }: ChannelsSectionProps) {
                 </div>
               </div>
 
-              {isTelegram ? (
+              {!supported ? (
+                <div className="rounded-2xl bg-container px-4 py-5 text-center">
+                  <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-surface-hover">
+                    <img src={ch.logo} alt="" className="h-6 w-6 grayscale" />
+                  </div>
+                  <h4 className="text-sm font-semibold text-text">{ch.name} is coming soon</h4>
+                  <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-text-muted">
+                    This channel is visible in xCloud, but configuration is not enabled yet.
+                    Discord, Telegram, and WhatsApp are available today.
+                  </p>
+                </div>
+              ) : isTelegram ? (
                 <>
                   <div className="border-b border-border/50 py-3.5">
                     <div className="flex items-start gap-3">
