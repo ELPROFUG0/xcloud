@@ -4,7 +4,7 @@ import { useAgents } from "@/hooks/use-agents";
 import type { AgentInfo } from "@/hooks/use-agents";
 import { getWorkspaceAgentId, getWorkspaceDir, useWorkspaces } from "@/hooks/use-workspaces";
 import type { WorkspaceInfo } from "@/hooks/use-workspaces";
-import { Settings, Eye, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, Sparkles, Plug, Brain, Search } from "lucide-react";
+import { Settings, Layers, KeyRound, Globe, SlidersHorizontal, ArrowLeft, Palette, Server, Sparkles, Plug, Brain, Search, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { HomeScreen } from "./home/HomeScreen";
 import { useSessions } from "@/hooks/use-sessions";
@@ -573,6 +573,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
   const [nodeDetail, setNodeDetail] = useState<DetailPanel | null>(null);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
   const appUpdater = useAppUpdater();
+  const devPreviewEnabled = import.meta.env.DEV;
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [canvasWidth, setCanvasWidth] = useState(() => {
     const saved = localStorage.getItem("canvasWidth");
@@ -857,12 +858,13 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
       }
       if (e.metaKey && e.shiftKey && e.key === "p") {
         e.preventDefault();
+        if (!devPreviewEnabled) return;
         setShowPreview((v) => !v);
       }
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, []);
+  }, [devPreviewEnabled]);
 
   // Persist canvas width when drag ends
   useEffect(() => {
@@ -1612,13 +1614,19 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
               <span className="text-sm font-medium">Settings</span>
             </button>
             <div className="flex items-center gap-0.5">
-              <button
-                onClick={() => { setShowPreview(!showPreview); setShowSettings(false); }}
-                className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-white/6 hover:text-text"
-                title="Preview"
-              >
-                <Eye className="h-4 w-4" />
-              </button>
+              <div className="group/reload relative">
+                <button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-white/6 hover:text-text"
+                  aria-label="Reload app"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                </button>
+                <div className="pointer-events-none absolute bottom-full right-0 z-30 mb-2 whitespace-nowrap rounded-lg border border-white/10 bg-[#202020] px-2.5 py-1.5 text-[11px] font-medium text-text opacity-0 shadow-xl transition-all duration-150 group-hover/reload:-translate-y-0.5 group-hover/reload:opacity-100">
+                  Reload app
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1780,7 +1788,7 @@ export function AppLayout({ engine, reconnecting }: AppLayoutProps) {
                   );
                 })}
               </div>
-              {showPreview && <DevPreview />}
+              {devPreviewEnabled && showPreview && <DevPreview />}
             </div>
           </div>
           </div>
